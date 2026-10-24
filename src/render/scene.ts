@@ -2,9 +2,16 @@ import * as THREE from 'three';
 import type { DefenderKind, Slot } from '../sim/defenders';
 import type { Game, GameEvent } from '../sim/game';
 import { ENEMY_KINDS, type EnemyKind } from '../sim/waves';
-import {
-  GroundCanvas, type SpriteArt, blobTexture, handTexture, orcTexture, riderTexture, siegeTexture, soldierTexture,
-} from './textures';
+import archerUrl from '../assets/sprites/defender-archer.png';
+import soldierUrl from '../assets/sprites/defender-soldier.png';
+import catapultUrl from '../assets/sprites/enemy-catapult.png';
+import chuckerUrl from '../assets/sprites/enemy-chucker.png';
+import gruntUrl from '../assets/sprites/enemy-grunt.png';
+import ogreUrl from '../assets/sprites/enemy-ogre.png';
+import riderUrl from '../assets/sprites/enemy-rider.png';
+import warlordUrl from '../assets/sprites/enemy-warlord.png';
+import aspects from '../assets/sprites/aspects.json';
+import { GroundCanvas, type SpriteArt, blobTexture, handTexture, imageSprite } from './textures';
 
 /**
  * Draws the sim in 2.5D: voxel castle and terrain under a tilted camera,
@@ -17,7 +24,7 @@ const MAX_ENEMIES = 4000;
 const MAX_PROJECTILES = 1500;
 const MAX_DEBRIS = 1500;
 
-/** Sprite height relative to the orc grunt, from the art guide. */
+/** Sprite height relative to the orc grunt (and defenders), from the art guide. */
 const SIZE: Record<EnemyKind, number> = { grunt: 1, chucker: 1, rider: 1.4, orcCatapult: 2, ogre: 2.5, warlord: 3 };
 const KILL_COLOR: Record<EnemyKind, string> = {
   grunt: '#6f9a3c', chucker: '#8a9a42', rider: '#6d4a32', orcCatapult: '#7a5530', ogre: '#8d9a6a', warlord: '#5d8a34',
@@ -72,6 +79,7 @@ export class BattleScene {
 
   private sprites = {} as Record<EnemyKind, THREE.InstancedMesh>;
   private soldierSprites: THREE.InstancedMesh;
+  private archerArt: SpriteArt;
   private shadows: THREE.InstancedMesh;
   private rocks: THREE.InstancedMesh;
   private bolts: THREE.InstancedMesh;
@@ -134,16 +142,17 @@ export class BattleScene {
       this.scene.add(mesh);
       return mesh;
     };
-    const art: Record<EnemyKind, () => SpriteArt> = {
-      grunt: () => orcTexture('grunt'),
-      chucker: () => orcTexture('chucker'),
-      rider: riderTexture,
-      orcCatapult: siegeTexture,
-      ogre: () => orcTexture('ogre'),
-      warlord: () => orcTexture('warlord'),
+    const art: Record<EnemyKind, SpriteArt> = {
+      grunt: imageSprite(gruntUrl, aspects['enemy-grunt']),
+      chucker: imageSprite(chuckerUrl, aspects['enemy-chucker']),
+      rider: imageSprite(riderUrl, aspects['enemy-rider']),
+      orcCatapult: imageSprite(catapultUrl, aspects['enemy-catapult']),
+      ogre: imageSprite(ogreUrl, aspects['enemy-ogre']),
+      warlord: imageSprite(warlordUrl, aspects['enemy-warlord']),
     };
-    for (const kind of ENEMY_KINDS) this.sprites[kind] = makeSprites(art[kind](), SIZE[kind], kind === 'grunt' ? MAX_ENEMIES : 600);
-    this.soldierSprites = makeSprites(soldierTexture(), 0.9, 64);
+    for (const kind of ENEMY_KINDS) this.sprites[kind] = makeSprites(art[kind], SIZE[kind], kind === 'grunt' ? MAX_ENEMIES : 600);
+    this.soldierSprites = makeSprites(imageSprite(soldierUrl, aspects['defender-soldier']), 1, 64);
+    this.archerArt = imageSprite(archerUrl, aspects['defender-archer']);
 
     const shadowGeo = new THREE.PlaneGeometry(1.3, 0.8);
     shadowGeo.rotateX(-Math.PI / 2);
@@ -453,9 +462,6 @@ export class BattleScene {
     const group = new THREE.Group();
     const wood = new THREE.MeshLambertMaterial({ color: '#6b4a2b' });
     const iron = new THREE.MeshLambertMaterial({ color: '#4d4a44' });
-    const blue = new THREE.MeshLambertMaterial({ color: '#2f56b0' });
-    const gold = new THREE.MeshLambertMaterial({ color: '#e0b84a' });
-    const skin = new THREE.MeshLambertMaterial({ color: '#f0c39a' });
     const box = (w: number, h: number, d: number, mat: THREE.Material, x = 0, y = 0, z = 0) => {
       const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
       m.position.set(x, y, z);
@@ -478,11 +484,15 @@ export class BattleScene {
     } else if (kind === 'archers') {
       // Three bowmen on a wooden platform; the squad is bigger than it looks.
       box(2.6, 0.3, 1.6, wood, 0, 0, 0);
-      for (const ox of [-0.8, 0, 0.8]) {
-        box(0.45, 0.7, 0.35, blue, ox, 0.5, 0);
-        box(0.35, 0.35, 0.35, skin, ox, 1.05, 0);
-        box(0.4, 0.12, 0.4, gold, ox, 1.28, 0);
-        box(0.08, 0.9, 0.08, wood, ox + 0.28, 0.75, -0.2);
+      const h = 2; // the art guide sizes archers like a grunt
+      const geo = new THREE.PlaneGeometry(h * this.archerArt.aspect, h);
+      geo.translate(0, h / 2, 0);
+      const mat = new THREE.MeshBasicMaterial({ map: this.archerArt.texture, alphaTest: 0.5 });
+      for (const ox of [-0.9, 0, 0.9]) {
+        const archer = new THREE.Mesh(geo, mat);
+        archer.name = 'billboard';
+        archer.position.set(ox, 0.15, 0);
+        group.add(archer);
       }
     } else if (kind === 'catapult') {
       box(2.4, 0.5, 3, wood, 0, 0.6, 0);
@@ -527,7 +537,8 @@ export class BattleScene {
       if (slot.defender === 'crossbow') {
         d.obj.getObjectByName('aim')!.rotation.y = yaw;
       } else if (slot.defender === 'archers') {
-        d.obj.rotation.y = yaw * 0.5;
+        // Flat sprites always face the camera, like the orcs.
+        for (const child of d.obj.children) if (child.name === 'billboard') child.quaternion.copy(this.camera.quaternion);
       } else if (slot.defender === 'catapult') {
         d.obj.rotation.y = yaw;
         // The arm whips forward when it fires, then winches back down.

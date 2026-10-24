@@ -7,7 +7,8 @@ The design lives in Notion (Castle Breach → Design guide, Buildable design).
 ## Layout
 
 - `src/sim/` is the whole game simulation. It contains no rendering code, so it runs in the browser and headless.
-- `src/render/` draws the sim in 2.5D: a voxel castle, sprite orcs and placeholder art drawn on canvases.
+- `src/render/` draws the sim in 2.5D: a voxel castle, sprite units and canvas-drawn effects.
+- `src/assets/sprites/` holds the unit sprites. Re-import them from the art folder with `python3 tools/import-sprites.py` (crops each to the unit and shrinks it; unit sizes come from `SIZE` in `scene.ts`).
 - `src/main.ts` handles input, the HUD and the game loop.
 - `tools/sim.ts` is the headless balance runner, which plays seeded runs with scripted bots
   (idle: cheapest purchases, no skills; builder: planned purchases, no skills; skilled: planned purchases, parries, slaps and early calls).

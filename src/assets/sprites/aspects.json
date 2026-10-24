@@ -1,0 +1,11 @@
+{
+  "defender-archer": 1.0449,
+  "defender-soldier": 1.0579,
+  "enemy-catapult": 0.9922,
+  "enemy-chucker": 0.7539,
+  "enemy-grunt": 1.0,
+  "enemy-monk": 0.9961,
+  "enemy-ogre": 0.9974,
+  "enemy-rider": 0.9844,
+  "enemy-warlord": 0.9531
+}
