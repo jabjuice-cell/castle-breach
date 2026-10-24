@@ -83,44 +83,55 @@ export class GroundCanvas {
   readonly texture: THREE.CanvasTexture;
   private ctx: CanvasRenderingContext2D;
   private c: HTMLCanvasElement;
+  private base = new Image();
+  private worn = new Image();
 
+  /** The base map is painted over the whole field; the worn map is blended in as the run goes on. */
   constructor(
     readonly worldW: number,
     readonly worldH: number,
     private readonly worldMinZ: number,
+    baseUrl: string,
+    wornUrl: string,
   ) {
-    [this.c, this.ctx] = canvas(512, Math.round((512 * worldH) / worldW));
-    this.reset();
+    [this.c, this.ctx] = canvas(1024, Math.round((1024 * worldH) / worldW));
     this.texture = texture(this.c);
+    this.base.onload = () => this.reset();
+    this.base.src = baseUrl;
+    this.worn.src = wornUrl;
+    this.reset();
   }
 
   reset() {
     const { ctx, c } = this;
-    ctx.fillStyle = '#5f8a3a';
+    ctx.fillStyle = '#7fb046';
     ctx.fillRect(0, 0, c.width, c.height);
-    // Grass tufts and patches, from a fixed pattern so every run starts the same.
-    let s = 7;
-    const r = () => ((s = (s * 16807) % 2147483647) / 2147483647);
-    for (let i = 0; i < 2600; i++) {
-      ctx.fillStyle = r() < 0.5 ? 'rgba(40,70,25,0.18)' : 'rgba(150,180,80,0.14)';
-      ctx.beginPath();
-      ctx.arc(r() * c.width, r() * c.height, 2 + r() * 9, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    // A worn dirt road down the middle towards the gate.
-    ctx.fillStyle = 'rgba(120,95,55,0.35)';
-    ctx.beginPath();
-    ctx.ellipse(c.width / 2, c.height / 2, c.width * 0.12, c.height * 0.55, 0, 0, Math.PI * 2);
-    ctx.fill();
-    if (this.texture) this.texture.needsUpdate = true;
+    if (this.base.complete && this.base.naturalWidth) ctx.drawImage(this.base, 0, 0, c.width, c.height);
+    this.texture.needsUpdate = true;
   }
 
-  /** Stamps a mark at a world position. */
+  /** Blends a little more of the trampled, cratered map in (call once per wave). */
+  wear(amount: number) {
+    if (!this.worn.complete || !this.worn.naturalWidth) return;
+    this.ctx.globalAlpha = amount;
+    this.ctx.drawImage(this.worn, 0, 0, this.c.width, this.c.height);
+    this.ctx.globalAlpha = 1;
+    this.texture.needsUpdate = true;
+  }
+
+  private toCanvas(x: number, z: number, radius: number) {
+    const { c } = this;
+    return {
+      px: ((x + this.worldW / 2) / this.worldW) * c.width,
+      py: ((z - this.worldMinZ) / this.worldH) * c.height,
+      pr: (radius / this.worldW) * c.width,
+    };
+  }
+
+  /** Stamps a soft mark at a world position. */
   stamp(x: number, z: number, radius: number, color: string) {
-    const { ctx, c } = this;
-    const px = ((x + this.worldW / 2) / this.worldW) * c.width;
-    const py = ((z - this.worldMinZ) / this.worldH) * c.height;
-    const pr = (radius / this.worldW) * c.width;
+    const { ctx } = this;
+    const { px, py, pr } = this.toCanvas(x, z, radius);
     const g = ctx.createRadialGradient(px, py, 0, px, py, pr);
     g.addColorStop(0, color);
     g.addColorStop(1, 'rgba(0,0,0,0)');
@@ -130,4 +141,23 @@ export class GroundCanvas {
     ctx.fill();
     this.texture.needsUpdate = true;
   }
+
+  /** Stamps a decal image (a crater or scorch mark) centred at a world position. */
+  decal(x: number, z: number, radius: number, img: HTMLImageElement, alpha = 1) {
+    if (!img.complete || !img.naturalWidth) return;
+    const { ctx } = this;
+    const { px, py, pr } = this.toCanvas(x, z, radius);
+    const h = (pr * 2 * img.naturalHeight) / img.naturalWidth;
+    ctx.globalAlpha = alpha;
+    ctx.drawImage(img, px - pr, py - h / 2, pr * 2, h);
+    ctx.globalAlpha = 1;
+    this.texture.needsUpdate = true;
+  }
+}
+
+/** Loads an image for canvas drawing (decals). */
+export function loadImage(url: string): HTMLImageElement {
+  const img = new Image();
+  img.src = url;
+  return img;
 }

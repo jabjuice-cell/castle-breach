@@ -42,6 +42,13 @@
       #shieldBar.locked { background: linear-gradient(#ff9c8c, #c45a4a); }
       .purse { display: flex; gap: 16px; font-weight: 800; font-size: 18px; }
       .purse .g { color: var(--gold); }
+      .purse > span { display: inline-flex; align-items: center; gap: 5px; }
+      .ico { width: 22px; height: 22px; object-fit: contain; vertical-align: middle; flex: none; }
+      .label .ico { width: 18px; height: 18px; margin-right: 5px; }
+      .label > span:first-child { display: inline-flex; align-items: center; }
+      button .ico { width: 20px; height: 20px; margin: -3px 4px -3px -4px; }
+      .wallimg { width: 36px; height: 48px; flex: none; background-image: var(--wall-states); background-size: 400% 100%; background-repeat: no-repeat; }
+      #council .row.wall > div:first-child { display: flex; align-items: center; gap: 8px; }
       .bottom { position: absolute; bottom: max(14px, env(safe-area-inset-bottom, 0px)); left: 50%; transform: translateX(-50%); display: flex; gap: 12px; align-items: stretch; width: min(560px, calc(100% - 32px)); }
       .bottom .panel { flex: 1; }
       .slap { flex: 0 0 auto !important; }
@@ -111,7 +118,7 @@
       <div class="markers" id="wallBars"></div>
       <div class="top">
         <div class="panel wave"><span id="waveLabel">Wave 1</span><small id="phaseLabel">Get ready</small></div>
-        <div class="panel purse"><span class="g" id="gold">0 gold</span><span id="renown">0 Renown</span><span id="kills">0 slain</span></div>
+        <div class="panel purse"><span class="g"><img class="ico" data-icon="gold" alt="" /><span id="gold">0 gold</span></span><span><img class="ico" data-icon="renown" alt="" /><span id="renown">0 Renown</span></span><span id="kills">0 slain</span></div>
       </div>
       <div class="panel" id="boss" hidden>
         <div class="label"><span>The Warlord</span></div>
@@ -127,12 +134,12 @@
       </div>
       <div class="bottom" id="bottom">
         <div class="panel">
-          <div class="label"><span>Shield</span><span id="shieldText">Ready</span></div>
+          <div class="label"><span><img class="ico" data-icon="shield" alt="" />Shield</span><span id="shieldText">Ready</span></div>
           <div class="bar"><i id="shieldBar"></i></div>
-          <div class="hint">Hold <kbd>Left click</kbd> or <kbd>Space</kbd> to raise · <kbd>Right click</kbd> or <kbd>F</kbd> to slap</div>
+          <div class="hint">Hold <kbd>Left click</kbd> or <kbd>Space</kbd> to raise · <img class="ico" data-icon="slap" alt="" /><kbd>Right click</kbd> or <kbd>F</kbd> to slap</div>
         </div>
         <div class="panel slap">
-          <div class="label"><span>Vigor</span></div>
+          <div class="label"><span><img class="ico" data-icon="vigor" alt="" />Vigor</span></div>
           <div class="pips" id="vigor"></div>
         </div>
       </div>

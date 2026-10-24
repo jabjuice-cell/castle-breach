@@ -1,9 +1,21 @@
+import wallStatesUrl from './assets/castle/wall-damage-states.png';
+import callWaveUrl from './assets/icons/call-wave.png';
+import goldUrl from './assets/icons/gold.png';
+import renownUrl from './assets/icons/renown.png';
+import shieldUrl from './assets/icons/shield.png';
+import slapUrl from './assets/icons/slap.png';
+import vigorUrl from './assets/icons/vigor.png';
 import { BattleScene } from './render/scene';
 import { type DefenderKind, SLOT_ACCEPTS, SPECIAL_NAMES, TRACKS, type Track } from './sim/defenders';
 import { Game, STEP } from './sim/game';
 import { ENEMY_KINDS, type EnemyKind } from './sim/waves';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
+
+const ICONS: Record<string, string> = { gold: goldUrl, renown: renownUrl, shield: shieldUrl, slap: slapUrl, vigor: vigorUrl, call: callWaveUrl };
+const icon = (name: string) => `<img class="ico" src="${ICONS[name]}" alt="" />`;
+document.querySelectorAll<HTMLImageElement>('img[data-icon]').forEach((img) => (img.src = ICONS[img.dataset.icon!]));
+document.documentElement.style.setProperty('--wall-states', `url(${wallStatesUrl})`);
 
 const canvas = $<HTMLCanvasElement>('game');
 let game = new Game(Math.floor(Math.random() * 1e9));
@@ -199,12 +211,12 @@ function updateHud(dt: number) {
   if (previewing) {
     hud.previewTitle.textContent = `${game.plan.boss ? 'Boss wave! ' : ''}Wave ${game.plan.number} marches in ${Math.ceil(game.phaseTimer)}`;
     hud.previewText.textContent = planText();
-    hud.startNow.innerHTML = `Start now, +${game.earlyCallGold()} gold <kbd>Enter</kbd>`;
+    hud.startNow.innerHTML = `${icon('call')}Start now, +${game.earlyCallGold()} gold <kbd>Enter</kbd>`;
   }
 
   const tail = game.phase === 'battle' && game.canCallEarly();
   hud.callEarly.hidden = !tail;
-  if (tail) hud.callEarly.innerHTML = `Sound the horn: call wave ${game.wave + 1} now, +${game.earlyCallGold()} gold <kbd>Enter</kbd>`;
+  if (tail) hud.callEarly.innerHTML = `${icon('call')}Sound the horn: call wave ${game.wave + 1} now, +${game.earlyCallGold()} gold <kbd>Enter</kbd>`;
 
   const lord = game.enemies.find((e) => e.kind === 'warlord');
   hud.boss.hidden = !lord;
@@ -263,13 +275,15 @@ function councilHtml(): string {
     .map((hp, i) => {
       const cost = game.repairCost(i);
       const pct = Math.round((hp / game.cfg.wall.segmentHp) * 100);
-      return `<div class="row"><div><b>${sides[i] ?? `Wall ${i + 1}`}</b><small>${pct}%</small></div>${cost > 0 ? btn(`repair:${i}`, 'Repair', Math.min(cost, Math.max(1, gold)), gold < 1) : '<small>Sound</small>'}</div>`;
+      // The four painted states: sound, chipped, cracked, crumbling.
+      const state = pct > 75 ? 0 : pct > 50 ? 1 : pct > 25 ? 2 : 3;
+      return `<div class="row wall"><div><i class="wallimg" style="background-position: ${state * 33.333}% 0"></i><span><b>${sides[i] ?? `Wall ${i + 1}`}</b><small>${pct}%</small></span></div>${cost > 0 ? btn(`repair:${i}`, 'Repair', Math.min(cost, Math.max(1, gold)), gold < 1) : '<small>Sound</small>'}</div>`;
     })
     .join('');
 
   const next = game.plan;
   return `
-    <header><h2>War Council</h2><span class="purse g">${gold} gold</span></header>
+    <header><h2>War Council</h2><span class="purse g">${icon('gold')}${gold} gold</span></header>
     <p class="next">${next.boss ? '<b class="danger">Boss wave.</b> ' : ''}Wave ${next.number} brings ${planText()}.</p>
     <section><h3>Defenders</h3>${slots}</section>
     ${upgrades ? `<section><h3>Upgrades</h3>${upgrades}</section>` : ''}
