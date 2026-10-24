@@ -21,4 +21,24 @@ export class Rng {
   int(min: number, maxInclusive: number): number {
     return Math.floor(this.range(min, maxInclusive + 1));
   }
+
+  /** Shuffles an array in place. */
+  shuffle<T>(a: T[]): T[] {
+    for (let i = a.length - 1; i > 0; i--) {
+      const j = this.int(0, i);
+      [a[i], a[j]] = [a[j], a[i]];
+    }
+    return a;
+  }
+
+  /** Picks a key with probability proportional to its weight. */
+  weighted<K extends string>(weights: Record<K, number>): K {
+    const keys = Object.keys(weights) as K[];
+    let r = this.next() * keys.reduce((s, k) => s + weights[k], 0);
+    for (const k of keys) {
+      r -= weights[k];
+      if (r < 0) return k;
+    }
+    return keys[keys.length - 1];
+  }
 }
