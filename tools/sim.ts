@@ -4,7 +4,7 @@
  * Usage: npm run sim -- [runs] ['{"group": {"key": value}}' config overrides]
  * Each bot plays a first run (crossbow only) and a veteran run (all defenders unlocked).
  */
-import { type Bot, averageBot, expertBot, idleBot } from '../src/sim/bot';
+import { type Bot, averageBot, expertBot, expertRandomBot, idleBot } from '../src/sim/bot';
 import { makeConfig } from '../src/sim/config';
 import { Game } from '../src/sim/game';
 
@@ -43,7 +43,7 @@ type Result = ReturnType<typeof play>;
 
 for (const veteran of [false, true]) {
   console.log(veteran ? '-- veteran (all defenders) --' : '-- first run (crossbow only) --');
-  for (const [name, bot] of [['idle', idleBot], ['average', averageBot], ['expert', expertBot]] as const) {
+  for (const [name, bot] of [['idle', idleBot], ['average', averageBot], ['expert', expertBot], ['exp+rand', expertRandomBot]] as const) {
     const results = Array.from({ length: runs }, (_, i) => play(bot, i + 1, veteran));
     const waves = results.map((r) => r.waves).sort((a, b) => a - b);
     const avg = (k: Exclude<keyof Result, 'won'>) => results.reduce((s, r) => s + r[k], 0) / runs;

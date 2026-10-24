@@ -11,29 +11,42 @@ export type Bot = (game: Game) => void;
 
 type Purchase = { cost: number; buy: () => boolean };
 
-/** Buys a defender into the first free spot (on the wall first, then further back). */
-function placeAnywhere(game: Game, kind: PlacedKind): boolean {
-  const spot = game.freeSpot(kind);
-  return !!spot && game.place(kind, spot.x, spot.y);
+/** Puts a defender on a spot, opening the spot first if it's closed. */
+function placeOn(game: Game, kind: PlacedKind, spotId: number): boolean {
+  const spot = game.spots[spotId];
+  if (game.defenders.some((d) => d.spot === spotId)) return false;
+  if (!game.openSpots[spotId] && game.gold < game.spotCost() + game.defenderCost(kind)) return false;
+  if (!game.openSpots[spotId] && !game.openSpot(spotId)) return false;
+  return game.place(kind, spot.x, spot.y);
+}
+
+/** An open, empty spot, if any. */
+function emptySpots(game: Game): number[] {
+  return game.spots.filter((s) => game.openSpots[s.id] && !game.defenders.some((d) => d.spot === s.id)).map((s) => s.id);
 }
 
 function ownedKinds(game: Game): DefenderKind[] {
   return (['crossbow', 'archers', 'catapult', 'soldiers'] as const).filter((k) => game.owns(k));
 }
 
-function purchases(game: Game): Purchase[] {
+function upgrades(game: Game): Purchase[] {
   const list: Purchase[] = [];
-  for (const kind of PLACED_KINDS) {
-    if (game.unlocked(kind)) list.push({ cost: game.defenderCost(kind), buy: () => placeAnywhere(game, kind) });
-  }
-  if (game.unlocked('soldiers') && game.companies < game.cfg.soldiers.maxCompanies) {
-    list.push({ cost: game.defenderCost('soldiers'), buy: () => game.buySoldiers() });
-  }
   for (const kind of ownedKinds(game)) {
-    for (const track of TRACKS) list.push({ cost: game.upgradeCost(kind, track), buy: () => game.upgrade(kind, track) });
+    for (const track of TRACKS) {
+      if (kind !== 'soldiers' || track !== 'rate') list.push({ cost: game.upgradeCost(kind, track), buy: () => game.upgrade(kind, track) });
+    }
   }
-  for (const track of SHIELD_TRACKS) list.push({ cost: game.shieldCost(track), buy: () => game.upgradeShield(track) });
+  for (const track of SHIELD_TRACKS) if (track !== 'plating') list.push({ cost: game.shieldCost(track), buy: () => game.upgradeShield(track) });
   return list;
+}
+
+function buyCheapest(game: Game, list: () => Purchase[]): void {
+  for (;;) {
+    const options = list().filter((p) => p.cost <= game.gold);
+    if (options.length === 0) return;
+    options.sort((a, b) => a.cost - b.cost);
+    if (!options[0].buy()) return;
+  }
 }
 
 function repairBelow(game: Game, share: number): void {
@@ -46,64 +59,75 @@ function repairBelow(game: Game, share: number): void {
     });
 }
 
-/** Casual shopping: patch badly hurt walls, then keep buying whatever is cheapest. */
+/** Casual shopping: patch badly hurt walls, then keep buying whatever is cheapest, in the first free spot. */
 function cheapestShop(game: Game): void {
   repairBelow(game, 0.5);
-  for (;;) {
-    const options = purchases(game).filter((p) => p.cost <= game.gold);
-    if (options.length === 0) return;
-    options.sort((a, b) => a.cost - b.cost);
-    if (!options[0].buy()) return;
-  }
+  buyCheapest(game, () => {
+    const list = upgrades(game);
+    const spot = emptySpots(game)[0];
+    if (spot !== undefined) {
+      for (const kind of PLACED_KINDS) if (game.unlocked(kind)) list.push({ cost: game.defenderCost(kind), buy: () => placeOn(game, kind, spot) });
+    }
+    return list;
+  });
 }
 
-/** What a sensible player buys, in order, and where it goes. Bumpers: the towers are at x = -12, -4, 4, 12. */
-const BUILD_ORDER: ([DefenderKind, number, number] | [ShieldTrack, number])[] = [
-  ['width', 1],
-  ['crossbow', 4, -1],
-  ['archers', 12, -1],
-  ['recovery', 2],
-  ['catapult', 0, -8],
-  ['soldiers', 0, 0],
-  ['width', 3],
-  ['archers', -12, -1],
-  ['window', 2],
-  ['crossbow', -4, -1],
-  ['catapult', -12, -8],
-  ['power', 1],
-  ['catapult', 12, -8],
+/** Random placement: the same budget, but defenders and new spots chosen at random. */
+function randomShop(game: Game, rng: Rng): void {
+  repairBelow(game, 0.75);
+  for (let tries = 0; tries < 40; tries++) {
+    const kinds = PLACED_KINDS.filter((k) => game.unlocked(k));
+    const kind = kinds[rng.int(0, kinds.length - 1)];
+    const free = emptySpots(game);
+    const closed = game.spots.filter((s) => !game.openSpots[s.id]).map((s) => s.id);
+    const spot = free.length && (closed.length === 0 || rng.next() < 0.7) ? free[rng.int(0, free.length - 1)] : closed[rng.int(0, Math.max(0, closed.length - 1))];
+    if (spot === undefined || game.gold < game.defenderCost(kind)) break;
+    placeOn(game, kind, spot);
+  }
+  buyCheapest(game, () => upgrades(game));
+}
+
+/**
+ * What a sensible player buys, in order, and where it goes. Spot ids: wall spots 0-9
+ * (two per section), tower tops 10-15 (x -19.5, -12, -4, 4, 12, 19.5), courtyard 16-19.
+ * Crossbows go on tower tops, where they can angle across two lanes at the catapults;
+ * archers spread so their cones cover every section against boulders.
+ */
+const BUILD_ORDER: ([DefenderKind, number] | [ShieldTrack, number, 'shield'])[] = [
+  ['crossbow', 12],
+  ['width', 1, 'shield'],
+  ['archers', 4],
+  ['crossbow', 13],
+  ['archers', 1],
+  ['archers', 8],
+  ['recovery', 2, 'shield'],
+  ['soldiers', 5],
+  ['crossbow', 11],
+  ['crossbow', 14],
+  ['catapult', 17],
+  ['width', 3, 'shield'],
+  ['soldiers', 0],
+  ['soldiers', 9],
+  ['window', 2, 'shield'],
+  ['catapult', 18],
+  ['power', 1, 'shield'],
 ];
 
 /** Planned shopping: keep walls healthy, buy in a set order, then spread upgrades. */
 function plannedShop(game: Game): void {
   repairBelow(game, 0.75);
-  const want = new Map<string, number>();
   for (const item of BUILD_ORDER) {
-    if (item.length === 2) {
+    if (item.length === 3) {
       const [track, level] = item;
       if (game.shieldLevels[track] >= level) continue;
       if (!game.upgradeShield(track)) return;
       continue;
     }
-    const [kind, x, y] = item;
-    if (!game.unlocked(kind)) continue;
-    const n = (want.get(kind) ?? 0) + 1;
-    want.set(kind, n);
-    if (game.count(kind) >= n) continue;
-    const bought = kind === 'soldiers' ? game.buySoldiers() : game.place(kind, x, y) || placeAnywhere(game, kind);
-    if (!bought) return;
+    const [kind, spot] = item;
+    if (!game.unlocked(kind) || game.defenders.some((d) => d.spot === spot)) continue;
+    if (!placeOn(game, kind, spot)) return;
   }
-  for (;;) {
-    const options = [
-      ...ownedKinds(game).flatMap((kind) =>
-        TRACKS.filter((t) => kind !== 'soldiers' || t !== 'rate').map((track) => ({ cost: game.upgradeCost(kind, track), buy: () => game.upgrade(kind, track) })),
-      ),
-      ...SHIELD_TRACKS.filter((t) => t !== 'plating').map((t) => ({ cost: game.shieldCost(t), buy: () => game.upgradeShield(t) })),
-    ];
-    options.sort((a, b) => a.cost - b.cost);
-    const pick = options[0];
-    if (!pick || pick.cost > game.gold || !pick.buy()) return;
-  }
+  buyCheapest(game, () => upgrades(game));
 }
 
 /** How well a bot handles the shield. Distances are in field units (1 tile = 1.67). */
@@ -165,7 +189,9 @@ function aimOffset(game: Game, x: number, tx: number, ty: number): number {
  * pebbles, then capsules) with a reaction delay and aim error, and sometimes heaves.
  * strong: plans its shopping, calls waves early and slaps climbers.
  */
-export function paddleBot(skill: PaddleSkill, strong: boolean): Bot {
+export type Placement = 'planned' | 'cheapest' | 'random';
+
+export function paddleBot(skill: PaddleSkill, strong: boolean, placement: Placement = strong ? 'planned' : 'cheapest'): Bot {
   const history: { t: number; x: number }[] = [];
   const errors = new WeakMap<object, number>();
   const decided = new WeakSet<object>();
@@ -174,7 +200,9 @@ export function paddleBot(skill: PaddleSkill, strong: boolean): Bot {
   return (game) => {
     rng ??= new Rng(game.seed * 31 + 7);
     if (game.phase === 'council') {
-      (strong ? plannedShop : cheapestShop)(game);
+      if (placement === 'planned') plannedShop(game);
+      else if (placement === 'random') randomShop(game, rng);
+      else cheapestShop(game);
       game.closeCouncil();
       return;
     }
@@ -197,8 +225,10 @@ export function paddleBot(skill: PaddleSkill, strong: boolean): Bot {
       if (!errors.has(next.key)) errors.set(next.key, rng.range(-skill.error, skill.error));
       let offset = 0;
       if (skill.aim && !('kind' in next.key && (next.key as { kind: string }).kind === 'grog')) {
+        // The siege tower first, when there is one; otherwise the biggest block.
         const block = game.blocks.reduce<(typeof game.blocks)[number] | undefined>((a, b) => (!a || b.members.length > a.members.length ? b : a), undefined);
-        if (block) offset = aimOffset(game, next.x, block.x, block.y);
+        const aim = game.tower ?? block;
+        if (aim) offset = aimOffset(game, next.x, aim.x, aim.y);
       }
       want = next.x - offset * half * 0.9 + errors.get(next.key)!;
     }
@@ -230,3 +260,5 @@ export function paddleBot(skill: PaddleSkill, strong: boolean): Bot {
 export const idleBot = (): Bot => paddleBot(IDLE, false);
 export const averageBot = (): Bot => paddleBot(AVERAGE, true);
 export const expertBot = (): Bot => paddleBot(EXPERT, true);
+/** The placement pillar's test: expert shield play with defenders dropped anywhere. */
+export const expertRandomBot = (): Bot => paddleBot(EXPERT, true, 'random');

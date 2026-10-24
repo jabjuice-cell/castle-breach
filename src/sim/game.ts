@@ -1,7 +1,7 @@
 import { type Config, makeConfig } from './config';
 import {
-  type Defender, type DefenderKind, type Levels, type PlacedKind, type Track,
-  emptyLevels, trackMult, upgradeCost,
+  type Defender, type DefenderKind, type Levels, type PlacedKind, type Spot, type Track,
+  castleSpots, emptyLevels, trackMult, upgradeCost,
 } from './defenders';
 import { Rng } from './rng';
 import { type EnemyKind, type Shape, type WavePlan, formation, planSize, planWave } from './waves';
@@ -181,6 +181,8 @@ export type GameEvent =
   /** A heave smashed through an orc line from x0 to x1. */
   | { type: 'line'; x0: number; x1: number; y: number }
   | { type: 'bank'; x: number; y: number }
+  | { type: 'shotDown'; x: number; y: number }
+  | { type: 'salvo'; size: number }
   | { type: 'combo'; x: number; y: number; combo: number }
   | { type: 'blast'; x: number; y: number; radius: number }
   | { type: 'plank'; x: number; y: number }
@@ -234,8 +236,10 @@ export class Game {
   soldiers: Soldier[] = [];
   /** Archers, crossbows and catapults the player has placed. */
   defenders: Defender[] = [];
-  /** Soldier companies bought; each holds the whole wall with cfg.soldiers.count men. */
-  companies = 0;
+  /** The castle's fixed defender spots, and which are open. */
+  readonly spots: Spot[];
+  openSpots: boolean[];
+  private spotsBought = 0;
   private nextDefenderId = 0;
   private nextBallId = 0;
   private nextBlockId = 0;
@@ -269,6 +273,7 @@ export class Game {
   stickyCatches = 0;
   /** Orc tricks the shield plating can still shrug off this wave. */
   platingLeft = 0;
+  private salvoTimer = 0;
   /** When the Royal Ball is served again after being lost. */
   royalDue = 0;
 
@@ -284,6 +289,8 @@ export class Game {
     this.segmentHp = new Array(cfg.wall.segments).fill(cfg.wall.segmentHp);
     this.vigor = cfg.slap.vigorMax;
     this.gold = cfg.economy.startGold;
+    this.spots = castleSpots(cfg);
+    this.openSpots = this.spots.map((s) => cfg.castle.startOpen.includes(s.id));
     this.plan = planWave(1, seed, cfg);
   }
 
@@ -393,7 +400,7 @@ export class Game {
   /** True when the next wave can be called now for a bonus. */
   canCallEarly(): boolean {
     if (this.phase === 'preview') return true;
-    if (this.phase !== 'battle' || this.nextGroup < this.plan.groups.length) return false;
+    if (this.phase !== 'battle' || this.nextGroup < this.plan.groups.length || this.tower) return false;
     if (this.councilAfter(this.wave) || this.wave >= this.cfg.waves.finalWave) return false;
     return this.enemies.length <= Math.max(2, Math.ceil(planSize(this.plan) * this.cfg.economy.callEarlyAt));
   }
@@ -442,7 +449,12 @@ export class Game {
   }
 
   count(kind: DefenderKind): number {
-    return kind === 'soldiers' ? this.companies : this.defenders.filter((d) => d.kind === kind).length;
+    return this.defenders.filter((d) => d.kind === kind).length;
+  }
+
+  /** Soldier companies on the wall. */
+  get companies(): number {
+    return this.count('soldiers');
   }
 
   /** Price of the next defender of a kind: each extra one costs more. */
@@ -450,57 +462,74 @@ export class Game {
     return Math.round(this.cfg[kind].cost * this.cfg.castle.priceGrowth ** this.count(kind));
   }
 
-  /** True if a defender of this kind fits at (x, y): on the castle grounds and clear of the others. */
-  canPlace(kind: PlacedKind, x: number, y: number, ignoreId = -1): boolean {
-    const c = this.cfg.castle;
-    const hw = this.cfg.field.halfWidth - c.edge;
-    if (x < -hw || x > hw || y < c.minY || y > c.maxY) return false;
-    const r = this.cfg[kind].footprint;
-    return this.defenders.every((d) => d.id === ignoreId || Math.hypot(d.x - x, d.y - y) >= r + this.cfg[d.kind].footprint);
+  /** The open, empty spot nearest (x, y) within snapping distance, or undefined. */
+  spotAt(x: number, y: number, ignoreId = -1): Spot | undefined {
+    let best: Spot | undefined;
+    let bestD = this.cfg.castle.snap;
+    // The nearest open spot; if someone already stands there, nothing (no jumping to a neighbour).
+    for (const s of this.spots) {
+      if (!this.openSpots[s.id]) continue;
+      const d = Math.hypot(s.x - x, s.y - y);
+      if (d < bestD) {
+        best = s;
+        bestD = d;
+      }
+    }
+    if (best && this.defenders.some((d) => d.spot === best!.id && d.id !== ignoreId)) return undefined;
+    return best;
   }
 
-  /** Buys a defender and puts it down at (x, y) on the castle grounds. */
+  /** True if a defender could go at (x, y): an open, empty spot is close enough to snap to. */
+  canPlace(_kind: PlacedKind, x: number, y: number, ignoreId = -1): boolean {
+    return !!this.spotAt(x, y, ignoreId);
+  }
+
+  /** Buys a defender and puts it on the open spot nearest (x, y). */
   place(kind: PlacedKind, x: number, y: number): boolean {
     const cost = this.defenderCost(kind);
-    if (!this.shopOpen || !this.unlocked(kind) || this.gold < cost || this.defenders.length >= this.cfg.castle.maxDefenders) return false;
-    if (!this.canPlace(kind, x, y)) return false;
+    if (!this.shopOpen || !this.unlocked(kind) || this.gold < cost) return false;
+    const spot = this.spotAt(x, y);
+    if (!spot) return false;
     this.gold -= cost;
-    this.addDefender(kind, x, y);
+    this.addDefender(kind, spot);
+    if (kind === 'soldiers') this.musterSoldiers();
     return true;
   }
 
-  /** Buys another company of soldiers for the foot of the wall. */
-  buySoldiers(): boolean {
-    const cost = this.defenderCost('soldiers');
-    if (!this.shopOpen || !this.unlocked('soldiers') || this.gold < cost || this.companies >= this.cfg.soldiers.maxCompanies) return false;
-    this.gold -= cost;
-    this.companies++;
-    this.musterSoldiers();
-    return true;
+  /** Gold a move costs right now: free in the War Council and the preview, paid mid-battle. */
+  moveCost(): number {
+    return this.phase === 'battle' ? Math.round((this.cfg.castle.moveGold * this.wave) / 5) : 0;
   }
 
   /**
-   * Moves a placed defender. Free in the War Council and the preview; mid-battle
-   * it has to pack up first and can't fire for a moment.
+   * Moves a placed defender to the open spot nearest (x, y). Free in the War Council and
+   * the preview; mid-battle it costs gold and it has to pack up before it fires again.
    */
   move(id: number, x: number, y: number): boolean {
     const d = this.defenders.find((o) => o.id === id);
-    if (!d || this.over || !this.canPlace(d.kind, x, y, id)) return false;
-    d.x = x;
-    d.y = y;
-    d.aimX = x;
+    if (!d || this.over) return false;
+    const spot = this.spotAt(x, y, id);
+    const cost = this.moveCost();
+    if (!spot || this.gold < cost) return false;
+    if (spot.id === d.spot) return true;
+    this.gold -= cost;
+    d.spot = spot.id;
+    d.x = spot.x;
+    d.y = spot.y;
+    d.aimX = spot.x;
     d.aimY = 30;
     if (this.phase === 'battle') d.timer = Math.max(d.timer, this.cfg.castle.packSeconds);
+    if (d.kind === 'soldiers') this.musterSoldiers();
     return true;
   }
 
   /** The placed defender at (x, y), if any (for picking it up with the mouse). */
   defenderAt(x: number, y: number): Defender | undefined {
     let best: Defender | undefined;
-    let bestD = Infinity;
+    let bestD = 2;
     for (const d of this.defenders) {
       const dist = Math.hypot(d.x - x, d.y - y);
-      if (dist < this.cfg[d.kind].footprint && dist < bestD) {
+      if (dist < bestD) {
         best = d;
         bestD = dist;
       }
@@ -508,23 +537,78 @@ export class Game {
     return best;
   }
 
-  /**
-   * The first free spot for a kind, scanning the given rows outward from the gate.
-   * Bots use it; the player picks spots with the mouse.
-   */
-  freeSpot(kind: PlacedKind, rows: number[] = [-1, -4, -7, -10]): { x: number; y: number } | null {
-    const hw = this.cfg.field.halfWidth - this.cfg.castle.edge;
-    for (const y of rows) {
-      for (let i = 0; i <= hw * 2; i++) {
-        const x = (i % 2 === 0 ? 1 : -1) * Math.ceil(i / 2);
-        if (this.canPlace(kind, x, y)) return { x, y };
-      }
-    }
-    return null;
+  /** Price of opening one more spot in the War Council. */
+  spotCost(): number {
+    const c = this.cfg.castle;
+    return Math.round(c.openCost * c.openGrowth ** this.spotsBought);
+  }
+
+  /** Opens a closed spot for gold (War Council only). */
+  openSpot(id: number): boolean {
+    const cost = this.spotCost();
+    if (!this.shopOpen || this.openSpots[id] !== false || this.gold < cost) return false;
+    this.gold -= cost;
+    this.openSpots[id] = true;
+    this.spotsBought++;
+    return true;
   }
 
   owns(kind: DefenderKind): boolean {
     return this.count(kind) > 0;
+  }
+
+  /** Range multiplier from where a defender stands. */
+  rangeMult(d: Defender): number {
+    const kind = this.spots[d.spot]?.kind;
+    return kind === 'tower' ? this.cfg.castle.towerRange : kind === 'courtyard' ? this.cfg.castle.courtyardRange : 1;
+  }
+
+  /** The stretch of wall a soldier company holds: its section plus a spill into each neighbour. */
+  soldierRange(d: Defender): [number, number] {
+    const w = this.segmentWidth();
+    const seg = this.segmentAt(d.x);
+    const lo = -this.cfg.field.halfWidth + seg * w;
+    const spill = this.cfg.coverage.soldierSpill;
+    return [Math.max(-this.cfg.field.halfWidth, lo - spill), Math.min(this.cfg.field.halfWidth, lo + w + spill)];
+  }
+
+  /** Whether a defender can reach a point on the field: its coverage, with blind spots. */
+  covers(d: Defender, x: number, y: number): boolean {
+    const c = this.cfg.coverage;
+    const dx = x - d.x;
+    const dy = y - d.y;
+    if (y > this.cfg.field.topY) return false;
+    switch (d.kind) {
+      case 'crossbow':
+        if (dy <= 0) return false;
+        return Math.abs(dx) <= c.crossbowLane || (this.spots[d.spot]?.kind === 'tower' && Math.abs(Math.atan2(dx, dy)) <= c.crossbowTowerAngle);
+      case 'archers':
+        return dy > 0 && Math.abs(Math.atan2(dx, dy)) <= c.archerCone && y <= this.cfg.field.topY * c.archerReach * this.rangeMult(d);
+      case 'catapult': {
+        const dist = Math.hypot(dx, dy);
+        return dy > 0 && dist >= c.catapultMin && dist <= c.catapultMax * this.rangeMult(d);
+      }
+      case 'soldiers': {
+        const [lo, hi] = this.soldierRange(d);
+        return x >= lo && x <= hi && y <= this.cfg.soldiers.y + this.cfg.soldiers.guard;
+      }
+    }
+  }
+
+  /**
+   * How well a wall section is defended against boulders: archers whose cone reaches
+   * out in front of it, and crossbows whose lane runs up it (they kill its catapults).
+   */
+  sectionCover(seg: number): number {
+    const w = this.segmentWidth();
+    const lo = -this.cfg.field.halfWidth + seg * w;
+    const y = this.cfg.coverage.sectionCheckY;
+    let n = 0;
+    for (const d of this.defenders) {
+      if (d.kind === 'archers' && this.covers(d, lo + w / 2, y)) n++;
+      if (d.kind === 'crossbow' && [0.1, 0.3, 0.5, 0.7, 0.9].some((f) => this.covers(d, lo + w * f, 40))) n++;
+    }
+    return n;
   }
 
   upgradeCost(kind: DefenderKind, track: Track): number {
@@ -658,6 +742,7 @@ export class Game {
     this.updateDefenders(edt);
     this.updateProjectiles(edt);
     this.updateTower(edt);
+    this.updateSalvo(edt);
     this.updateBalls(edt);
     this.updateCapsules(edt);
     this.removeDead();
@@ -713,8 +798,8 @@ export class Game {
     this.events.push({ type: 'waveCleared', wave: w, gold });
   }
 
-  private addDefender(kind: PlacedKind, x: number, y: number): void {
-    this.defenders.push({ id: this.nextDefenderId++, kind, x, y, timer: 0, aimX: x, aimY: 30, firedAt: -99 });
+  private addDefender(kind: PlacedKind, spot: Spot): void {
+    this.defenders.push({ id: this.nextDefenderId++, kind, spot: spot.id, x: spot.x, y: spot.y, timer: 0, aimX: spot.x, aimY: 30, firedAt: -99 });
   }
 
   private startWave(): void {
@@ -723,26 +808,27 @@ export class Game {
     this.phaseTimer = 0;
     this.nextGroup = 0;
     this.platingLeft = this.shieldLevels.plating;
+    this.salvoTimer = this.cfg.waves.salvoInterval;
     this.musterSoldiers();
     if (!this.balls.some((b) => b.primary)) this.serveRoyal();
     if (this.plan.tower && !this.tower) this.spawnTower();
     this.events.push({ type: 'waveStart', wave: this.wave });
   }
 
-  /** Spreads every company along the foot of the wall at full health (the fallen return each wave). */
+  /** Lines every company up along the stretch of wall it holds, at full health (the fallen return each wave). */
   private musterSoldiers(): void {
     const c = this.cfg.soldiers;
     const hp = this.soldierHp();
-    const width = this.cfg.field.halfWidth * 2 - 1;
     this.soldiers = [];
-    for (let row = 0; row < this.companies; row++) {
+    this.defenders.filter((d) => d.kind === 'soldiers').forEach((d, row) => {
+      const [lo, hi] = this.soldierRange(d);
       for (let i = 0; i < c.count; i++) {
-        // Later companies stand a step behind and half a gap over, so the line thickens.
-        const x = -width / 2 + ((i + 0.5 + (row % 2) * 0.5) / c.count) * width;
-        const y = c.y + row * 0.8;
+        // Two ranks, so a company reads as a crowd.
+        const x = lo + 0.3 + ((i + 0.5) / c.count) * (hi - lo - 0.6);
+        const y = c.y + (i % 2) * 0.7 + (row % 2) * 0.35;
         this.soldiers.push({ x, y, hp, maxHp: hp, postX: x, postY: y });
       }
-    }
+    });
   }
 
   // ---- marching blocks ------------------------------------------------------
@@ -909,7 +995,7 @@ export class Game {
 
     // Soldiers never stray further from the wall than this, so orcs beyond it needn't look for one.
     const sc = this.cfg.soldiers;
-    const soldierReach = this.soldiers.length ? sc.y + 0.8 * this.companies + sc.guard * sc.heavyGuard + 2 : -Infinity;
+    const soldierReach = this.soldiers.length ? sc.y + 1.2 + sc.guard * sc.heavyGuard + 2 : -Infinity;
 
     for (const e of this.enemies) {
       const stats = this.cfg[e.kind];
@@ -945,6 +1031,9 @@ export class Game {
           if (e.stagger > 0) {
             // Knocked flat by a falling ogre: no marching for a moment.
             e.stagger -= dt;
+          } else if (e.block && e.kind === 'barrel' && e.y < this.cfg.waves.barrelSeekY) {
+            // Close in, a barrel orc breaks away for the weakest section.
+            this.leaveBlock(e);
           } else if (e.block) {
             // Hold the slot in the block: chase it, and keep up with the march.
             const b = e.block;
@@ -959,6 +1048,11 @@ export class Game {
           } else {
             mx = Math.sin(this.time * 0.7 + e.phase * 6.28) * 0.15;
             if (e.kind === 'rider') mx = Math.sin(this.time * this.cfg.rider.zigRate + e.phase * 6.28) * this.cfg.rider.zigSpeed;
+            if (e.kind === 'barrel') {
+              const weakest = this.segmentHp.indexOf(Math.min(...this.segmentHp));
+              const tx = -hw + (weakest + 0.5) * this.segmentWidth();
+              mx = Math.max(-2, Math.min(2, tx - e.x));
+            }
             my = -stats.speed * e.rally;
           }
           const foe = e.y < soldierReach ? this.soldiers.find((s) => s.hp > 0 && Math.hypot(s.x - e.x, s.y - e.y) < stats.radius + 0.6) : undefined;
@@ -986,7 +1080,7 @@ export class Game {
             e.timer -= dt;
             if (e.timer <= 0) {
               e.timer = this.cfg.chucker.throwInterval;
-              this.throwAtWall(e, 'rock');
+              this.throwAtWall(e.x, e.y, 'rock');
             }
           }
           break;
@@ -1004,7 +1098,7 @@ export class Game {
           e.timer -= dt;
           if (e.timer <= 0) {
             e.timer = this.cfg.orcCatapult.throwInterval;
-            this.throwAtWall(e, 'boulder');
+            this.throwAtWall(e.x, e.y, 'boulder');
           }
           break;
         case 'climb':
@@ -1038,7 +1132,7 @@ export class Game {
     const heavies = this.enemies.filter((e) => e.kind === 'ogre' || e.kind === 'warlord');
     // Only orcs near the wall matter; bucket them into 1-wide columns so each soldier checks its own stretch.
     const hw = this.cfg.field.halfWidth;
-    const reachY = c.y + 0.8 * this.companies + c.guard;
+    const reachY = c.y + 1.2 + c.guard;
     const columns: Enemy[][] = Array.from({ length: hw * 2 + 1 }, () => []);
     for (const e of this.enemies) if (e.y < reachY) columns[Math.max(0, Math.min(hw * 2, Math.floor(e.x + hw)))].push(e);
     for (const s of this.soldiers) {
@@ -1082,19 +1176,66 @@ export class Game {
     if (this.segmentHp[seg] === 0) this.events.push({ type: 'segmentDestroyed', segment: seg });
   }
 
-  private throwAtWall(e: Enemy, kind: 'rock' | 'boulder'): void {
+  /**
+   * Where a catapult aims: near its own lane early on; from seekGapsFromWave, the
+   * wall section with the least boulder cover, so a gap in the defence gets found.
+   */
+  private boulderTarget(fromX: number, avoid: Set<number> = new Set()): number {
     const hw = this.cfg.field.halfWidth;
-    const spread = kind === 'boulder' ? 6 : 8;
-    const tx = Math.max(-hw + 1, Math.min(hw - 1, e.x + this.rng.range(-spread, spread)));
-    const dx = tx - e.x;
-    const dy = 0 - e.y;
+    if (this.wave >= this.cfg.waves.seekGapsFromWave) {
+      const order = [...Array(this.cfg.wall.segments).keys()]
+        .filter((i) => !avoid.has(i))
+        .map((i) => ({ i, cover: this.sectionCover(i) + this.rng.next() * 0.5 }))
+        .sort((a, b) => a.cover - b.cover);
+      if (order.length) {
+        const w = this.segmentWidth();
+        return -hw + (order[0].i + 0.2 + this.rng.next() * 0.6) * w;
+      }
+    }
+    return Math.max(-hw + 1, Math.min(hw - 1, fromX + this.rng.range(-6, 6)));
+  }
+
+  /** Throws a rock or boulder at the wall at tx, landing after flight seconds (default: its normal speed). */
+  private throwAtWall(x: number, y: number, kind: 'rock' | 'boulder', tx?: number, flight?: number): void {
+    const hw = this.cfg.field.halfWidth;
+    const target = tx ?? (kind === 'boulder' ? this.boulderTarget(x) : Math.max(-hw + 1, Math.min(hw - 1, x + this.rng.range(-8, 8))));
+    const dx = target - x;
+    const dy = 0 - y;
     const d = Math.hypot(dx, dy);
     const c = this.cfg[kind];
+    const sp = flight ? d / flight : c.speed;
     this.projectiles.push({
-      kind, x: e.x, y: e.y, vx: (dx / d) * c.speed, vy: (dy / d) * c.speed,
+      kind, x, y, vx: (dx / d) * sp, vy: (dy / d) * sp,
       friendly: false, travelled: 0, flight: d, damage: c.wallDamage,
       hitsLeft: 1, hit: new Set(),
     });
+  }
+
+  /**
+   * Salvos: the catapults loose 2 to 5 boulders together, landing within half a second
+   * of each other on different sections. The shield can catch one or two; the rest are
+   * the defences' job.
+   */
+  private updateSalvo(dt: number): void {
+    const w = this.cfg.waves;
+    if (this.phase !== 'battle' || this.wave < w.salvoFromWave) return;
+    this.salvoTimer -= dt;
+    if (this.salvoTimer > 0) return;
+    const cats = this.enemies.filter((e) => e.kind === 'orcCatapult' && e.state === 'stand');
+    if (cats.length === 0) return;
+    this.salvoTimer = w.salvoInterval;
+    const size = Math.min(w.salvoMax, w.salvoBase + Math.floor((this.wave - w.salvoFromWave) / w.salvoEvery));
+    const used = new Set<number>();
+    for (let k = 0; k < size && used.size < this.cfg.wall.segments; k++) {
+      const cat = cats[k % cats.length];
+      let tx = this.boulderTarget(cat.x, used);
+      // Each boulder of the salvo goes at a different section.
+      for (let tries = 0; used.has(this.segmentAt(tx)) && tries < 10; tries++) tx = this.boulderTarget(this.rng.range(-20, 20), used);
+      used.add(this.segmentAt(tx));
+      this.throwAtWall(cat.x, cat.y, 'boulder', tx, w.salvoFlight + this.rng.next() * w.salvoSpread);
+      cat.timer = Math.max(cat.timer, this.cfg.orcCatapult.throwInterval * 0.5);
+    }
+    this.events.push({ type: 'salvo', size });
   }
 
   // ---- defenders ----------------------------------------------------------
@@ -1106,7 +1247,7 @@ export class Game {
       if (d.timer > 0) continue;
       if (d.kind === 'crossbow') this.fireCrossbow(d);
       else if (d.kind === 'archers') this.fireVolley(d);
-      else this.fireCatapult(d);
+      else if (d.kind === 'catapult') this.fireCatapult(d);
     }
   }
 
@@ -1116,7 +1257,7 @@ export class Game {
     let target: Enemy | undefined;
     let rank = -1;
     for (const e of this.enemies) {
-      if (e.y > cb.range || e.y > this.cfg.field.topY) continue;
+      if (!this.covers(def, e.x, e.y)) continue;
       const r = CROSSBOW_PRIORITY[e.kind] ?? 0;
       if (!target || r > rank || (r === rank && e.y < target.y)) {
         target = e;
@@ -1143,13 +1284,13 @@ export class Game {
    * The middle of the thickest crowd within range of a defender, or undefined.
    * Heavies and throwers count extra, so big targets and rock chuckers draw fire.
    */
-  private densestCrowd(def: Defender, range: number): { x: number; y: number; speed: number } | undefined {
+  private densestCrowd(def: Defender): { x: number; y: number; speed: number } | undefined {
     const size = 4;
     type Bucket = { weight: number; n: number; x: number; y: number; speed: number };
     const buckets = new Map<number, Bucket>();
     let best: Bucket | undefined;
     for (const e of this.enemies) {
-      if (e.y < 2 || e.y > this.cfg.field.topY || Math.hypot(e.x - def.x, e.y - def.y) > range) continue;
+      if (e.y < 2 || !this.covers(def, e.x, e.y)) continue;
       const k = Math.floor(e.y / size) * 1000 + Math.floor(e.x / size + 100);
       const b = buckets.get(k) ?? { weight: 0, n: 0, x: 0, y: 0, speed: 0 };
       b.weight += e.kind === 'warlord' || e.kind === 'ogre' ? 4 : e.kind === 'chucker' || e.state === 'stand' ? 3 : 1;
@@ -1179,7 +1320,20 @@ export class Game {
   /** The whole squad looses at once: arrows arc high and rain down around the thickest crowd. */
   private fireVolley(def: Defender): void {
     const a = this.cfg.archers;
-    const crowd = this.densestCrowd(def, a.range);
+    // First, any boulder flying through the squad's cover may be shot down.
+    let shot = false;
+    this.projectiles = this.projectiles.filter((p) => {
+      if (p.friendly || p.kind !== 'boulder' || !this.covers(def, p.x, p.y)) return true;
+      shot = true;
+      if (this.rng.next() >= a.shootDown) return true;
+      this.events.push({ type: 'shotDown', x: p.x, y: p.y });
+      return false;
+    });
+    const crowd = this.densestCrowd(def);
+    if (shot && !crowd) {
+      def.timer = a.interval / this.mult('archers', 'rate');
+      def.firedAt = this.time;
+    }
     if (!crowd) return;
     // Lead the target: aim where the crowd will be when the arrows come down.
     const ty = crowd.y - crowd.speed * a.flightTime;
@@ -1201,13 +1355,14 @@ export class Game {
   /** The castle catapult lobs a fresh Royal Ball over the wall toward the thickest crowd. */
   private fireCatapult(def: Defender): void {
     const c = this.cfg.catapult;
-    const crowd = this.densestCrowd(def, 200);
+    const crowd = this.densestCrowd(def);
     if (!crowd) return;
     def.timer = c.interval / this.mult('catapult', 'rate');
     def.firedAt = this.time;
     def.aimX = crowd.x;
     def.aimY = crowd.y;
-    const y = this.cfg.shield.y + 1;
+    // Launched from clear of the shield and the turrets.
+    const y = this.cfg.bumpers.y + 2;
     const angle = Math.max(-c.spread, Math.min(c.spread, Math.atan2(crowd.x - def.x, crowd.y - y)));
     const sp = this.cfg.balls.speed;
     const b = this.addBall('royal', def.x, y, Math.sin(angle) * sp, Math.cos(angle) * sp);
@@ -1682,8 +1837,7 @@ export class Game {
       tw.timer -= dt;
       if (tw.timer <= 0) {
         tw.timer = t.throwInterval;
-        const from = { ...this.enemies[0], x: tw.x + this.rng.range(-2, 2), y: tw.y + t.depth };
-        this.throwAtWall(from as Enemy, 'boulder');
+        this.throwAtWall(tw.x + this.rng.range(-2, 2), tw.y + t.depth, 'boulder');
       }
     }
   }

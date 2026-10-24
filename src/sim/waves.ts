@@ -11,6 +11,8 @@ export type Shape = (typeof SHAPES)[number];
 /** One marching block: a formation of orcs that arrives together and keeps its shape. */
 export interface SpawnGroup {
   time: number;
+  /** The lane it comes down: one per wall section, 0 = far left. */
+  lane: number;
   x: number;
   shape: Shape;
   /** Front ranks first: catapults always go at the back. */
@@ -102,12 +104,14 @@ export function planWave(n: number, seed: number, cfg: Config): WavePlan {
   }
 
   const duration = Math.min(w.spawnMax, w.spawnBase + w.spawnPerWave * n);
-  const edge = cfg.field.halfWidth - 5;
   const groups: SpawnGroup[] = [];
   // Foot orcs are split across the blocks; catapults stand at the back of them.
   const split = (total: number, i: number) => Math.floor((total * (i + 1)) / blocks) - Math.floor((total * i) / blocks);
-  const lanes = Array.from({ length: blocks }, (_, i) => -edge + ((i + 0.5) / blocks) * edge * 2);
-  rng.shuffle(lanes);
+  // Five lanes, one per wall section. Blocks spread over them; a sixth doubles up.
+  const segs = cfg.wall.segments;
+  const laneX = (lane: number) => -cfg.field.halfWidth + ((lane + 0.5) / segs) * cfg.field.halfWidth * 2;
+  const lanes = rng.shuffle([...Array(segs).keys()]);
+  while (lanes.length < blocks) lanes.push(rng.int(0, segs - 1));
   for (let i = 0; i < blocks; i++) {
     const members = [
       { kind: 'grunt' as const, count: split(totals.grunt, i) },
@@ -118,19 +122,22 @@ export function planWave(n: number, seed: number, cfg: Config): WavePlan {
     if (members.length === 0) continue;
     const shape = (['rect', 'wedge', 'column'] as const)[rng.int(0, 2)];
     const time = i === 0 ? 0 : rng.range(0, duration);
-    groups.push({ time, x: lanes[i] + rng.range(-2, 2), shape, members });
+    groups.push({ time, lane: lanes[i], x: laneX(lanes[i]) + rng.range(-1.5, 1.5), shape, members });
   }
   // Riders come as a skirmish line that zig-zags across the field.
   let riders = totals.rider;
   while (riders > 0) {
     const count = Math.min(riders, rng.int(5, 10));
-    groups.push({ time: rng.range(2, duration), x: rng.range(-edge, edge), shape: 'line', members: [{ kind: 'rider', count }] });
+    // Riders take the edge lanes.
+    const lane = rng.next() < 0.5 ? 0 : segs - 1;
+    groups.push({ time: rng.range(2, duration), lane, x: laneX(lane), shape: 'line', members: [{ kind: 'rider', count }] });
     riders -= count;
   }
   for (let i = 0; i < totals.ogre; i++) {
-    groups.push({ time: rng.range(2, duration), x: rng.range(-edge, edge), shape: 'rect', members: [{ kind: 'ogre', count: 1 }] });
+    const lane = rng.int(0, segs - 1);
+    groups.push({ time: rng.range(2, duration), lane, x: laneX(lane), shape: 'rect', members: [{ kind: 'ogre', count: 1 }] });
   }
-  if (totals.warlord) groups.push({ time: tower ? 0 : duration * 0.4, x: 0, shape: 'rect', members: [{ kind: 'warlord', count: 1 }] });
+  if (totals.warlord && !tower) groups.push({ time: duration * 0.4, lane: 2, x: 0, shape: 'rect', members: [{ kind: 'warlord', count: 1 }] });
   groups.sort((a, b) => a.time - b.time);
   return { number: n, groups, totals, boss, tower };
 }

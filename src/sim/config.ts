@@ -190,15 +190,48 @@ export const defaultConfig = {
   castle: {
     minY: -10,
     maxY: 0,
-    /** Defenders keep this far from the side edges of the field. */
-    edge: 1,
-    maxDefenders: 20,
+    /** Spots keep this far from the side edges of the field. */
+    edge: 0.5,
+    /** Wall spots stand this far either side of their section's middle. */
+    wallOffset: 1.8,
+    wallY: -1,
+    courtyardY: -7,
+    courtyardX: [-12, -4, 4, 12],
+    /** Spots open at the start of a run: the four inner tower tops and the gate section's two. */
+    startOpen: [11, 12, 13, 14, 4, 5],
+    /** Opening another spot in the War Council: openCost, x openGrowth each time. */
+    openCost: 40,
+    openGrowth: 1.3,
+    /** Range multipliers by spot: tower tops reach further, the courtyard less far. */
+    towerRange: 1.25,
+    courtyardRange: 0.8,
     /** Each extra defender of the same kind costs this much more than the last. */
-    priceGrowth: 1.3,
+    priceGrowth: 1.25,
     /** Seconds a defender moved mid-battle spends packing up before it fires again. */
     packSeconds: 2,
-    /** The y of the wall's tower tops, where defenders stand to man a turret. */
+    /** Moving mid-battle also costs moveGold x wave / 5. */
+    moveGold: 10,
+    /** A placement click snaps to an open spot this close. */
+    snap: 3,
+    /** The y of the tower tops, where a defender mans a turret. */
     start: { x: -4, y: -1 },
+  },
+  /**
+   * Coverage: what each defender can reach decides where it is worth placing.
+   * Crossbows shoot straight up a lane (tower tops can angle 15 degrees), archers cover
+   * a 90 degree cone 60% up the field, catapults can't reach the first 8 tiles.
+   */
+  coverage: {
+    crossbowLane: 1.25,
+    crossbowTowerAngle: 0.262,
+    archerCone: 0.785,
+    archerReach: 0.6,
+    catapultMin: 13.3,
+    catapultMax: 50,
+    /** Soldiers hold their section plus this much of each neighbour. */
+    soldierSpill: 4,
+    /** A section counts as covered against boulders if a stopper covers this far out from it. */
+    sectionCheckY: 12,
   },
   /** footprint is the radius a defender occupies; two can't overlap. */
   crossbow: { cost: 100, interval: 2.5, boltSpeed: 45, damage: 40, pierce: 5, pierceFalloff: 0.2, knockback: 5, range: 75, footprint: 1.4 },
@@ -209,6 +242,8 @@ export const defaultConfig = {
   archers: {
     cost: 80, archers: 30, interval: 4, damage: 10, range: 66, flightTime: 1.7, spread: 2.6, hitRadius: 0.75,
     burnSeconds: 3, footprint: 2.6,
+    /** Each volley has this chance to shoot down each enemy boulder in its cover. */
+    shootDown: 0.3,
   },
   /** The castle's own catapult lobs a fresh Royal Ball up the field: the idle player's multiball. */
   catapult: { cost: 150, interval: 10, spread: 0.5, footprint: 1.8 },
@@ -216,7 +251,7 @@ export const defaultConfig = {
    * The soldiers are the last line of defence: companies spread along the foot of the wall
    * and rush any orc that gets close to it. The fallen return each wave.
    */
-  soldiers: { cost: 60, count: 40, maxCompanies: 3, hp: 30, dps: 6, reach: 1.1, y: 2.6, guard: 4.5, heavyGuard: 2.5, speed: 4 },
+  soldiers: { cost: 60, count: 40, footprint: 1.5, hp: 30, dps: 6, reach: 1.1, y: 2.6, guard: 4.5, heavyGuard: 2.5, speed: 4 },
   upgrades: {
     /** Each track's first level costs this share of the defender's price. */
     baseCostShare: 0.4,
@@ -263,6 +298,18 @@ export const defaultConfig = {
     /** Bosses: the siege tower on 10, the warlord on 20, and the warlord riding the tower on the last. */
     towerWaves: [10, 25],
     warlordWaves: [20, 25],
+    /** Catapults fire salvos that land together on different sections: size base, +1 every N waves, up to max. */
+    salvoFromWave: 4,
+    salvoBase: 2,
+    salvoEvery: 6,
+    salvoMax: 5,
+    salvoInterval: 14,
+    salvoFlight: 4,
+    salvoSpread: 0.5,
+    /** From this wave catapults aim at the section with the least boulder cover. */
+    seekGapsFromWave: 12,
+    /** Barrel orcs break away for the weakest section once this close to the wall. */
+    barrelSeekY: 25,
     /** Barrel orcs per block: base from fromWave, +1 every N waves, up to max. */
     barrelsFromWave: 5,
     barrelsEvery: 10,
