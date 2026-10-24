@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-    <title>Castle Breach</title>
+    <title>Hold the Wall!</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Grenze+Gotisch:wght@600;800&family=Nunito:wght@600;800&display=swap" rel="stylesheet" />
@@ -38,8 +38,26 @@
       .seg.warn .bar > i { background: linear-gradient(#ff7a62, #c43c28); }
       .seg.warn .bar { animation: warn 0.6s steps(2, jump-none) infinite; }
       @keyframes warn { 50% { border-color: #ff7a62; box-shadow: 0 0 10px #ff5a3c; } }
-      #shieldBar { background: linear-gradient(#a7e4ff, #4fb0e0); }
-      #shieldBar.locked { background: linear-gradient(#ff9c8c, #c45a4a); }
+      #heaveBar { background: linear-gradient(#ffe38a, #e8a920); }
+      #heaveBar.locked { background: linear-gradient(#a8a090, #6d6250); }
+      .play { display: flex; gap: 12px; align-items: baseline; margin-top: 6px; font-weight: 800; font-size: 14px; min-height: 18px; }
+      .combo { color: var(--gold); }
+      .combo.c10 { color: #ffa040; }
+      .combo.c25 { color: #ff7ad9; }
+      .combo.c40 { color: #fff6c8; text-shadow: 0 0 8px #ffd34a; }
+      #effects { margin-left: auto; letter-spacing: 0.02em; }
+      #flash { position: fixed; inset: 0; pointer-events: none; opacity: 0; background: radial-gradient(circle at 50% 70%, var(--flash, #fff6c8), transparent 75%); mix-blend-mode: screen; }
+      .floater { position: absolute; left: 0; top: 0; font-family: var(--display); font-weight: 800; font-size: 26px; color: var(--gold); text-shadow: 0 2px 0 var(--ink), 0 0 10px rgba(0, 0, 0, 0.5); white-space: nowrap; will-change: transform, opacity; }
+      .floater.c10 { font-size: 32px; color: #ffa040; }
+      .floater.c25 { font-size: 40px; color: #ff7ad9; }
+      .floater.c40 { font-size: 52px; color: #fff6c8; text-shadow: 0 2px 0 var(--ink), 0 0 18px #ffd34a; }
+      .floater.smash { font-size: 30px; color: #fff6c8; }
+      .floater.trick { font-size: 22px; color: #ff9ae8; }
+      .floater.good { font-family: var(--ui); font-size: 18px; color: #fff; }
+      .floater.bad { font-family: var(--ui); font-size: 18px; color: #ff8a7a; }
+      .spot { position: absolute; transform: translate(-50%, -100%); pointer-events: auto; font-size: 11px; padding: 1px 5px; opacity: 0.9; box-shadow: 0 2px 0 var(--ink); white-space: nowrap; }
+      .spot:disabled { opacity: 0.55; cursor: not-allowed; }
+      #council .row.locked { opacity: 0.55; }
       .purse { display: flex; gap: 16px; font-weight: 800; font-size: 18px; }
       .purse .g { color: var(--gold); }
       .purse > span { display: inline-flex; align-items: center; gap: 5px; }
@@ -72,7 +90,7 @@
       #boss { position: absolute; top: max(78px, calc(env(safe-area-inset-top, 0px) + 66px)); left: 50%; transform: translateX(-50%); width: min(420px, calc(100% - 32px)); text-align: center; }
       #boss .label { justify-content: center; font-family: var(--display); font-size: 20px; letter-spacing: 0.04em; text-transform: none; }
       #bossBar { background: linear-gradient(#ff7a62, #a8321e); }
-      #callEarly { position: absolute; bottom: max(110px, calc(env(safe-area-inset-bottom, 0px) + 96px)); left: 50%; transform: translateX(-50%); pointer-events: auto; max-width: calc(100% - 32px); }
+      #callEarly { position: absolute; bottom: max(150px, calc(env(safe-area-inset-bottom, 0px) + 136px)); left: 50%; transform: translateX(-50%); pointer-events: auto; max-width: calc(100% - 32px); }
       #toast { position: absolute; top: 24%; left: 50%; transform: translateX(-50%); font-family: var(--display); font-size: 28px; color: var(--gold); text-shadow: 0 2px 0 var(--ink), 0 0 12px rgba(0, 0, 0, 0.5); white-space: nowrap; }
       #council { position: absolute; top: max(76px, calc(env(safe-area-inset-top, 0px) + 64px)); right: max(16px, env(safe-area-inset-right, 0px)); bottom: max(16px, env(safe-area-inset-bottom, 0px)); width: min(400px, calc(100% - 32px)); overflow-y: auto; pointer-events: auto; background: var(--parchment); color: var(--ink); border: 3px solid var(--ink); border-radius: 6px; padding: 14px 16px 16px; box-shadow: 0 8px 0 rgba(0, 0, 0, 0.35); }
       #council header { display: flex; justify-content: space-between; align-items: baseline; }
@@ -126,6 +144,8 @@
     <div class="hud">
       <div class="markers" id="markers"></div>
       <div class="markers" id="wallBars"></div>
+      <div class="markers" id="floaters"></div>
+      <div class="markers" id="spotLabels"></div>
       <div class="top">
         <div class="panel wave"><span id="waveLabel">Wave 1</span><small id="phaseLabel">Get ready</small></div>
         <div class="topright">
@@ -135,7 +155,7 @@
         </div>
       </div>
       <div class="panel" id="boss" hidden>
-        <div class="label"><span>The Warlord</span></div>
+        <div class="label"><span id="bossName">The Warlord</span></div>
         <div class="bar"><i id="bossBar"></i></div>
       </div>
       <div id="toast" hidden></div>
@@ -149,9 +169,10 @@
       <div class="queen" id="queen" hidden><img data-queen alt="The Queen" /><p><b>The Queen</b><span id="queenText"></span></p></div>
       <div class="bottom" id="bottom">
         <div class="panel">
-          <div class="label"><span><img class="ico" data-icon="shield" alt="" />Shield</span><span id="shieldText">Ready</span></div>
-          <div class="bar"><i id="shieldBar"></i></div>
-          <div class="hint">Hold <kbd>Left click</kbd> or <kbd>Space</kbd> to raise the royal shield · <img class="ico" data-icon="slap" alt="" /><kbd>Right click</kbd> or <kbd>F</kbd> to slap</div>
+          <div class="label"><span><img class="ico" data-icon="shield" alt="" />Heave</span><span id="heaveText">Ready</span></div>
+          <div class="bar"><i id="heaveBar"></i></div>
+          <div class="play"><span id="balls">0 balls</span><span id="combo" class="combo"></span><span id="effects"></span></div>
+          <div class="hint">Mouse moves the shield · <kbd>Left click</kbd> or <kbd>Space</kbd> as a ball lands to heave · <img class="ico" data-icon="slap" alt="" /><kbd>Right click</kbd> or <kbd>F</kbd> to slap</div>
         </div>
         <div class="panel slap">
           <div class="label"><span><img class="ico" data-icon="vigor" alt="" />Vigor</span></div>
@@ -162,18 +183,18 @@
 
     <div class="overlay" id="intro">
       <div class="scroll">
-        <h1>Castle Breach</h1>
-        <p class="sub">The orcs are coming. They are not clever, but there are a great many of them.</p>
+        <h1>Hold the Wall!</h1>
+        <p class="sub">The orcs are coming. They are not clever, but there are a great many of them, and they march in neat blocks like bricks.</p>
         <ul>
-          <li>Orc catapults lob boulders at your wall every wave. Move the mouse to slide the great royal shield along the wall, and hold <kbd>Left click</kbd> or <kbd>Space</kbd> to raise it and bounce boulders and rocks back into the horde. It drains while raised.</li>
-          <li>Raise the shield right as a boulder arrives for a <b>perfect parry</b>: it flies back three times as hard.</li>
-          <li><kbd>Right click</kbd> or <kbd>F</kbd> brings down the hand of the castle on whatever is under the cursor. Each slap costs one Vigor.</li>
-          <li>Orcs that reach the wall climb it and hack at it. If any one stretch of wall falls, the castle is breached.</li>
-          <li>Kills earn gold. Spend it at the <b>War Council</b>, before the first wave and after every third. Place archers, crossbows and catapults <b>anywhere</b> on the castle, raise soldier companies to hold the foot of the wall, buy upgrades and repair walls. Drag defenders to move them between waves.</li>
-          <li>Call waves early (<kbd>Enter</kbd>) for bonus gold and Renown. Hold for 25 waves; warlords lead waves 10, 20 and 25.</li>
+          <li>Move the mouse to slide the great royal shield along the wall. Every boulder the orc catapults throw that you block bounces back as one of <b>your</b> balls. The gold Royal Ball is yours from the start: click to serve it.</li>
+          <li>Where a ball meets the shield sets its angle. The centre sends it straight, the sides send it wide, and the very tips make trick shots.</li>
+          <li><kbd>Left click</kbd> or <kbd>Space</kbd> right as a ball lands to <b>heave</b>: a power shot that smashes through a whole orc line.</li>
+          <li>Chain hits without touching the shield for a <b>combo</b> gold multiplier. Hits behind the lines pay double, the towers make bank shots and barrel orcs blow up their friends. Catch falling capsules, but not the red ones.</li>
+          <li>Every ball or boulder you miss hits the wall. If any one stretch of wall falls, the castle is breached.</li>
+          <li>At the <b>War Council</b> place defenders on the castle&rsquo;s fixed spots. Each one covers only part of the field, and the red hatching shows your blind spots. Plan well: a good plan matters more than quick hands.</li>
         </ul>
-        <button id="play" type="button">Defend the castle</button>
-        <p class="tag">Siege build · work in progress</p>
+        <button id="play" type="button">Hold the wall!</button>
+        <p class="tag">Breakout build · work in progress</p>
       </div>
     </div>
 
@@ -184,12 +205,14 @@
         <div class="stats">
           <div><b id="lostWaves">0</b>waves held</div>
           <div><b id="lostKills">0</b>orcs slain</div>
+          <div><b id="lostCombo">0</b>best combo</div>
           <div><b id="lostRenown">0</b>Renown earned</div>
         </div>
         <p class="sub" id="bank"></p>
         <button id="again" type="button">Try again</button>
       </div>
     </div>
+    <div id="flash"></div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

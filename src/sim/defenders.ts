@@ -40,6 +40,14 @@ export function castleSpots(cfg: Config): Spot[] {
 export const TRACKS = ['damage', 'rate', 'special'] as const;
 export type Track = (typeof TRACKS)[number];
 
+/** The upgrade tracks that do something for each kind (catapults only fire faster; soldiers have no rate of fire). */
+export const USEFUL_TRACKS: Record<DefenderKind, readonly Track[]> = {
+  crossbow: TRACKS,
+  archers: TRACKS,
+  catapult: ['rate'],
+  soldiers: ['damage', 'special'],
+};
+
 export const SPECIAL_NAMES: Record<DefenderKind, string> = {
   crossbow: 'Pierce',
   archers: 'Fire arrows',

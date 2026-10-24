@@ -1,4 +1,4 @@
-import { type DefenderKind, PLACED_KINDS, type PlacedKind, TRACKS } from './defenders';
+import { type DefenderKind, PLACED_KINDS, type PlacedKind, USEFUL_TRACKS } from './defenders';
 import { type Game, SHIELD_TRACKS, type ShieldTrack } from './game';
 import { Rng } from './rng';
 
@@ -32,9 +32,7 @@ function ownedKinds(game: Game): DefenderKind[] {
 function upgrades(game: Game): Purchase[] {
   const list: Purchase[] = [];
   for (const kind of ownedKinds(game)) {
-    for (const track of TRACKS) {
-      if (kind !== 'soldiers' || track !== 'rate') list.push({ cost: game.upgradeCost(kind, track), buy: () => game.upgrade(kind, track) });
-    }
+    for (const track of USEFUL_TRACKS[kind]) list.push({ cost: game.upgradeCost(kind, track), buy: () => game.upgrade(kind, track) });
   }
   for (const track of SHIELD_TRACKS) if (track !== 'plating') list.push({ cost: game.shieldCost(track), buy: () => game.upgradeShield(track) });
   return list;

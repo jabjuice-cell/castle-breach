@@ -17,21 +17,24 @@ from PIL import Image
 ART = Path(sys.argv[1] if len(sys.argv) > 1 else '/mnt/project-files/art')
 OUT = Path(__file__).resolve().parent.parent / 'src' / 'assets'
 
-# (source, destination, longest side in pixels)
+# (source, destination, longest side in pixels). Sizes are about twice the largest
+# on-screen size at 1440p, so sprites stay sharp on high-DPI screens; WebP keeps the build small.
 ITEMS = [
-    *[(f'sprites/{n}.png', f'sprites/{n}.png', 256) for n in [
+    *[(f'sprites/{n}.png', f'sprites/{n}.webp', 512) for n in [
         'enemy-grunt', 'enemy-chucker', 'enemy-rider', 'enemy-monk', 'defender-soldier', 'defender-archer']],
-    *[(f'sprites/{n}.png', f'sprites/{n}.png', 384) for n in [
+    *[(f'sprites/{n}.png', f'sprites/{n}.webp', 768) for n in [
         'enemy-ogre', 'enemy-warlord', 'enemy-catapult', 'defender-catapult']],
-    ('castle/tower-crossbow.png', 'castle/tower-crossbow.png', 384),
-    ('castle/keep.png', 'castle/keep.png', 512),
-    ('castle/town-tavern.png', 'castle/tavern.png', 384),
-    ('fx/fx-bolt.png', 'fx/bolt.png', 160),
-    ('characters/queen-neutral.png', 'characters/queen.png', 320),
-    ('castle/wall-damage-states.png', 'castle/wall-damage-states.png', 640),
-    *[(f'fx/fx-{n}.png', f'fx/{n}.png', 160) for n in [
-        'arrow', 'boulder', 'rock', 'stone', 'explosion', 'impact', 'shield-arc']],
-    *[(f'icons/icon-{n}.png', f'icons/{n}.png', 96) for n in [
+    ('castle/tower-crossbow.png', 'castle/tower-crossbow.webp', 768),
+    ('castle/keep.png', 'castle/keep.webp', 1024),
+    ('castle/town-tavern.png', 'castle/tavern.webp', 768),
+    ('fx/fx-bolt.png', 'fx/bolt.webp', 256),
+    ('fx/fx-royal-shield.png', 'fx/royal-shield.webp', 1024),
+    ('fx/fx-royal-shield-hit.png', 'fx/royal-shield-hit.webp', 1024),
+    ('characters/queen-neutral.png', 'characters/queen.webp', 512),
+    ('castle/wall-damage-states.png', 'castle/wall-damage-states.webp', 1024),
+    *[(f'fx/fx-{n}.png', f'fx/{n}.webp', 320) for n in [
+        'arrow', 'boulder', 'rock', 'stone', 'explosion', 'impact', 'shield-arc', 'fireball']],
+    *[(f'icons/icon-{n}.png', f'icons/{n}.png', 128) for n in [
         'gold', 'renown', 'shield', 'slap', 'vigor', 'call-wave']],
 ]
 
@@ -40,7 +43,7 @@ MAPS = [
     ('maps/forest-background-hd.png', 'maps/forest.jpg', 3072),
 ]
 # Props sheet: a 4 x 2 grid; we use the crater and the scorch mark.
-PROPS = [('maps/forest-props.png', 'maps/crater.png', 6), ('maps/forest-props.png', 'maps/scorch.png', 7)]
+PROPS = [('maps/forest-props.png', 'maps/crater.webp', 6), ('maps/forest-props.png', 'maps/scorch.webp', 7)]
 
 aspects = {}
 
@@ -55,6 +58,8 @@ def save(im: Image.Image, dest: str, side: int) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     if dest.endswith('.jpg'):
         im.convert('RGB').save(path, quality=85, optimize=True)
+    elif dest.endswith('.webp'):
+        im.save(path, quality=88, method=6)
     else:
         im.save(path, optimize=True)
     aspects[Path(dest).stem] = round(im.width / im.height, 4)
@@ -69,6 +74,6 @@ for src, dest, cell in PROPS:
     sheet = Image.open(ART / src).convert('RGBA')
     w, h = sheet.width // 4, sheet.height // 2
     x, y = (cell % 4) * w, (cell // 4) * h
-    save(sheet.crop((x, y, x + w, y + h)), dest, 192)
+    save(sheet.crop((x, y, x + w, y + h)), dest, 384)
 
 (OUT / 'aspects.json').write_text(json.dumps(aspects, indent=2) + '\n')

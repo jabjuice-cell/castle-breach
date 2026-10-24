@@ -70,4 +70,64 @@ export class Sounds {
     thump.start(now);
     thump.stop(now + 0.2);
   }
+
+  /** A short tone with a fast attack and an exponential tail. */
+  private tone(freq: number, start: number, length: number, gain: number, type: OscillatorType = 'sine') {
+    const ctx = this.ctx!;
+    const o = ctx.createOscillator();
+    o.type = type;
+    o.frequency.value = freq;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, start);
+    g.gain.exponentialRampToValueAtTime(gain, start + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001, start + length);
+    o.connect(g).connect(ctx.destination);
+    o.start(start);
+    o.stop(start + length + 0.05);
+  }
+
+  /** A rising chime for a combo milestone or a caught capsule: more notes for bigger combos. */
+  chime(level: number) {
+    const ctx = this.ctx;
+    if (!ctx || this.muted) return;
+    const now = ctx.currentTime;
+    const notes = [784, 988, 1175, 1568, 1976];
+    for (let i = 0; i < 2 + level; i++) this.tone(notes[i % notes.length], now + i * 0.07, 0.35, 0.12, 'triangle');
+  }
+
+  /** A deep boom for barrels and collapsing tower floors. */
+  boom() {
+    const ctx = this.ctx;
+    if (!ctx || this.muted) return;
+    const now = ctx.currentTime;
+    const o = ctx.createOscillator();
+    o.frequency.setValueAtTime(110, now);
+    o.frequency.exponentialRampToValueAtTime(30, now + 0.5);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.7, now);
+    g.gain.exponentialRampToValueAtTime(0.001, now + 0.6);
+    o.connect(g).connect(ctx.destination);
+    o.start(now);
+    o.stop(now + 0.65);
+    const len = Math.floor(ctx.sampleRate * 0.4);
+    const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < len; i++) data[i] = (Math.random() * 2 - 1) * (1 - i / len) ** 3;
+    const noise = ctx.createBufferSource();
+    noise.buffer = buf;
+    const low = ctx.createBiquadFilter();
+    low.type = 'lowpass';
+    low.frequency.value = 700;
+    const ng = ctx.createGain();
+    ng.gain.value = 0.5;
+    noise.connect(low).connect(ng).connect(ctx.destination);
+    noise.start(now);
+  }
+
+  /** A wooden thunk when a defender is set down. */
+  thunk() {
+    const ctx = this.ctx;
+    if (!ctx || this.muted) return;
+    this.tone(180, ctx.currentTime, 0.12, 0.3, 'square');
+  }
 }

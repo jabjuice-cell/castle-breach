@@ -12,11 +12,30 @@ function canvas(w: number, h: number): [HTMLCanvasElement, CanvasRenderingContex
   return [c, c.getContext('2d')!];
 }
 
-function texture(c: HTMLCanvasElement): THREE.CanvasTexture {
-  const t = new THREE.CanvasTexture(c);
+/** Every sprite texture, so the renderer can raise their anisotropy to what the GPU allows. */
+const sharp: THREE.Texture[] = [];
+let anisotropy = 4;
+
+/** Sets texture filtering quality for every sprite, now and later (the GPU's max keeps art sharp at a slant). */
+export function setAnisotropy(n: number) {
+  anisotropy = n;
+  for (const t of sharp) {
+    t.anisotropy = n;
+    t.needsUpdate = true;
+  }
+}
+
+function sharpen<T extends THREE.Texture>(t: T): T {
   t.colorSpace = THREE.SRGBColorSpace;
-  t.anisotropy = 4;
+  t.anisotropy = anisotropy;
+  t.generateMipmaps = true;
+  t.minFilter = THREE.LinearMipmapLinearFilter;
+  sharp.push(t);
   return t;
+}
+
+function texture(c: HTMLCanvasElement): THREE.CanvasTexture {
+  return sharpen(new THREE.CanvasTexture(c));
 }
 
 function outline(ctx: CanvasRenderingContext2D, fill: string) {
@@ -37,10 +56,7 @@ const loader = new THREE.TextureLoader();
 
 /** A finished sprite image, cropped to the unit (see tools/import-sprites.py). */
 export function imageSprite(url: string, aspect: number): SpriteArt {
-  const t = loader.load(url);
-  t.colorSpace = THREE.SRGBColorSpace;
-  t.anisotropy = 4;
-  return { texture: t, aspect };
+  return { texture: sharpen(loader.load(url)), aspect };
 }
 
 /** The giant open hand that comes down for a slap. */
@@ -178,6 +194,50 @@ export function blobTexture(): THREE.CanvasTexture {
   g.addColorStop(1, 'rgba(0,0,0,0)');
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, 64, 64);
+  return texture(c);
+}
+
+/** A soft round glow, white in the middle, for additive halos round balls and capsules. */
+export function glowTexture(): THREE.CanvasTexture {
+  const [c, ctx] = canvas(64, 64);
+  const g = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
+  g.addColorStop(0, 'rgba(255,255,255,1)');
+  g.addColorStop(0.25, 'rgba(255,255,255,0.55)');
+  g.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, 64, 64);
+  return texture(c);
+}
+
+/**
+ * A falling capsule: a glossy pill in its colour with an emoji on it. Placeholder
+ * until the capsule art (fx/capsule-<kind>.webp) arrives.
+ */
+export function capsuleTexture(color: string, emoji: string): THREE.CanvasTexture {
+  const w = 192;
+  const h = 96;
+  const [c, ctx] = canvas(w, h);
+  const r = h / 2 - 6;
+  ctx.beginPath();
+  ctx.moveTo(6 + r, 6);
+  ctx.lineTo(w - 6 - r, 6);
+  ctx.arc(w - 6 - r, h / 2, r, -Math.PI / 2, Math.PI / 2);
+  ctx.lineTo(6 + r, h - 6);
+  ctx.arc(6 + r, h / 2, r, Math.PI / 2, -Math.PI / 2);
+  ctx.closePath();
+  const g = ctx.createLinearGradient(0, 6, 0, h - 6);
+  g.addColorStop(0, '#ffffff');
+  g.addColorStop(0.25, color);
+  g.addColorStop(1, '#1d1a14');
+  outline(ctx, color);
+  ctx.globalAlpha = 0.55;
+  ctx.fillStyle = g;
+  ctx.fill();
+  ctx.globalAlpha = 1;
+  ctx.font = '58px "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(emoji, w / 2, h / 2 + 3);
   return texture(c);
 }
 
