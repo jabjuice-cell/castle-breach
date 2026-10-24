@@ -1,0 +1,24 @@
+{
+  "name": "castle-breach",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "test": "vitest run",
+    "sim": "tsx tools/sim.ts"
+  },
+  "dependencies": {
+    "three": "0.170.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@types/three": "0.170.0",
+    "tsx": "4.19.2",
+    "typescript": "5.7.2",
+    "vite": "6.0.7",
+    "vite-plugin-singlefile": "2.1.0",
+    "vitest": "2.1.8"
+  }
+}

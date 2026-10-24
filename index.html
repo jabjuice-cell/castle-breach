@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>Castle Breach</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Grenze+Gotisch:wght@600;800&family=Nunito:wght@600;800&display=swap" rel="stylesheet" />
+    <style>
+      /* One fixed look: a sunny battlefield with parchment-and-iron HUD panels over it. */
+      :root {
+        color-scheme: dark;
+        --parchment: #f3e6c4;
+        --ink: #2b2116;
+        --iron: rgba(32, 28, 24, 0.82);
+        --iron-edge: #6d5a3e;
+        --gold: #f2c14e;
+        --shield: #7fd4ff;
+        --danger: #e2533f;
+        --display: 'Grenze Gotisch', 'Palatino Linotype', Georgia, serif;
+        --ui: 'Nunito', 'Segoe UI', system-ui, sans-serif;
+      }
+      [hidden] { display: none !important; }
+      html, body { height: 100%; margin: 0; overflow: hidden; background: #9cc4d8; color: var(--parchment); font-family: var(--ui); }
+      #game { position: fixed; inset: 0; width: 100%; height: 100%; display: block; cursor: crosshair; touch-action: none; }
+      .hud { position: fixed; inset: 0; pointer-events: none; font-variant-numeric: tabular-nums; }
+      .panel { background: var(--iron); border: 2px solid var(--iron-edge); border-radius: 6px; padding: 8px 12px; box-shadow: 0 3px 0 rgba(0, 0, 0, 0.35); }
+      .top { position: absolute; top: max(12px, env(safe-area-inset-top, 0px)); left: max(16px, env(safe-area-inset-left, 0px)); right: max(16px, env(safe-area-inset-right, 0px)); display: flex; gap: 12px; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; }
+      .wave { font-family: var(--display); font-size: 30px; line-height: 1; letter-spacing: 0.02em; }
+      .wave small { display: block; font-family: var(--ui); font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; opacity: 0.8; margin-top: 4px; }
+      .label { font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; opacity: 0.85; display: flex; justify-content: space-between; }
+      .bar { height: 12px; background: rgba(0, 0, 0, 0.45); border-radius: 3px; overflow: hidden; margin-top: 5px; }
+      .bar > i { display: block; height: 100%; width: 100%; transform-origin: left; transition: transform 0.15s linear; }
+      .seg { position: absolute; width: 74px; transform: translate(-50%, -100%); }
+      .seg .bar { height: 8px; margin: 0; border: 2px solid rgba(20, 16, 12, 0.75); }
+      .seg .bar > i { background: linear-gradient(#e8dcb8, #b9ab84); }
+      .seg.warn .bar > i { background: linear-gradient(#ff7a62, #c43c28); }
+      .seg.warn .bar { animation: warn 0.6s steps(2, jump-none) infinite; }
+      @keyframes warn { 50% { border-color: #ff7a62; box-shadow: 0 0 10px #ff5a3c; } }
+      #shieldBar { background: linear-gradient(#a7e4ff, #4fb0e0); }
+      #shieldBar.locked { background: linear-gradient(#ff9c8c, #c45a4a); }
+      .purse { display: flex; gap: 16px; font-weight: 800; font-size: 18px; }
+      .purse .g { color: var(--gold); }
+      .bottom { position: absolute; bottom: max(14px, env(safe-area-inset-bottom, 0px)); left: 50%; transform: translateX(-50%); display: flex; gap: 12px; align-items: stretch; width: min(560px, calc(100% - 32px)); }
+      .bottom .panel { flex: 1; }
+      .slap { flex: 0 0 auto !important; }
+      .pips { display: grid; grid-template-columns: repeat(5, 12px); gap: 4px; margin-top: 6px; }
+      .pips i { height: 12px; border-radius: 2px; background: rgba(0, 0, 0, 0.45); overflow: hidden; position: relative; }
+      .pips i::after { content: ''; position: absolute; inset: 0; background: #f0c39a; transform: scaleY(var(--f, 1)); transform-origin: bottom; }
+      .hint { font-size: 12px; opacity: 0.85; margin-top: 6px; }
+      kbd { font-family: var(--ui); font-size: 11px; background: var(--parchment); color: var(--ink); border-radius: 3px; padding: 0 5px; }
+      #preview { position: absolute; top: 34%; left: 50%; transform: translateX(-50%); text-align: center; pointer-events: auto; max-width: calc(100% - 32px); }
+      #preview h2 { margin: 0; font-family: var(--display); font-size: 34px; font-weight: 800; line-height: 1.05; text-wrap: balance; }
+      #preview p { margin: 6px 0 10px; font-size: 15px; }
+      .markers { position: absolute; inset: 0; }
+      .marker { position: absolute; transform: translate(-50%, -100%); background: var(--danger); color: #fff; font-weight: 800; font-size: 13px; padding: 2px 7px; border-radius: 10px; white-space: nowrap; box-shadow: 0 2px 0 rgba(0, 0, 0, 0.35); }
+      .marker::after { content: ''; position: absolute; left: 50%; bottom: -6px; margin-left: -6px; border: 6px solid transparent; border-bottom: 0; border-top-color: var(--danger); }
+      .marker.slinger { background: #b8752e; }
+      .marker.slinger::after { border-top-color: #b8752e; }
+      button { font-family: var(--ui); font-weight: 800; font-size: 15px; color: var(--ink); background: var(--parchment); border: 2px solid var(--ink); border-radius: 5px; padding: 7px 16px; cursor: pointer; box-shadow: 0 3px 0 var(--ink); }
+      button:hover { background: #fff4d6; }
+      button:active { transform: translateY(2px); box-shadow: 0 1px 0 var(--ink); }
+      button:focus-visible { outline: 3px solid var(--gold); outline-offset: 2px; }
+      .overlay { position: fixed; inset: 0; display: grid; place-items: center; background: rgba(20, 16, 12, 0.55); pointer-events: auto; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+      .scroll { background: var(--parchment); color: var(--ink); max-width: 460px; border-radius: 6px; padding: 26px 28px; border: 3px solid var(--ink); box-shadow: 0 8px 0 rgba(0, 0, 0, 0.35); }
+      .scroll h1 { font-family: var(--display); font-weight: 800; font-size: 54px; margin: 0; line-height: 0.95; }
+      .scroll .sub { margin: 6px 0 16px; font-size: 15px; }
+      .scroll ul { margin: 0 0 18px; padding-left: 18px; display: grid; gap: 6px; font-size: 14px; line-height: 1.4; }
+      .scroll kbd { background: var(--ink); color: var(--parchment); }
+      .scroll .stats { display: flex; gap: 20px; margin: 10px 0 18px; font-size: 15px; }
+      .scroll .stats b { display: block; font-family: var(--display); font-size: 32px; }
+      .tag { font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; opacity: 0.7; margin-top: 14px; }
+      @media (max-width: 560px) { .wave { font-size: 24px; }  #preview h2 { font-size: 26px; } .hint { display: none; } }
+      @media (prefers-reduced-motion: reduce) { .bar > i { transition: none; } .seg.warn .bar { animation: none; } }
+    </style>
+  </head>
+  <body>
+    <canvas id="game"></canvas>
+    <div class="hud">
+      <div class="markers" id="markers"></div>
+      <div class="markers" id="wallBars"></div>
+      <div class="top">
+        <div class="panel wave"><span id="waveLabel">Wave 1</span><small id="phaseLabel">Get ready</small></div>
+        <div class="panel purse"><span class="g" id="gold">0 gold</span><span id="kills">0 slain</span></div>
+      </div>
+      <div class="panel" id="preview" hidden>
+        <h2 id="previewTitle">Wave 1 marches in 6</h2>
+        <p id="previewText">8 grunts</p>
+        <button id="startNow" type="button">Start now <kbd>Enter</kbd></button>
+      </div>
+      <div class="bottom">
+        <div class="panel">
+          <div class="label"><span>Shield</span><span id="shieldText">Ready</span></div>
+          <div class="bar"><i id="shieldBar"></i></div>
+          <div class="hint">Hold <kbd>Left click</kbd> or <kbd>Space</kbd> to raise · <kbd>Right click</kbd> or <kbd>F</kbd> to slap</div>
+        </div>
+        <div class="panel slap">
+          <div class="label"><span>Vigor</span></div>
+          <div class="pips" id="vigor"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="overlay" id="intro">
+      <div class="scroll">
+        <h1>Castle Breach</h1>
+        <p class="sub">The orcs are coming. They are not clever, but there are a great many of them.</p>
+        <ul>
+          <li>Your crossbow on the wall fires by itself at the closest orc.</li>
+          <li>Move the mouse to slide your shield along the wall. Hold <kbd>Left click</kbd> or <kbd>Space</kbd> to raise it and bounce chucker rocks back into the horde. It drains while raised.</li>
+          <li>Raise the shield right as a rock arrives for a <b>perfect parry</b>: it flies back three times as hard.</li>
+          <li><kbd>Right click</kbd> or <kbd>F</kbd> brings down the hand of the castle on whatever is under the cursor. Each slap costs one Vigor.</li>
+          <li>Orcs that reach the wall climb it and hack at it. If any one stretch of wall falls, the castle is breached. Hold for 10 waves.</li>
+        </ul>
+        <button id="play" type="button">Defend the castle</button>
+        <p class="tag">Combat slice · placeholder art</p>
+      </div>
+    </div>
+
+    <div class="overlay" id="lost" hidden>
+      <div class="scroll">
+        <h1 id="endTitle">Breached!</h1>
+        <p class="sub" id="lostText">The orcs broke through the wall.</p>
+        <div class="stats">
+          <div><b id="lostWaves">0</b>waves held</div>
+          <div><b id="lostKills">0</b>orcs slain</div>
+          <div><b id="lostParries">0</b>perfect parries</div>
+        </div>
+        <button id="again" type="button">Try again</button>
+      </div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
