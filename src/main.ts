@@ -1,5 +1,7 @@
 import { BattleScene } from './render/scene';
+import { type DefenderKind, SLOT_ACCEPTS, SPECIAL_NAMES, TRACKS, type Track } from './sim/defenders';
 import { Game, STEP } from './sim/game';
+import { ENEMY_KINDS, type EnemyKind } from './sim/waves';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -8,6 +10,11 @@ let game = new Game(Math.floor(Math.random() * 1e9));
 const view = new BattleScene(canvas, game);
 
 let running = false;
+
+// Dev aid: ?debug exposes the live game to the console and browser tests.
+if (new URLSearchParams(location.search).has('debug')) {
+  Object.defineProperty(window, 'game', { get: () => game });
+}
 const input = { x: 0, y: 30, mouseDown: false, spaceDown: false };
 
 function resize() {
@@ -43,7 +50,7 @@ window.addEventListener('keydown', (e) => {
     e.preventDefault();
   }
   if (e.code === 'KeyF' && running) game.slap(input.x, input.y);
-  if (e.code === 'Enter' && running) game.skipPreview();
+  if (e.code === 'Enter' && running && game.phase !== 'council') game.callEarly();
 });
 window.addEventListener('keyup', (e) => {
   if (e.code === 'Space') input.spaceDown = false;
@@ -57,7 +64,8 @@ $('play').addEventListener('click', () => {
   $('intro').hidden = true;
   running = true;
 });
-$('startNow').addEventListener('click', () => game.skipPreview());
+$('startNow').addEventListener('click', () => game.callEarly());
+$('callEarly').addEventListener('click', () => game.callEarly());
 $('again').addEventListener('click', () => {
   game = new Game(Math.floor(Math.random() * 1e9));
   view.setGame(game);
@@ -66,6 +74,35 @@ $('again').addEventListener('click', () => {
   running = true;
 });
 
+// ---- names -----------------------------------------------------------------
+
+const ENEMY_NAMES: Record<EnemyKind, [string, string]> = {
+  grunt: ['grunt', 'grunts'],
+  chucker: ['chucker', 'chuckers'],
+  rider: ['boar rider', 'boar riders'],
+  orcCatapult: ['orc catapult', 'orc catapults'],
+  ogre: ['ogre', 'ogres'],
+  warlord: ['WARLORD', 'WARLORDS'],
+};
+
+const DEFENDER_INFO: Record<DefenderKind, { name: string; blurb: string }> = {
+  crossbow: { name: 'Giant crossbow', blurb: 'Heavy bolt through a whole column. Slow.' },
+  archers: { name: 'Archers', blurb: 'Six bowmen. Arrows never miss, even riders.' },
+  catapult: { name: 'Catapult', blurb: 'Lobs a stone into the thickest crowd.' },
+  soldiers: { name: 'Soldier line', blurb: 'Eight soldiers hold the gate. The fallen return each wave.' },
+};
+
+const TRACK_NAMES: Record<Track, string> = { damage: 'Damage', rate: 'Rate of fire', special: '' };
+
+function count(n: number, kind: EnemyKind) {
+  return `${n} ${ENEMY_NAMES[kind][n === 1 ? 0 : 1]}`;
+}
+
+function planText() {
+  const t = game.plan.totals;
+  return ENEMY_KINDS.filter((k) => t[k] > 0).map((k) => count(t[k], k)).join(', ');
+}
+
 // ---- HUD -------------------------------------------------------------------
 
 const hud = {
@@ -73,6 +110,7 @@ const hud = {
   phase: $('phaseLabel'),
   gold: $('gold'),
   kills: $('kills'),
+  renown: $('renown'),
   shieldText: $('shieldText'),
   shieldBar: $('shieldBar'),
   vigor: $('vigor'),
@@ -80,16 +118,19 @@ const hud = {
   preview: $('preview'),
   previewTitle: $('previewTitle'),
   previewText: $('previewText'),
+  startNow: $('startNow'),
+  callEarly: $<HTMLButtonElement>('callEarly'),
+  boss: $('boss'),
+  bossBar: $('bossBar'),
   markers: $('markers'),
+  council: $('council'),
+  toast: $('toast'),
+  bottom: $('bottom'),
 };
-
-function plural(n: number, word: string) {
-  return `${n} ${word}${n === 1 ? '' : 's'}`;
-}
 
 let markerPlan = -1;
 function updateMarkers() {
-  const show = game.phase === 'preview';
+  const show = game.phase === 'preview' || game.phase === 'council';
   if (!show) {
     if (markerPlan !== -1) hud.markers.replaceChildren();
     markerPlan = -1;
@@ -102,7 +143,7 @@ function updateMarkers() {
       ...game.plan.groups.map((g) => {
         const el = document.createElement('div');
         el.className = `marker ${g.kind}`;
-        el.textContent = `${g.count}${g.kind === 'chucker' ? ' chucker' : ''}`;
+        el.textContent = g.kind === 'grunt' ? String(g.count) : count(g.count, g.kind);
         return el;
       }),
     );
@@ -115,12 +156,26 @@ function updateMarkers() {
   });
 }
 
-function updateHud() {
+let toastTimer = 0;
+function toast(text: string) {
+  hud.toast.textContent = text;
+  hud.toast.hidden = false;
+  toastTimer = 1.6;
+}
+
+function updateHud(dt: number) {
   const c = game.cfg;
-  hud.wave.textContent = `Wave ${Math.max(1, game.phase === 'preview' ? game.plan.number : game.wave)}`;
-  hud.phase.textContent = game.phase === 'preview' ? 'Incoming' : game.phase === 'battle' ? `${game.enemies.length} orcs on the field` : game.phase === 'won' ? 'Victory' : 'Breached';
-  hud.gold.textContent = `${game.gold} gold`;
+  const shownWave = game.phase === 'preview' || game.phase === 'council' ? game.plan.number : game.wave;
+  hud.wave.textContent = `Wave ${Math.max(1, shownWave)} of ${c.waves.finalWave}`;
+  hud.phase.textContent =
+    game.phase === 'council' ? 'War Council'
+    : game.phase === 'preview' ? 'Incoming'
+    : game.phase === 'battle' ? `${game.enemies.length} orcs on the field`
+    : game.phase === 'won' ? 'Victory'
+    : 'Breached';
+  hud.gold.textContent = `${Math.floor(game.gold)} gold`;
   hud.kills.textContent = `${game.kills} slain`;
+  hud.renown.textContent = `${game.renownEarned} Renown`;
 
   const s = game.shield;
   hud.shieldBar.style.transform = `scaleX(${s.energy / c.shield.maxEnergy})`;
@@ -142,23 +197,145 @@ function updateHud() {
   const previewing = game.phase === 'preview' && running;
   hud.preview.hidden = !previewing;
   if (previewing) {
-    const t = game.plan.totals;
-    hud.previewTitle.textContent = `Wave ${game.plan.number} marches in ${Math.ceil(game.phaseTimer)}`;
-    hud.previewText.textContent = [plural(t.grunt, 'grunt'), t.chucker ? plural(t.chucker, 'chucker') : ''].filter(Boolean).join(' and ');
+    hud.previewTitle.textContent = `${game.plan.boss ? 'Boss wave! ' : ''}Wave ${game.plan.number} marches in ${Math.ceil(game.phaseTimer)}`;
+    hud.previewText.textContent = planText();
+    hud.startNow.innerHTML = `Start now, +${game.earlyCallGold()} gold <kbd>Enter</kbd>`;
+  }
+
+  const tail = game.phase === 'battle' && game.canCallEarly();
+  hud.callEarly.hidden = !tail;
+  if (tail) hud.callEarly.innerHTML = `Sound the horn: call wave ${game.wave + 1} now, +${game.earlyCallGold()} gold <kbd>Enter</kbd>`;
+
+  const lord = game.enemies.find((e) => e.kind === 'warlord');
+  hud.boss.hidden = !lord;
+  if (lord) hud.bossBar.style.transform = `scaleX(${Math.max(0, lord.hp / lord.maxHp)})`;
+
+  if (toastTimer > 0) {
+    toastTimer -= dt;
+    if (toastTimer <= 0) hud.toast.hidden = true;
   }
   updateMarkers();
 }
 
+// ---- War Council ---------------------------------------------------------
+
+function trackEffect(kind: DefenderKind, track: Track): string {
+  const lv = game.levels[kind][track];
+  if (track !== 'special') return `+${Math.round((game.mult(kind, track) - 1) * 100)}%`;
+  if (kind === 'crossbow') return `pierces ${game.crossbowPierce()}`;
+  if (kind === 'archers') return lv ? `burns ${game.arrowBurn().toFixed(1)}/s` : 'not lit';
+  if (kind === 'catapult') return `radius ${game.catapultSplash().toFixed(1)}`;
+  return `${Math.round(game.soldierHp())} HP each`;
+}
+
+function councilHtml(): string {
+  const gold = Math.floor(game.gold);
+  const btn = (action: string, label: string, cost: number, disabled = false) =>
+    `<button type="button" data-action="${action}" ${disabled || cost > gold ? 'disabled' : ''}>${label} <span class="cost">${cost}g</span></button>`;
+
+  const slots = game.slots
+    .map((slot) => {
+      if (slot.defender) {
+        return `<div class="row"><div><b>${slot.name}</b><small>${DEFENDER_INFO[slot.defender].name}</small></div></div>`;
+      }
+      const buys = SLOT_ACCEPTS[slot.kind]
+        .map((k) => btn(`buy:${slot.id}:${k}`, DEFENDER_INFO[k].name, game.defenderCost(k)))
+        .join('');
+      return `<div class="row empty"><div><b>${slot.name}</b><small>Empty</small></div><div class="btns">${buys}</div></div>`;
+    })
+    .join('');
+
+  const owned = (Object.keys(DEFENDER_INFO) as DefenderKind[]).filter((k) => game.owns(k));
+  const upgrades = owned
+    .map((kind) => {
+      const tracks = TRACKS.filter((t) => kind !== 'soldiers' || t !== 'rate')
+        .map((t) => {
+          const name = t === 'special' ? SPECIAL_NAMES[kind] : TRACK_NAMES[t];
+          return `<div class="track"><span>${name} <i>Lv ${game.levels[kind][t]}</i><small>${trackEffect(kind, t)}</small></span>${btn(`up:${kind}:${t}`, 'Upgrade', game.upgradeCost(kind, t))}</div>`;
+        })
+        .join('');
+      return `<div class="def"><b>${DEFENDER_INFO[kind].name}</b><small>${DEFENDER_INFO[kind].blurb}</small>${tracks}</div>`;
+    })
+    .join('');
+
+  const sides = ['Far left', 'Left', 'Gate', 'Right', 'Far right'];
+  const walls = game.segmentHp
+    .map((hp, i) => {
+      const cost = game.repairCost(i);
+      const pct = Math.round((hp / game.cfg.wall.segmentHp) * 100);
+      return `<div class="row"><div><b>${sides[i] ?? `Wall ${i + 1}`}</b><small>${pct}%</small></div>${cost > 0 ? btn(`repair:${i}`, 'Repair', Math.min(cost, Math.max(1, gold)), gold < 1) : '<small>Sound</small>'}</div>`;
+    })
+    .join('');
+
+  const next = game.plan;
+  return `
+    <header><h2>War Council</h2><span class="purse g">${gold} gold</span></header>
+    <p class="next">${next.boss ? '<b class="danger">Boss wave.</b> ' : ''}Wave ${next.number} brings ${planText()}.</p>
+    <section><h3>Defenders</h3>${slots}</section>
+    ${upgrades ? `<section><h3>Upgrades</h3>${upgrades}</section>` : ''}
+    <section><h3>Walls</h3>${walls}</section>
+    <button type="button" class="go" data-action="go">To battle! <kbd>Enter</kbd></button>`;
+}
+
+let councilShown = false;
+function renderCouncil() {
+  hud.council.innerHTML = councilHtml();
+}
+
+function updateCouncil() {
+  const open = game.phase === 'council' && running;
+  if (open && !councilShown) renderCouncil();
+  hud.council.hidden = !open;
+  hud.bottom.hidden = open;
+  councilShown = open;
+}
+
+hud.council.addEventListener('click', (e) => {
+  const el = (e.target as HTMLElement).closest<HTMLButtonElement>('button[data-action]');
+  if (!el || el.disabled) return;
+  const [action, a, b] = el.dataset.action!.split(':');
+  if (action === 'buy') {
+    if (game.buy(Number(a), b as DefenderKind)) toast(`${DEFENDER_INFO[b as DefenderKind].name} ready`);
+  } else if (action === 'up') {
+    game.upgrade(a as DefenderKind, b as Track);
+  } else if (action === 'repair') {
+    game.repair(Number(a));
+  } else if (action === 'go') {
+    game.closeCouncil();
+  }
+  renderCouncil();
+});
+window.addEventListener('keydown', (e) => {
+  if (e.code === 'Enter' && running && game.phase === 'council') {
+    e.preventDefault();
+    game.closeCouncil();
+  }
+});
+
+// ---- end of run ----------------------------------------------------------
+
 const sides = ['far left', 'left', 'middle', 'right', 'far right'];
+
+function bankRenown(earned: number): number {
+  try {
+    const total = Number(localStorage.getItem('castle-breach:renown') ?? 0) + earned;
+    localStorage.setItem('castle-breach:renown', String(total));
+    return total;
+  } catch {
+    return earned;
+  }
+}
 
 function showEnd(won: boolean, segment = 0) {
   $('lostWaves').textContent = String(game.wavesSurvived);
   $('lostKills').textContent = String(game.kills);
-  $('lostParries').textContent = String(game.parries);
+  $('lostRenown').textContent = String(game.renownEarned);
   $('endTitle').textContent = won ? 'The castle holds!' : 'Breached!';
   $('lostText').textContent = won
     ? `All ${game.cfg.waves.finalWave} waves beaten back. The orcs are already planning something stupider.`
     : `The orcs broke through the ${sides[segment] ?? 'wall'} wall during wave ${game.wave}.`;
+  const total = bankRenown(game.renownEarned);
+  $('bank').textContent = `${total} Renown banked in total. The research tree to spend it on arrives in the next update.`;
   $('again').textContent = won ? 'Play again' : 'Try again';
   $('lost').hidden = false;
   running = false;
@@ -174,6 +351,7 @@ function buildHud() {
     }),
   );
   hud.vigor.replaceChildren(...Array.from({ length: game.cfg.slap.vigorMax }, () => document.createElement('i')));
+  councilShown = false;
 }
 buildHud();
 
@@ -198,12 +376,16 @@ function frame(now: number) {
     for (const ev of game.events) {
       if (ev.type === 'lost') showEnd(false, ev.segment);
       if (ev.type === 'won') showEnd(true);
+      if (ev.type === 'waveCleared') toast(`Wave ${ev.wave} beaten back, +${ev.gold} gold`);
+      if (ev.type === 'calledEarly') toast(`Early call! +${ev.gold} gold`);
+      if (ev.type === 'bossKilled') toast(`The Warlord falls! +${game.cfg.renown.bossKill} Renown`);
     }
     game.events.length = 0;
   }
   view.setCursor(input.x, input.y, game.vigor >= game.cfg.slap.vigorCost);
   view.render(dt, now / 1000);
-  updateHud();
+  updateHud(dt);
+  updateCouncil();
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);

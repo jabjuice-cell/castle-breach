@@ -1,6 +1,10 @@
 import * as THREE from 'three';
-import type { Enemy, Game, GameEvent } from '../sim/game';
-import { GroundCanvas, blobTexture, handTexture, orcTexture } from './textures';
+import type { DefenderKind, Slot } from '../sim/defenders';
+import type { Game, GameEvent } from '../sim/game';
+import { ENEMY_KINDS, type EnemyKind } from '../sim/waves';
+import {
+  GroundCanvas, type SpriteArt, blobTexture, handTexture, orcTexture, riderTexture, siegeTexture, soldierTexture,
+} from './textures';
 
 /**
  * Draws the sim in 2.5D: voxel castle and terrain under a tilted camera,
@@ -12,6 +16,14 @@ const VOXEL = 0.5;
 const MAX_ENEMIES = 4000;
 const MAX_PROJECTILES = 1500;
 const MAX_DEBRIS = 1500;
+
+/** Sprite height relative to the orc grunt, from the art guide. */
+const SIZE: Record<EnemyKind, number> = { grunt: 1, chucker: 1, rider: 1.4, orcCatapult: 2, ogre: 2.5, warlord: 3 };
+const KILL_COLOR: Record<EnemyKind, string> = {
+  grunt: '#6f9a3c', chucker: '#8a9a42', rider: '#6d4a32', orcCatapult: '#7a5530', ogre: '#8d9a6a', warlord: '#5d8a34',
+};
+/** Kinds that climb the wall before hacking at it (the rest smash it from the ground). */
+const CLIMBERS = new Set<EnemyKind>(['grunt', 'chucker', 'rider']);
 
 interface VoxelGroup {
   /** Instance indices, in the order they crumble away. */
@@ -35,6 +47,8 @@ interface Effect {
   t: number;
   duration: number;
   obj: THREE.Object3D;
+  /** Ring radius. */
+  size: number;
 }
 
 const tmpM = new THREE.Matrix4();
@@ -56,7 +70,8 @@ export class BattleScene {
   private voxelColor: THREE.Color[] = [];
   private segments: VoxelGroup[] = [];
 
-  private sprites: Record<Enemy['kind'], THREE.InstancedMesh>;
+  private sprites = {} as Record<EnemyKind, THREE.InstancedMesh>;
+  private soldierSprites: THREE.InstancedMesh;
   private shadows: THREE.InstancedMesh;
   private rocks: THREE.InstancedMesh;
   private bolts: THREE.InstancedMesh;
@@ -67,7 +82,8 @@ export class BattleScene {
 
   private shieldMesh: THREE.Mesh;
   private shieldBase: THREE.Mesh;
-  private crossbow: THREE.Group;
+  /** One model per slot, rebuilt when the slot's defender changes. */
+  private defenders: { kind: DefenderKind | null; obj: THREE.Group | null; marker: THREE.Mesh }[] = [];
   private cursor: THREE.Mesh;
   private shake = 0;
   private camBase = new THREE.Vector3(0, 40, 36);
@@ -107,18 +123,27 @@ export class BattleScene {
 
     this.buildCastle();
 
-    const spriteGeo = new THREE.PlaneGeometry(1.6, 2);
-    spriteGeo.translate(0, 1, 0);
-    const makeSprites = (kind: Enemy['kind']) => {
-      const mat = new THREE.MeshBasicMaterial({ map: orcTexture(kind), alphaTest: 0.5 });
-      const mesh = new THREE.InstancedMesh(spriteGeo, mat, MAX_ENEMIES);
-      mesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(MAX_ENEMIES * 3).fill(1), 3);
+    const makeSprites = (art: SpriteArt, size: number, max: number) => {
+      const geo = new THREE.PlaneGeometry(2 * size * art.aspect, 2 * size);
+      geo.translate(0, size, 0);
+      const mat = new THREE.MeshBasicMaterial({ map: art.texture, alphaTest: 0.5 });
+      const mesh = new THREE.InstancedMesh(geo, mat, max);
+      mesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(max * 3).fill(1), 3);
       mesh.frustumCulled = false;
       mesh.count = 0;
       this.scene.add(mesh);
       return mesh;
     };
-    this.sprites = { grunt: makeSprites('grunt'), chucker: makeSprites('chucker') };
+    const art: Record<EnemyKind, () => SpriteArt> = {
+      grunt: () => orcTexture('grunt'),
+      chucker: () => orcTexture('chucker'),
+      rider: riderTexture,
+      orcCatapult: siegeTexture,
+      ogre: () => orcTexture('ogre'),
+      warlord: () => orcTexture('warlord'),
+    };
+    for (const kind of ENEMY_KINDS) this.sprites[kind] = makeSprites(art[kind](), SIZE[kind], kind === 'grunt' ? MAX_ENEMIES : 600);
+    this.soldierSprites = makeSprites(soldierTexture(), 0.9, 64);
 
     const shadowGeo = new THREE.PlaneGeometry(1.3, 0.8);
     shadowGeo.rotateX(-Math.PI / 2);
@@ -168,8 +193,7 @@ export class BattleScene {
     this.shieldBase.position.set(0, 0.04, -sh.y);
     this.scene.add(this.shieldBase);
 
-    this.crossbow = this.buildCrossbow();
-    this.scene.add(this.crossbow);
+    this.buildSlots();
 
     this.cursor = new THREE.Mesh(
       new THREE.RingGeometry(game.cfg.slap.radius - 0.15, game.cfg.slap.radius, 48).rotateX(-Math.PI / 2),
@@ -192,6 +216,12 @@ export class BattleScene {
     this.debris = [];
     for (const fx of this.effects) this.scene.remove(fx.obj);
     this.effects = [];
+    for (const d of this.defenders) {
+      if (d.obj) this.scene.remove(d.obj);
+      this.scene.remove(d.marker);
+    }
+    this.defenders = [];
+    this.buildSlots();
   }
 
   resize(w: number, h: number) {
@@ -232,9 +262,24 @@ export class BattleScene {
           this.ground.stamp(ev.x, -ev.y, 3.2, 'rgba(70,50,25,0.45)');
           this.shake = Math.max(this.shake, 0.5);
           break;
-        case 'kill':
-          this.ground.stamp(ev.x, -ev.y, 0.9, 'rgba(60,70,20,0.5)');
-          this.burst(ev.x, 0.6, -ev.y, 4, ev.kind === 'grunt' ? '#6f9a3c' : '#8a9a42', 4);
+        case 'kill': {
+          const big = SIZE[ev.kind];
+          this.ground.stamp(ev.x, -ev.y, 0.9 * big, 'rgba(60,70,20,0.5)');
+          this.burst(ev.x, 0.6 * big, -ev.y, Math.round(4 * big), KILL_COLOR[ev.kind], 4 + big);
+          break;
+        }
+        case 'splash':
+          this.spawnEffect('ring', ev.x, -ev.y, 0.35, ev.radius);
+          this.ground.stamp(ev.x, -ev.y, ev.radius, 'rgba(70,55,35,0.35)');
+          this.burst(ev.x, 0.4, -ev.y, 6, '#9a8f78', 6);
+          this.shake = Math.max(this.shake, 0.2);
+          break;
+        case 'soldierDown':
+          this.burst(ev.x, 0.6, -ev.y, 4, '#2f56b0', 4);
+          break;
+        case 'bossKilled':
+          this.spawnEffect('parry', ev.x, -ev.y, 0.6);
+          this.shake = Math.max(this.shake, 1);
           break;
         case 'deflect':
           this.spawnEffect(ev.parry ? 'parry' : 'flash', ev.x, -ev.y, ev.parry ? 0.35 : 0.2);
@@ -259,6 +304,8 @@ export class BattleScene {
     const g = this.game;
     this.updateCastle();
     this.updateEnemies(time);
+    this.updateSoldiers(time);
+    this.updateDefenders(time);
     this.updateProjectiles();
     this.updateDebris(dt);
     this.updateEffects(dt);
@@ -381,79 +428,197 @@ export class BattleScene {
     g.segmentHp.forEach((hp, i) => this.crumble(this.segments[i], hp / g.cfg.wall.segmentHp));
   }
 
-  private buildCrossbow(): THREE.Group {
+  private buildSlots() {
+    for (const slot of this.game.slots) {
+      const marker = new THREE.Mesh(
+        new THREE.RingGeometry(0.9, 1.2, 32).rotateX(-Math.PI / 2),
+        new THREE.MeshBasicMaterial({ color: '#f2c14e', transparent: true, opacity: 0.8, depthWrite: false }),
+      );
+      const p = this.slotPosition(slot);
+      marker.position.set(p.x, p.y + 0.06, p.z);
+      marker.visible = false;
+      this.scene.add(marker);
+      this.defenders.push({ kind: null, obj: null, marker });
+    }
+  }
+
+  /** Where a slot's model stands in the world. */
+  private slotPosition(slot: Slot): THREE.Vector3 {
+    if (slot.kind === 'tower') return new THREE.Vector3(slot.x, 4.5, 0.9);
+    if (slot.kind === 'pit') return new THREE.Vector3(slot.x, 0, -slot.y);
+    return new THREE.Vector3(slot.x, 0, -slot.y);
+  }
+
+  private buildDefender(kind: DefenderKind): THREE.Group {
     const group = new THREE.Group();
     const wood = new THREE.MeshLambertMaterial({ color: '#6b4a2b' });
-    const stock = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.4, 2.4), wood);
-    stock.position.z = -0.6;
-    const arms = new THREE.Mesh(new THREE.BoxGeometry(3, 0.25, 0.3), wood);
-    arms.position.z = -1.6;
-    const base = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.7, 0.6, 8), new THREE.MeshLambertMaterial({ color: '#4d4a44' }));
-    base.position.y = -0.4;
-    group.add(stock, arms, base);
-    group.position.set(this.game.cfg.crossbow.x, 4.9, 0.9);
+    const iron = new THREE.MeshLambertMaterial({ color: '#4d4a44' });
+    const blue = new THREE.MeshLambertMaterial({ color: '#2f56b0' });
+    const gold = new THREE.MeshLambertMaterial({ color: '#e0b84a' });
+    const skin = new THREE.MeshLambertMaterial({ color: '#f0c39a' });
+    const box = (w: number, h: number, d: number, mat: THREE.Material, x = 0, y = 0, z = 0) => {
+      const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+      m.position.set(x, y, z);
+      group.add(m);
+      return m;
+    };
+    if (kind === 'crossbow') {
+      const aim = new THREE.Group();
+      aim.name = 'aim';
+      const stock = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.4, 2.4), wood);
+      stock.position.z = -0.6;
+      const arms = new THREE.Mesh(new THREE.BoxGeometry(3, 0.25, 0.3), wood);
+      arms.position.z = -1.6;
+      aim.add(stock, arms);
+      aim.position.y = 0.4;
+      group.add(aim);
+      const base = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.7, 0.6, 8), iron);
+      base.position.y = 0;
+      group.add(base);
+    } else if (kind === 'archers') {
+      // Three bowmen on a wooden platform; the squad is bigger than it looks.
+      box(2.6, 0.3, 1.6, wood, 0, 0, 0);
+      for (const ox of [-0.8, 0, 0.8]) {
+        box(0.45, 0.7, 0.35, blue, ox, 0.5, 0);
+        box(0.35, 0.35, 0.35, skin, ox, 1.05, 0);
+        box(0.4, 0.12, 0.4, gold, ox, 1.28, 0);
+        box(0.08, 0.9, 0.08, wood, ox + 0.28, 0.75, -0.2);
+      }
+    } else if (kind === 'catapult') {
+      box(2.4, 0.5, 3, wood, 0, 0.6, 0);
+      for (const [wx, wz] of [[-1.3, -1], [1.3, -1], [-1.3, 1], [1.3, 1]]) {
+        const wheel = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.55, 0.25, 10).rotateZ(Math.PI / 2), wood);
+        wheel.position.set(wx, 0.55, wz);
+        group.add(wheel);
+      }
+      const arm = new THREE.Group();
+      arm.name = 'arm';
+      arm.position.set(0, 1, 0.6);
+      const beam = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.3, 3.4), wood);
+      beam.position.z = -1.5;
+      const cup = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.4, 0.8), iron);
+      cup.position.set(0, 0.2, -3.1);
+      arm.add(beam, cup);
+      group.add(arm);
+    }
     return group;
+  }
+
+  private updateDefenders(time: number) {
+    const council = this.game.phase === 'council';
+    this.game.slots.forEach((slot, i) => {
+      const d = this.defenders[i];
+      if (!d) return;
+      d.marker.visible = council && !slot.defender;
+      (d.marker.material as THREE.MeshBasicMaterial).opacity = 0.55 + Math.sin(time * 4) * 0.3;
+      if (d.kind !== slot.defender) {
+        if (d.obj) this.scene.remove(d.obj);
+        d.obj = slot.defender && slot.defender !== 'soldiers' ? this.buildDefender(slot.defender) : null;
+        if (d.obj) {
+          d.obj.position.copy(this.slotPosition(slot));
+          this.scene.add(d.obj);
+        }
+        d.kind = slot.defender;
+      }
+      if (!d.obj) return;
+      const dx = slot.aimX - slot.x;
+      const dz = -slot.aimY - d.obj.position.z;
+      const yaw = Math.atan2(-dx, -dz);
+      if (slot.defender === 'crossbow') {
+        d.obj.getObjectByName('aim')!.rotation.y = yaw;
+      } else if (slot.defender === 'archers') {
+        d.obj.rotation.y = yaw * 0.5;
+      } else if (slot.defender === 'catapult') {
+        d.obj.rotation.y = yaw;
+        // The arm whips forward when it fires, then winches back down.
+        const interval = this.game.cfg.catapult.interval / this.game.mult('catapult', 'rate');
+        const since = interval - slot.timer;
+        const swing = since < 0.25 ? since / 0.25 : Math.max(0, 1 - (since - 0.25) / (interval * 0.6));
+        d.obj.getObjectByName('arm')!.rotation.x = 0.35 + swing * 1.2;
+      }
+    });
+  }
+
+  private updateSoldiers(time: number) {
+    const camQ = this.camera.quaternion;
+    let n = 0;
+    for (const s of this.game.soldiers) {
+      if (s.hp <= 0) continue;
+      const jab = Math.abs(Math.sin(time * 7 + s.x)) * 0.08;
+      tmpV.set(s.x, jab, -s.y);
+      this.soldierSprites.setMatrixAt(n, tmpM.compose(tmpV, camQ, tmpS.set(1, 1, 1)));
+      const hurt = s.hp < s.maxHp * 0.5 ? 0.7 : 1;
+      this.soldierSprites.setColorAt(n, tmpC.setRGB(1, hurt, hurt));
+      n++;
+    }
+    this.soldierSprites.count = n;
+    this.soldierSprites.instanceMatrix.needsUpdate = true;
+    if (this.soldierSprites.instanceColor) this.soldierSprites.instanceColor.needsUpdate = true;
   }
 
   // ---- units ---------------------------------------------------------------
 
   private updateEnemies(time: number) {
     const camQ = this.camera.quaternion;
-    const counts = { grunt: 0, chucker: 0 };
+    const counts = Object.fromEntries(ENEMY_KINDS.map((k) => [k, 0])) as Record<EnemyKind, number>;
     let shadowN = 0;
-    let target: Enemy | undefined;
     for (const e of this.game.enemies) {
-      if (!target || e.y < target.y) target = e;
       const mesh = this.sprites[e.kind];
       const i = counts[e.kind]++;
-      if (i >= MAX_ENEMIES) continue;
+      if (i >= mesh.instanceMatrix.count) continue;
+      const size = SIZE[e.kind];
       const moving = e.state === 'march';
-      const bob = moving ? Math.abs(Math.sin(time * 9 + e.phase * 20)) * 0.18 : 0;
-      // Orcs at the wall scramble up the stones, then hack away at the top.
+      const bob = moving ? Math.abs(Math.sin(time * (e.kind === 'rider' ? 14 : 9) + e.phase * 20)) * 0.18 * size : 0;
+      // Small orcs at the wall scramble up the stones, then hack away at the top; big ones pound it from below.
       const c = this.game.cfg[e.kind];
+      const climbs = CLIMBERS.has(e.kind);
       const climb =
-        e.state === 'climb' ? (1 - e.timer / c.climbSeconds) * 3 + Math.sin(time * 12 + e.phase * 9) * 0.1
-        : e.state === 'wall' ? 3 + Math.abs(Math.sin(time * 6 + e.phase * 9)) * 0.25
+        climbs && e.state === 'climb' ? (1 - e.timer / c.climbSeconds) * 3 + Math.sin(time * 12 + e.phase * 9) * 0.1
+        : climbs && e.state === 'wall' ? 3 + Math.abs(Math.sin(time * 6 + e.phase * 9)) * 0.25
         : 0;
+      const pound = !climbs && (e.state === 'wall' || e.state === 'fight') ? Math.abs(Math.sin(time * 5 + e.phase * 9)) * 0.3 : 0;
+      const brawl = e.state === 'fight' ? Math.abs(Math.sin(time * 10 + e.phase * 9)) * 0.15 : 0;
       const hurt = e.hp < e.maxHp ? 0.75 : 1;
-      tmpV.set(e.x, bob + climb, -e.y);
-      tmpS.set(e.kind === 'grunt' ? 1 : 0.9, 1, 1);
+      const burning = e.burnTime > 0;
+      tmpV.set(e.x, bob + climb + pound + brawl, -e.y);
+      tmpS.set(1, 1, 1);
       mesh.setMatrixAt(i, tmpM.compose(tmpV, camQ, tmpS));
-      mesh.setColorAt(i, tmpC.setRGB(1, hurt, hurt));
-      this.shadows.setMatrixAt(shadowN++, tmpM.makeTranslation(e.x, 0, -e.y + 0.1));
+      mesh.setColorAt(i, burning ? tmpC.setRGB(1, 0.6, 0.3) : tmpC.setRGB(1, hurt, hurt));
+      if (shadowN < MAX_ENEMIES + MAX_PROJECTILES) {
+        tmpS.set(size, 1, size);
+        this.shadows.setMatrixAt(shadowN++, tmpM.compose(tmpV.set(e.x, 0, -e.y + 0.1), tmpQ.identity(), tmpS));
+      }
     }
-    for (const kind of ['grunt', 'chucker'] as const) {
+    for (const kind of ENEMY_KINDS) {
       const mesh = this.sprites[kind];
-      mesh.count = Math.min(counts[kind], MAX_ENEMIES);
+      mesh.count = Math.min(counts[kind], mesh.instanceMatrix.count);
       mesh.instanceMatrix.needsUpdate = true;
       if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
     }
     this.shadows.count = shadowN;
     this.shadows.instanceMatrix.needsUpdate = true;
-
-    if (target) {
-      const dx = target.x - this.crossbow.position.x;
-      const dz = -target.y - this.crossbow.position.z;
-      this.crossbow.rotation.y = Math.atan2(-dx, -dz);
-    }
   }
 
   private updateProjectiles() {
     let r = 0;
     let b = 0;
     for (const p of this.game.projectiles) {
-      if (p.kind === 'rock') {
+      if (p.kind === 'rock' || p.kind === 'boulder' || p.kind === 'stone') {
         if (r >= MAX_PROJECTILES) continue;
-        // Hostile rocks fly in an arc; deflected ones skim back low and fast.
+        // Thrown things fly in an arc; deflected ones skim back low and fast.
         const t = Math.min(1, p.travelled / p.flight);
-        const h = p.friendly ? 1 : 1.2 + 4 * (p.flight * 0.12) * t * (1 - t);
-        this.rocks.setMatrixAt(r, tmpM.makeTranslation(p.x, h, -p.y));
-        this.rocks.setColorAt(r, tmpC.set(p.friendly ? '#9fe0ff' : '#8a857a'));
+        const arc = p.kind === 'stone' ? 0.25 : 0.12;
+        const h = p.friendly && p.kind !== 'stone' ? 1 : 1.2 + 4 * (p.flight * arc) * t * (1 - t);
+        const sc = p.kind === 'rock' ? 1 : 2;
+        this.rocks.setMatrixAt(r, tmpM.compose(tmpV.set(p.x, h, -p.y), tmpQ.identity(), tmpS.set(sc, sc, sc)));
+        this.rocks.setColorAt(r, tmpC.set(p.kind === 'stone' ? '#a49a86' : p.friendly ? '#9fe0ff' : '#8a857a'));
         r++;
       } else {
         if (b >= MAX_PROJECTILES) continue;
+        const arrow = p.kind === 'arrow';
         tmpQ.setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.atan2(-p.vx, p.vy));
-        this.bolts.setMatrixAt(b++, tmpM.compose(tmpV.set(p.x, 1.6, -p.y), tmpQ, tmpS.set(1, 1, 1)));
+        const h = arrow ? 1.5 + Math.sin(Math.min(1, p.travelled / 30) * Math.PI) * 2 : 1.6;
+        this.bolts.setMatrixAt(b++, tmpM.compose(tmpV.set(p.x, h, -p.y), tmpQ, arrow ? tmpS.set(0.6, 0.6, 0.5) : tmpS.set(1, 1, 1)));
       }
     }
     this.rocks.count = r;
@@ -505,7 +670,7 @@ export class BattleScene {
     if (this.debrisMesh.instanceColor) this.debrisMesh.instanceColor.needsUpdate = true;
   }
 
-  private spawnEffect(kind: Effect['kind'], x: number, z: number, duration: number) {
+  private spawnEffect(kind: Effect['kind'], x: number, z: number, duration: number, size = this.game.cfg.slap.radius) {
     let obj: THREE.Object3D;
     if (kind === 'hand') {
       const geo = new THREE.PlaneGeometry(5, 5).rotateX(-Math.PI / 2);
@@ -523,7 +688,7 @@ export class BattleScene {
     }
     obj.position.set(x, kind === 'hand' ? 8 : 0.1, z);
     this.scene.add(obj);
-    this.effects.push({ kind, x, z, t: 0, duration, obj });
+    this.effects.push({ kind, x, z, t: 0, duration, obj, size });
   }
 
   private updateEffects(dt: number) {
@@ -537,7 +702,7 @@ export class BattleScene {
         const down = Math.min(1, u * 4);
         fx.obj.position.y = 8 * (1 - down) + 0.2 + Math.max(0, u - 0.6) * 12;
       } else if (fx.kind === 'ring') {
-        const r = 0.5 + u * this.game.cfg.slap.radius * 1.1;
+        const r = 0.5 + u * fx.size * 1.1;
         fx.obj.scale.set(r, 1, r);
         mat.opacity = 1 - u;
       } else {
