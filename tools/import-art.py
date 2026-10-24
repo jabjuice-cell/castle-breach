@@ -24,6 +24,10 @@ ITEMS = [
     *[(f'sprites/{n}.png', f'sprites/{n}.png', 384) for n in [
         'enemy-ogre', 'enemy-warlord', 'enemy-catapult', 'defender-catapult']],
     ('castle/tower-crossbow.png', 'castle/tower-crossbow.png', 384),
+    ('castle/keep.png', 'castle/keep.png', 512),
+    ('castle/town-tavern.png', 'castle/tavern.png', 384),
+    ('fx/fx-bolt.png', 'fx/bolt.png', 160),
+    ('characters/queen-neutral.png', 'characters/queen.png', 320),
     ('castle/wall-damage-states.png', 'castle/wall-damage-states.png', 640),
     *[(f'fx/fx-{n}.png', f'fx/{n}.png', 160) for n in [
         'arrow', 'boulder', 'rock', 'stone', 'explosion', 'impact', 'shield-arc']],
@@ -32,7 +36,9 @@ ITEMS = [
 ]
 
 # Background maps are opaque, so they go in as JPEG at a size that keeps the voxel detail.
-MAPS = [('maps/forest-background.png', 'maps/forest.jpg'), ('maps/forest-background-worn.png', 'maps/forest-worn.jpg')]
+MAPS = [
+    ('maps/forest-background-hd.png', 'maps/forest.jpg', 3072),
+]
 # Props sheet: a 4 x 2 grid; we use the crater and the scorch mark.
 PROPS = [('maps/forest-props.png', 'maps/crater.png', 6), ('maps/forest-props.png', 'maps/scorch.png', 7)]
 
@@ -57,8 +63,8 @@ def save(im: Image.Image, dest: str, side: int) -> None:
 
 for src, dest, side in ITEMS:
     save(Image.open(ART / src).convert('RGBA'), dest, side)
-for src, dest in MAPS:
-    save(Image.open(ART / src).convert('RGB'), dest, 1400)
+for src, dest, side in MAPS:
+    save(Image.open(ART / src).convert('RGB'), dest, side)
 for src, dest, cell in PROPS:
     sheet = Image.open(ART / src).convert('RGBA')
     w, h = sheet.width // 4, sheet.height // 2

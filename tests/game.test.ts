@@ -195,10 +195,10 @@ describe('run loop', () => {
     expect(game.gold).toBe(850);
     // Each extra one of a kind costs more.
     expect(game.defenderCost('catapult')).toBe(Math.round(150 * game.cfg.castle.priceGrowth));
-    expect(game.place('archers', -15, -12)).toBe(true);
+    expect(game.place('archers', -15, -10)).toBe(true);
     expect(game.defenders).toHaveLength(3);
     game.closeCouncil();
-    expect(game.place('archers', 15, -12)).toBe(false); // the shop is shut
+    expect(game.place('archers', 15, -10)).toBe(false); // the shop is shut
   });
 
   it('moves defenders for free between waves and with a pack-up mid-battle', () => {

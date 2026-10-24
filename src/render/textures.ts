@@ -64,6 +64,112 @@ export function handTexture(): THREE.CanvasTexture {
   return texture(c);
 }
 
+/**
+ * Placeholder for the royal shield until its painted art arrives: a broad steel
+ * shield with a rivetted rim, the royal blue field and a gold tower crest.
+ */
+export function metalShieldTexture(): SpriteArt {
+  const w = 1024;
+  const h = 440;
+  const [c, ctx] = canvas(w, h);
+  ctx.lineJoin = 'round';
+  // A wide shield: flat top with rounded shoulders, sides curving to a blunt point.
+  const shape = (inset: number) => {
+    const l = 20 + inset;
+    const r = w - 20 - inset;
+    const t = 20 + inset;
+    const b = h - 16 - inset;
+    ctx.beginPath();
+    ctx.moveTo(l + 40, t);
+    ctx.lineTo(r - 40, t);
+    ctx.quadraticCurveTo(r, t, r, t + 40);
+    ctx.lineTo(r, t + (b - t) * 0.45);
+    ctx.quadraticCurveTo(r - 30, b - 40, w / 2, b);
+    ctx.quadraticCurveTo(l + 30, b - 40, l, t + (b - t) * 0.45);
+    ctx.lineTo(l, t + 40);
+    ctx.quadraticCurveTo(l, t, l + 40, t);
+    ctx.closePath();
+  };
+  // Steel rim.
+  shape(0);
+  const steel = ctx.createLinearGradient(0, 0, w * 0.3, h);
+  steel.addColorStop(0, '#e9eef2');
+  steel.addColorStop(0.5, '#a9b3bc');
+  steel.addColorStop(1, '#6d7780');
+  ctx.fillStyle = steel;
+  ctx.fill();
+  ctx.lineWidth = 12;
+  ctx.strokeStyle = '#2a2018';
+  ctx.stroke();
+  // Royal blue field, lit from the top left.
+  shape(34);
+  const blue = ctx.createLinearGradient(0, 0, w * 0.4, h);
+  blue.addColorStop(0, '#3d68d0');
+  blue.addColorStop(1, '#1f3c8f');
+  ctx.fillStyle = blue;
+  ctx.fill();
+  ctx.lineWidth = 8;
+  ctx.strokeStyle = '#e8b730';
+  ctx.stroke();
+  // Rivets round the rim.
+  for (let i = 0; i < 18; i++) {
+    const x = 70 + (i / 17) * (w - 140);
+    for (const y of [36]) {
+      ctx.beginPath();
+      ctx.arc(x, y, 7, 0, Math.PI * 2);
+      outline(ctx, '#dfe5ea');
+    }
+  }
+  // Gold tower crest with a crossbow bolt across it.
+  ctx.save();
+  ctx.translate(w / 2, h * 0.47);
+  ctx.lineWidth = 7;
+  ctx.strokeStyle = '#2a2018';
+  ctx.beginPath();
+  ctx.moveTo(-170, 70);
+  ctx.lineTo(170, -70);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(170, -70);
+  ctx.lineTo(140, -48);
+  ctx.lineTo(150, -78);
+  ctx.closePath();
+  outline(ctx, '#e8b730');
+  ctx.beginPath();
+  ctx.moveTo(-60, 90);
+  ctx.lineTo(-60, -40);
+  for (let i = 0; i < 5; i++) {
+    const x = -60 + i * 30;
+    ctx.lineTo(x, -80);
+    ctx.lineTo(x + 15, -80);
+    ctx.lineTo(x + 15, -55);
+    ctx.lineTo(x + 30, -55);
+  }
+  ctx.lineTo(90, -80);
+  ctx.lineTo(90, -40);
+  ctx.lineTo(60, -40);
+  ctx.lineTo(60, 90);
+  ctx.closePath();
+  const gold = ctx.createLinearGradient(-60, -80, 60, 90);
+  gold.addColorStop(0, '#ffe07a');
+  gold.addColorStop(1, '#c9921c');
+  outline(ctx, '#e8b730');
+  ctx.fillStyle = gold;
+  ctx.fill();
+  ctx.beginPath();
+  ctx.roundRect(-16, 40, 32, 50, [16, 16, 0, 0]);
+  outline(ctx, '#2a2018');
+  ctx.restore();
+  // A bright glint on the steel.
+  ctx.globalAlpha = 0.5;
+  ctx.fillStyle = '#ffffff';
+  ctx.beginPath();
+  ctx.ellipse(170, 70, 90, 16, -0.3, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.globalAlpha = 1;
+  return { texture: texture(c), aspect: w / h };
+}
+
 /** Soft dark disc used for blob shadows and scorch marks. */
 export function blobTexture(): THREE.CanvasTexture {
   const [c, ctx] = canvas(64, 64);
@@ -76,29 +182,32 @@ export function blobTexture(): THREE.CanvasTexture {
 }
 
 /**
- * The battlefield floor. It is a live canvas, so slaps and deaths can stamp
- * marks into it and the field looks worn as the run goes on.
+ * The battlefield floor's colour. It is a live canvas, so slaps, deaths and
+ * craters can stamp marks into it and the field looks worn as the run goes on.
+ * Uploads to the GPU are throttled, since a big canvas is costly to send.
  */
 export class GroundCanvas {
   readonly texture: THREE.CanvasTexture;
   private ctx: CanvasRenderingContext2D;
   private c: HTMLCanvasElement;
   private base = new Image();
-  private worn = new Image();
+  private dirty = false;
+  private lastUpload = 0;
+  private rnd = 1;
 
-  /** The base map is painted over the whole field; the worn map is blended in as the run goes on. */
+  /** width is the canvas resolution across the field; height follows the world's shape. */
   constructor(
     readonly worldW: number,
     readonly worldH: number,
     private readonly worldMinZ: number,
     baseUrl: string,
-    wornUrl: string,
+    width: number,
   ) {
-    [this.c, this.ctx] = canvas(1024, Math.round((1024 * worldH) / worldW));
+    [this.c, this.ctx] = canvas(width, Math.round((width * worldH) / worldW));
     this.texture = texture(this.c);
+    this.texture.anisotropy = 8;
     this.base.onload = () => this.reset();
     this.base.src = baseUrl;
-    this.worn.src = wornUrl;
     this.reset();
   }
 
@@ -107,16 +216,30 @@ export class GroundCanvas {
     ctx.fillStyle = '#7fb046';
     ctx.fillRect(0, 0, c.width, c.height);
     if (this.base.complete && this.base.naturalWidth) ctx.drawImage(this.base, 0, 0, c.width, c.height);
+    this.rnd = 1;
     this.texture.needsUpdate = true;
   }
 
-  /** Blends a little more of the trampled, cratered map in (call once per wave). */
-  wear(amount: number) {
-    if (!this.worn.complete || !this.worn.naturalWidth) return;
-    this.ctx.globalAlpha = amount;
-    this.ctx.drawImage(this.worn, 0, 0, this.c.width, this.c.height);
-    this.ctx.globalAlpha = 1;
+  /** Sends pending marks to the GPU, at most every `every` seconds. Call once a frame. */
+  flush(time: number, every: number) {
+    if (!this.dirty || time - this.lastUpload < every) return;
     this.texture.needsUpdate = true;
+    this.dirty = false;
+    this.lastUpload = time;
+  }
+
+  private random() {
+    this.rnd = (this.rnd * 16807) % 2147483647;
+    return this.rnd / 2147483647;
+  }
+
+  /** Tramples the field a little more: dirt patches where the orcs march (call once per wave). */
+  wear(fieldHalfWidth: number, fieldMinZ: number, fieldMaxZ: number) {
+    for (let i = 0; i < 40; i++) {
+      const x = (this.random() * 2 - 1) * fieldHalfWidth * 0.9;
+      const z = fieldMinZ + this.random() * (fieldMaxZ - fieldMinZ);
+      this.stamp(x, z, 1.5 + this.random() * 3.5, `rgba(${110 + this.random() * 30 | 0},${80 + this.random() * 20 | 0},45,0.12)`);
+    }
   }
 
   private toCanvas(x: number, z: number, radius: number) {
@@ -139,7 +262,7 @@ export class GroundCanvas {
     ctx.beginPath();
     ctx.arc(px, py, pr, 0, Math.PI * 2);
     ctx.fill();
-    this.texture.needsUpdate = true;
+    this.dirty = true;
   }
 
   /** Stamps a decal image (a crater or scorch mark) centred at a world position. */
@@ -151,8 +274,36 @@ export class GroundCanvas {
     ctx.globalAlpha = alpha;
     ctx.drawImage(img, px - pr, py - h / 2, pr * 2, h);
     ctx.globalAlpha = 1;
-    this.texture.needsUpdate = true;
+    this.dirty = true;
   }
+}
+
+/**
+ * A tiling grass-and-grit texture multiplied over the map, so the ground stays
+ * crisp up close even where the painted map is stretched.
+ */
+export function detailTexture(): THREE.CanvasTexture {
+  const size = 256;
+  const [c, ctx] = canvas(size, size);
+  ctx.fillStyle = 'rgb(128,128,128)';
+  ctx.fillRect(0, 0, size, size);
+  let s = 7;
+  const rnd = () => ((s = (s * 16807) % 2147483647) / 2147483647);
+  for (let i = 0; i < 2600; i++) {
+    const x = rnd() * size;
+    const y = rnd() * size;
+    const v = 100 + rnd() * 56;
+    ctx.fillStyle = `rgb(${v},${v},${v})`;
+    // Short blades and specks; drawn three times so the tile wraps without seams.
+    for (const [ox, oy] of [[0, 0], [-size, 0], [0, -size]]) {
+      if (rnd() < 0.5) ctx.fillRect(x + ox, y + oy, 1, 2 + rnd() * 3);
+      else ctx.fillRect(x + ox, y + oy, 2, 2);
+    }
+  }
+  const t = new THREE.CanvasTexture(c);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.anisotropy = 8;
+  return t;
 }
 
 /** Loads an image for canvas drawing (decals). */

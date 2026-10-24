@@ -5,8 +5,11 @@ import renownUrl from './assets/icons/renown.png';
 import shieldUrl from './assets/icons/shield.png';
 import slapUrl from './assets/icons/slap.png';
 import vigorUrl from './assets/icons/vigor.png';
-import { BattleScene } from './render/scene';
-import { type DefenderKind, SLOT_ACCEPTS, SPECIAL_NAMES, TRACKS, type Track } from './sim/defenders';
+import queenUrl from './assets/characters/queen.png';
+import { queenAdvice } from './queen';
+import { BattleScene, QUALITIES, type Quality } from './render/scene';
+import { Sounds } from './render/sound';
+import { type DefenderKind, PLACED_KINDS, type PlacedKind, SPECIAL_NAMES, TRACKS, type Track } from './sim/defenders';
 import { Game, STEP } from './sim/game';
 import { ENEMY_KINDS, type EnemyKind } from './sim/waves';
 
@@ -16,10 +19,54 @@ const ICONS: Record<string, string> = { gold: goldUrl, renown: renownUrl, shield
 const icon = (name: string) => `<img class="ico" src="${ICONS[name]}" alt="" />`;
 document.querySelectorAll<HTMLImageElement>('img[data-icon]').forEach((img) => (img.src = ICONS[img.dataset.icon!]));
 document.documentElement.style.setProperty('--wall-states', `url(${wallStatesUrl})`);
+document.querySelectorAll<HTMLImageElement>('img[data-queen]').forEach((img) => (img.src = queenUrl));
+
+/** Per-viewer settings kept in the browser; the game works the same without them. */
+function loadSetting(key: string): string | null {
+  try {
+    return localStorage.getItem(`castle-breach:${key}`);
+  } catch {
+    return null;
+  }
+}
+function saveSetting(key: string, value: string) {
+  try {
+    localStorage.setItem(`castle-breach:${key}`, value);
+  } catch {
+    // Private windows can refuse storage; the setting just won't stick.
+  }
+}
+
+const QUALITY_NAMES: Record<Quality, string> = { low: 'Low', medium: 'Medium', high: 'High' };
+let quality: Quality = QUALITIES.includes(loadSetting('quality') as Quality) ? (loadSetting('quality') as Quality) : 'medium';
 
 const canvas = $<HTMLCanvasElement>('game');
 let game = new Game(Math.floor(Math.random() * 1e9));
-const view = new BattleScene(canvas, game);
+const view = new BattleScene(canvas, game, quality);
+
+const sounds = new Sounds();
+sounds.muted = loadSetting('muted') === '1';
+function showSound() {
+  $('sound').textContent = sounds.muted ? 'Sound: Off' : 'Sound: On';
+}
+$('sound').addEventListener('click', () => {
+  sounds.muted = !sounds.muted;
+  sounds.unlock();
+  saveSetting('muted', sounds.muted ? '1' : '0');
+  showSound();
+});
+showSound();
+
+function showQuality() {
+  $('quality').textContent = `Detail: ${QUALITY_NAMES[quality]}`;
+}
+$('quality').addEventListener('click', () => {
+  quality = QUALITIES[(QUALITIES.indexOf(quality) + 1) % QUALITIES.length];
+  saveSetting('quality', quality);
+  view.setQuality(quality);
+  showQuality();
+});
+showQuality();
 
 let running = false;
 
@@ -28,6 +75,12 @@ if (new URLSearchParams(location.search).has('debug')) {
   Object.defineProperty(window, 'game', { get: () => game });
 }
 const input = { x: 0, y: 30, mouseDown: false, spaceDown: false };
+/** The defender being placed after a purchase, or the one being dragged to a new spot. */
+let placing: PlacedKind | null = null;
+let dragging: number | null = null;
+
+/** Defenders can be picked up and moved between waves (the War Council and the preview). */
+const canArrange = () => running && (game.phase === 'council' || game.phase === 'preview');
 
 function resize() {
   view.resize(window.innerWidth, window.innerHeight);
@@ -49,12 +102,45 @@ function pointerToSim(e: PointerEvent | MouseEvent) {
 canvas.addEventListener('pointermove', pointerToSim);
 canvas.addEventListener('pointerdown', (e) => {
   pointerToSim(e);
-  if (e.button === 0) input.mouseDown = true;
-  if (e.button === 2 && running) game.slap(input.x, input.y);
+  if (e.button === 2) {
+    if (placing) cancelPlacing();
+    else if (running) game.slap(input.x, input.y);
+    return;
+  }
+  if (e.button !== 0) return;
+  if (placing) {
+    const kind = placing;
+    if (game.place(kind, input.x, input.y)) {
+      placing = null;
+      toast(`${DEFENDER_INFO[kind].name} in position`);
+      renderCouncil();
+    } else {
+      toast(game.canPlace(kind, input.x, input.y) ? 'Not enough gold' : "Can't put it there");
+    }
+    return;
+  }
+  if (canArrange()) {
+    const d = game.defenderAt(input.x, input.y);
+    if (d) {
+      dragging = d.id;
+      return;
+    }
+  }
+  input.mouseDown = true;
 });
 window.addEventListener('pointerup', (e) => {
-  if (e.button === 0) input.mouseDown = false;
+  if (e.button !== 0) return;
+  input.mouseDown = false;
+  if (dragging !== null) {
+    if (!game.move(dragging, input.x, input.y)) toast("Can't put it there");
+    dragging = null;
+  }
 });
+
+function cancelPlacing() {
+  placing = null;
+  renderCouncil();
+}
 canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 window.addEventListener('keydown', (e) => {
   if (e.code === 'Space') {
@@ -62,6 +148,7 @@ window.addEventListener('keydown', (e) => {
     e.preventDefault();
   }
   if (e.code === 'KeyF' && running) game.slap(input.x, input.y);
+  if (e.code === 'Escape' && placing) cancelPlacing();
   if (e.code === 'Enter' && running && game.phase !== 'council') game.callEarly();
 });
 window.addEventListener('keyup', (e) => {
@@ -73,6 +160,7 @@ window.addEventListener('blur', () => {
 });
 
 $('play').addEventListener('click', () => {
+  sounds.unlock();
   $('intro').hidden = true;
   running = true;
 });
@@ -80,6 +168,8 @@ $('startNow').addEventListener('click', () => game.callEarly());
 $('callEarly').addEventListener('click', () => game.callEarly());
 $('again').addEventListener('click', () => {
   game = new Game(Math.floor(Math.random() * 1e9));
+  placing = null;
+  dragging = null;
   view.setGame(game);
   buildHud();
   $('lost').hidden = true;
@@ -98,10 +188,10 @@ const ENEMY_NAMES: Record<EnemyKind, [string, string]> = {
 };
 
 const DEFENDER_INFO: Record<DefenderKind, { name: string; blurb: string }> = {
-  crossbow: { name: 'Giant crossbow', blurb: 'Heavy bolt through a whole column. Slow.' },
-  archers: { name: 'Archers', blurb: 'Six bowmen. Arrows never miss, even riders.' },
-  catapult: { name: 'Catapult', blurb: 'Lobs a stone into the thickest crowd.' },
-  soldiers: { name: 'Soldier line', blurb: 'Eight soldiers hold the gate. The fallen return each wave.' },
+  crossbow: { name: 'Giant crossbow', blurb: 'Hunts catapults, ogres and warlords first. Bolts pierce a column.' },
+  archers: { name: 'Archers', blurb: 'Thirty bowmen loose volleys high into the sky onto the thickest crowd.' },
+  catapult: { name: 'Catapult', blurb: 'Lobs a stone into the thickest crowd and blows a crater.' },
+  soldiers: { name: 'Soldier company', blurb: 'Forty soldiers along the foot of the wall: the last line of defence. The fallen return each wave.' },
 };
 
 const TRACK_NAMES: Record<Track, string> = { damage: 'Damage', rate: 'Rate of fire', special: '' };
@@ -138,6 +228,8 @@ const hud = {
   council: $('council'),
   toast: $('toast'),
   bottom: $('bottom'),
+  queen: $('queen'),
+  queenText: $('queenText'),
 };
 
 let markerPlan = -1;
@@ -208,9 +300,11 @@ function updateHud(dt: number) {
 
   const previewing = game.phase === 'preview' && running;
   hud.preview.hidden = !previewing;
+  hud.queen.hidden = !previewing;
   if (previewing) {
     hud.previewTitle.textContent = `${game.plan.boss ? 'Boss wave! ' : ''}Wave ${game.plan.number} marches in ${Math.ceil(game.phaseTimer)}`;
     hud.previewText.textContent = planText();
+    hud.queenText.textContent = queenAdvice(game);
     hud.startNow.innerHTML = `${icon('call')}Start now, +${game.earlyCallGold()} gold <kbd>Enter</kbd>`;
   }
 
@@ -245,17 +339,17 @@ function councilHtml(): string {
   const btn = (action: string, label: string, cost: number, disabled = false) =>
     `<button type="button" data-action="${action}" ${disabled || cost > gold ? 'disabled' : ''}>${label} <span class="cost">${cost}g</span></button>`;
 
-  const slots = game.slots
-    .map((slot) => {
-      if (slot.defender) {
-        return `<div class="row"><div><b>${slot.name}</b><small>${DEFENDER_INFO[slot.defender].name}</small></div></div>`;
-      }
-      const buys = SLOT_ACCEPTS[slot.kind]
-        .map((k) => btn(`buy:${slot.id}:${k}`, DEFENDER_INFO[k].name, game.defenderCost(k)))
-        .join('');
-      return `<div class="row empty"><div><b>${slot.name}</b><small>Empty</small></div><div class="btns">${buys}</div></div>`;
-    })
-    .join('');
+  const full = game.defenders.length >= game.cfg.castle.maxDefenders;
+  const recruits = PLACED_KINDS.map((k) => {
+    const n = game.count(k);
+    const label = placing === k ? 'Click the castle…' : n ? 'Place another' : 'Place';
+    return `<div class="row${placing === k ? ' placing' : ''}"><div><b>${DEFENDER_INFO[k].name}</b><small>${n ? `${n} placed · ` : ''}${DEFENDER_INFO[k].blurb}</small></div>${btn(`place:${k}`, label, game.defenderCost(k), full)}</div>`;
+  }).join('');
+  const companies = game.companies;
+  const maxCompanies = game.cfg.soldiers.maxCompanies;
+  const soldiers = `<div class="row"><div><b>${DEFENDER_INFO.soldiers.name}</b><small>${companies} of ${maxCompanies} raised · ${DEFENDER_INFO.soldiers.blurb}</small></div>${
+    companies < maxCompanies ? btn('soldiers', 'Raise', game.defenderCost('soldiers')) : '<small>Full</small>'}</div>`;
+  const slots = `${recruits}${soldiers}<p class="tip">${placing ? 'Click anywhere on the wall, the towers or the courtyard. Right click or Esc to cancel.' : 'Drag your defenders on the castle to move them, here or while the next wave lines up.'}</p>`;
 
   const owned = (Object.keys(DEFENDER_INFO) as DefenderKind[]).filter((k) => game.owns(k));
   const upgrades = owned
@@ -284,6 +378,7 @@ function councilHtml(): string {
   const next = game.plan;
   return `
     <header><h2>War Council</h2><span class="purse g">${icon('gold')}${gold} gold</span></header>
+    <div class="queen"><img src="${queenUrl}" alt="The Queen" /><p><b>The Queen</b>${queenAdvice(game)}</p></div>
     <p class="next">${next.boss ? '<b class="danger">Boss wave.</b> ' : ''}Wave ${next.number} brings ${planText()}.</p>
     <section><h3>Defenders</h3>${slots}</section>
     ${upgrades ? `<section><h3>Upgrades</h3>${upgrades}</section>` : ''}
@@ -308,13 +403,16 @@ hud.council.addEventListener('click', (e) => {
   const el = (e.target as HTMLElement).closest<HTMLButtonElement>('button[data-action]');
   if (!el || el.disabled) return;
   const [action, a, b] = el.dataset.action!.split(':');
-  if (action === 'buy') {
-    if (game.buy(Number(a), b as DefenderKind)) toast(`${DEFENDER_INFO[b as DefenderKind].name} ready`);
+  if (action === 'place') {
+    placing = placing === a ? null : (a as PlacedKind);
+  } else if (action === 'soldiers') {
+    if (game.buySoldiers()) toast('Soldiers to the wall!');
   } else if (action === 'up') {
     game.upgrade(a as DefenderKind, b as Track);
   } else if (action === 'repair') {
     game.repair(Number(a));
   } else if (action === 'go') {
+    placing = null;
     game.closeCouncil();
   }
   renderCouncil();
@@ -322,6 +420,7 @@ hud.council.addEventListener('click', (e) => {
 window.addEventListener('keydown', (e) => {
   if (e.code === 'Enter' && running && game.phase === 'council') {
     e.preventDefault();
+    placing = null;
     game.closeCouncil();
   }
 });
@@ -369,6 +468,24 @@ function buildHud() {
 }
 buildHud();
 
+/** The ring under the mouse while placing or dragging a defender, or over one that can be picked up. */
+function updateGhost() {
+  if (!canArrange() && dragging !== null) dragging = null;
+  if (placing) {
+    view.setGhost(input.x, input.y, game.cfg[placing].footprint, game.canPlace(placing, input.x, input.y));
+    return;
+  }
+  const dragged = dragging !== null ? game.defenders.find((d) => d.id === dragging) : undefined;
+  if (dragged) {
+    view.setGhost(input.x, input.y, game.cfg[dragged.kind].footprint, game.canPlace(dragged.kind, input.x, input.y, dragged.id));
+    return;
+  }
+  const hover = canArrange() ? game.defenderAt(input.x, input.y) : undefined;
+  if (hover) view.setGhost(hover.x, hover.y, game.cfg[hover.kind].footprint, true);
+  else view.hideGhost();
+  canvas.style.cursor = hover ? 'grab' : '';
+}
+
 // ---- loop ------------------------------------------------------------------
 
 let last = performance.now();
@@ -377,7 +494,7 @@ function frame(now: number) {
   const dt = Math.min(0.1, (now - last) / 1000);
   last = now;
   if (running) {
-    game.setShield(input.x, input.mouseDown || input.spaceDown);
+    game.setShield(input.x, (input.mouseDown && dragging === null) || input.spaceDown);
     acc += dt;
     let steps = 0;
     while (acc >= STEP && steps < 6) {
@@ -390,13 +507,15 @@ function frame(now: number) {
     for (const ev of game.events) {
       if (ev.type === 'lost') showEnd(false, ev.segment);
       if (ev.type === 'won') showEnd(true);
+      if (ev.type === 'deflect') sounds.clang(ev.parry);
       if (ev.type === 'waveCleared') toast(`Wave ${ev.wave} beaten back, +${ev.gold} gold`);
       if (ev.type === 'calledEarly') toast(`Early call! +${ev.gold} gold`);
       if (ev.type === 'bossKilled') toast(`The Warlord falls! +${game.cfg.renown.bossKill} Renown`);
     }
     game.events.length = 0;
   }
-  view.setCursor(input.x, input.y, game.vigor >= game.cfg.slap.vigorCost);
+  updateGhost();
+  view.setCursor(input.x, input.y, game.vigor >= game.cfg.slap.vigorCost, game.phase !== 'council' && !placing && dragging === null);
   view.render(dt, now / 1000);
   updateHud(dt);
   updateCouncil();

@@ -310,7 +310,7 @@ export class Game {
    * The first free spot for a kind, scanning the given rows outward from the gate.
    * Bots use it; the player picks spots with the mouse.
    */
-  freeSpot(kind: PlacedKind, rows: number[] = [-1, -5, -9, -13]): { x: number; y: number } | null {
+  freeSpot(kind: PlacedKind, rows: number[] = [-1, -4, -7, -10]): { x: number; y: number } | null {
     const hw = this.cfg.field.halfWidth - this.cfg.castle.edge;
     for (const y of rows) {
       for (let i = 0; i <= hw * 2; i++) {

@@ -45,7 +45,7 @@ export const defaultConfig = {
    * on the wall, the towers or in the courtyard behind (y from minY up to the wall's front face).
    */
   castle: {
-    minY: -14,
+    minY: -10,
     maxY: 0,
     /** Defenders keep this far from the side edges of the field. */
     edge: 1,
@@ -72,7 +72,7 @@ export const defaultConfig = {
    * The soldiers are the last line of defence: companies spread along the foot of the wall
    * and rush any orc that gets close to it. The fallen return each wave.
    */
-  soldiers: { cost: 60, count: 40, maxCompanies: 3, hp: 16, dps: 1.6, reach: 1.1, y: 2.2, guard: 4.5, heavyGuard: 2.5, speed: 4 },
+  soldiers: { cost: 60, count: 40, maxCompanies: 3, hp: 16, dps: 1.6, reach: 1.1, y: 2.6, guard: 4.5, heavyGuard: 2.5, speed: 4 },
   upgrades: {
     /** Each track's first level costs this share of the defender's price. */
     baseCostShare: 0.4,
