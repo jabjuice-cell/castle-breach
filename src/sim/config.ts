@@ -14,44 +14,65 @@ export const defaultConfig = {
 
   // ---- enemies --------------------------------------------------------------
   // mass divides knockback; climbSeconds 0 means it smashes the wall without climbing.
-  grunt: { hp: 10, speed: 2.2, radius: 0.5, mass: 1, wallDps: 1, meleeDps: 2, climbSeconds: 3, gold: 1, threat: 1 },
+  // Grunts and riders come in big crowds: each is a fraction of a grunt-equivalent (threat),
+  // with HP, gold and damage cut to match, so a wave has far more of them on screen.
+  grunt: { hp: 2.5, speed: 2.2, radius: 0.45, mass: 1, wallDps: 0.25, meleeDps: 0.5, climbSeconds: 3, gold: 0.25, threat: 0.25 },
   /** Grunt variant that stops up the field and lobs rocks at the battlements. */
   chucker: {
     hp: 10, speed: 2.2, radius: 0.5, mass: 1, wallDps: 1, meleeDps: 2, climbSeconds: 3, gold: 2, threat: 2,
     standMinY: 22, standMaxY: 30, throwInterval: 3,
   },
   /** Fast and zig-zags, so straight crossbow bolts tend to miss. */
-  rider: { hp: 8, speed: 4.8, radius: 0.6, mass: 1.2, wallDps: 2, meleeDps: 3, climbSeconds: 2, gold: 2, threat: 2, zigSpeed: 4, zigRate: 1.6 },
-  /** Parks 70% up the field and lobs boulders at the wall. */
+  rider: { hp: 4, speed: 4.8, radius: 0.55, mass: 1.2, wallDps: 1, meleeDps: 1.5, climbSeconds: 2, gold: 1, threat: 1, zigSpeed: 4, zigRate: 1.6 },
+  /** Parks far up the field and lobs boulders at the wall. They come every wave, so the shield stays busy. */
   orcCatapult: {
-    hp: 60, speed: 1.1, radius: 1, mass: 6, wallDps: 5, meleeDps: 5, climbSeconds: 0, gold: 15, threat: 15,
-    standMinY: 46, standMaxY: 52, throwInterval: 6,
+    hp: 40, speed: 1.1, radius: 1, mass: 6, wallDps: 5, meleeDps: 5, climbSeconds: 0, gold: 10, threat: 15,
+    standMinY: 44, standMaxY: 54, throwInterval: 4.5,
   },
   ogre: { hp: 150, speed: 1.3, radius: 1.2, mass: 4, wallDps: 10, meleeDps: 30, climbSeconds: 0, gold: 12, threat: 12 },
   /** Boss on waves 10, 20 and the last. Speeds up orcs around it. */
   warlord: {
-    hp: 2000, speed: 0.9, radius: 1.6, mass: 10, wallDps: 40, meleeDps: 60, climbSeconds: 0, gold: 100, threat: 0,
+    hp: 2000, speed: 0.9, radius: 1.6, mass: 10, wallDps: 25, meleeDps: 60, climbSeconds: 0, gold: 100, threat: 0,
     auraRadius: 7, auraSpeed: 1.3,
   },
 
   rock: { speed: 12, wallDamage: 5, radius: 0.4, deflectDamage: 10 },
-  boulder: { speed: 14, wallDamage: 25, radius: 0.7, deflectDamage: 30 },
+  boulder: { speed: 14, wallDamage: 10, radius: 0.7, deflectDamage: 30 },
 
   // ---- defenders --------------------------------------------------------------
-  /** Fixed places defenders can stand. Towers are on the wall joints, pits in the courtyard. */
-  slots: {
-    towers: [-12, -4, 4, 12],
-    pits: [-15, 15],
-    pitY: -4,
-    /** The soldier line holds in front of the gate (the middle segment). */
-    lineY: 7,
-    /** Tower index that starts with a free crossbow. */
-    startingCrossbow: 1,
+  /**
+   * Archers, crossbows and catapults can be placed anywhere on the castle grounds:
+   * on the wall, the towers or in the courtyard behind (y from minY up to the wall's front face).
+   */
+  castle: {
+    minY: -14,
+    maxY: 0,
+    /** Defenders keep this far from the side edges of the field. */
+    edge: 1,
+    maxDefenders: 20,
+    /** Each extra defender of the same kind costs this much more than the last. */
+    priceGrowth: 1.3,
+    /** Seconds a defender moved mid-battle spends packing up before it fires again. */
+    packSeconds: 2,
+    /** Where the free crossbow starts: on the wall, left of the gate. */
+    start: { x: -4, y: -1 },
   },
-  crossbow: { cost: 100, interval: 2.5, boltSpeed: 45, damage: 40, pierce: 5, pierceFalloff: 0.2, knockback: 5, range: 75 },
-  archers: { cost: 80, archers: 6, interval: 1, damage: 3, arrowSpeed: 32, range: 42, burnSeconds: 3 },
-  catapult: { cost: 150, interval: 5, damage: 30, splash: 3.3, range: 66, flightTime: 1.6, knockback: 6 },
-  soldiers: { cost: 60, count: 8, hp: 40, dps: 4, reach: 1.3, spacing: 1.1 },
+  /** footprint is the radius a defender occupies; two can't overlap. */
+  crossbow: { cost: 100, interval: 2.5, boltSpeed: 45, damage: 40, pierce: 5, pierceFalloff: 0.2, knockback: 5, range: 75, footprint: 1.4 },
+  /**
+   * A squad of archers looses a volley together at the thickest crowd in range.
+   * Arrows arc high and rain down around the target; each one hits whoever it lands on.
+   */
+  archers: {
+    cost: 80, archers: 30, interval: 4, damage: 2.4, range: 66, flightTime: 1.7, spread: 2.6, hitRadius: 0.75,
+    burnSeconds: 3, footprint: 2.6,
+  },
+  catapult: { cost: 150, interval: 5, damage: 30, splash: 3.3, range: 66, flightTime: 1.6, knockback: 6, footprint: 1.8 },
+  /**
+   * The soldiers are the last line of defence: companies spread along the foot of the wall
+   * and rush any orc that gets close to it. The fallen return each wave.
+   */
+  soldiers: { cost: 60, count: 40, maxCompanies: 3, hp: 16, dps: 1.6, reach: 1.1, y: 2.2, guard: 4.5, heavyGuard: 2.5, speed: 4 },
   upgrades: {
     /** Each track's first level costs this share of the defender's price. */
     baseCostShare: 0.4,
@@ -63,8 +84,9 @@ export const defaultConfig = {
   },
 
   // ---- player skills ----------------------------------------------------------
+  /** A massive royal shield, wide enough to catch a battery's worth of boulders. */
   shield: {
-    y: 4, halfWidth: 3.5, maxEnergy: 100, drainPerSec: 20, regenPerSec: 10,
+    y: 4, halfWidth: 5.5, maxEnergy: 100, drainPerSec: 16, regenPerSec: 12,
     /** Once empty, the shield can't be raised again until energy reaches this. */
     recoverAt: 30,
     /** Raising the shield this soon before a rock lands is a perfect parry. */
@@ -89,12 +111,13 @@ export const defaultConfig = {
     spawnBase: 8,
     spawnPerWave: 1,
     spawnMax: 30,
-    chuckersFromWave: 3,
-    chuckerShare: 0.2,
+    chuckersFromWave: 2,
+    chuckerShare: 0.12,
     ridersFromWave: 6,
     riderShare: 0.15,
-    orcCatapultsFromWave: 8,
-    orcCatapultShare: 0.08,
+    /** Orc catapults come every wave on top of the budget: base + perWave * (n - 1). */
+    orcCatapultsBase: 2,
+    orcCatapultsPerWave: 0.3,
     ogresFromWave: 12,
     ogreShare: 0.12,
     bossWaves: [10, 20, 25],

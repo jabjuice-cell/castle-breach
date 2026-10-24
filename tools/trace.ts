@@ -15,7 +15,7 @@ for (let i = 0; i < 60 * 60 * 60 && !game.over; i++) {
   for (const ev of game.events) {
     if (ev.type === 'waveStart') waveStart = game.time;
     if (ev.type === 'waveCleared' || ev.type === 'lost') {
-      console.log(`w${game.wave} ${ev.type} t=${(game.time - waveStart).toFixed(0)}s minWall=${minHp.toFixed(0)} gold=${game.gold.toFixed(0)} peak=${maxEnemies} defs=${game.slots.map((s) => s.defender?.[0] ?? '-').join('')} lv=${Object.entries(game.levels).map(([k, v]) => `${k} ${Object.values(v).join('/')}`).join(', ')}`);
+      console.log(`w${game.wave} ${ev.type} t=${(game.time - waveStart).toFixed(0)}s minWall=${minHp.toFixed(0)} gold=${game.gold.toFixed(0)} peak=${maxEnemies} defs=${game.defenders.map((d) => d.kind[0]).join('')}+${game.companies}s lv=${Object.entries(game.levels).map(([k, v]) => `${k} ${Object.values(v).join('/')}`).join(', ')}`);
       minHp = 1e9; maxEnemies = 0;
     }
   }

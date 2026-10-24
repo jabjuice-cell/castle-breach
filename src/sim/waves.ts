@@ -26,10 +26,10 @@ export function waveBudget(n: number, cfg: Config): number {
 
 /** Battalion sizes per kind. */
 const BATTALION: Record<EnemyKind, [number, number]> = {
-  grunt: [6, 12],
+  grunt: [18, 36],
   chucker: [1, 3],
-  rider: [3, 6],
-  orcCatapult: [1, 1],
+  rider: [6, 12],
+  orcCatapult: [1, 2],
   ogre: [1, 2],
   warlord: [1, 1],
 };
@@ -48,7 +48,6 @@ export function planWave(n: number, seed: number, cfg: Config): WavePlan {
   const shares: [EnemyKind, number, number][] = [
     ['chucker', w.chuckersFromWave, w.chuckerShare],
     ['rider', w.ridersFromWave, w.riderShare],
-    ['orcCatapult', w.orcCatapultsFromWave, w.orcCatapultShare],
     ['ogre', w.ogresFromWave, w.ogreShare],
   ];
   let left = budget;
@@ -61,6 +60,8 @@ export function planWave(n: number, seed: number, cfg: Config): WavePlan {
     left -= affordable * threat;
   }
   totals.grunt = Math.max(0, Math.round(left / cfg.grunt.threat));
+  // Catapults come every wave on top of the budget, so there is always something to deflect.
+  totals.orcCatapult = Math.floor(w.orcCatapultsBase + w.orcCatapultsPerWave * (n - 1));
   const boss = w.bossWaves.includes(n);
   if (boss) totals.warlord = 1;
 

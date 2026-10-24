@@ -1,4 +1,4 @@
-import { type DefenderKind, SLOT_ACCEPTS, TRACKS } from './defenders';
+import { type DefenderKind, PLACED_KINDS, type PlacedKind, TRACKS } from './defenders';
 import type { Game } from './game';
 
 /**
@@ -9,13 +9,21 @@ export type Bot = (game: Game) => void;
 
 type Purchase = { cost: number; buy: () => boolean };
 
+/** Buys a defender into the first free spot (on the wall first, then further back). */
+function placeAnywhere(game: Game, kind: PlacedKind): boolean {
+  const spot = game.freeSpot(kind);
+  return !!spot && game.place(kind, spot.x, spot.y);
+}
+
+function ownedKinds(game: Game): DefenderKind[] {
+  return (['crossbow', 'archers', 'catapult', 'soldiers'] as const).filter((k) => game.owns(k));
+}
+
 function purchases(game: Game): Purchase[] {
   const list: Purchase[] = [];
-  for (const slot of game.slots) {
-    if (slot.defender) continue;
-    for (const kind of SLOT_ACCEPTS[slot.kind]) list.push({ cost: game.defenderCost(kind), buy: () => game.buy(slot.id, kind) });
-  }
-  for (const kind of new Set(game.slots.map((s) => s.defender).filter((k): k is DefenderKind => !!k))) {
+  for (const kind of PLACED_KINDS) list.push({ cost: game.defenderCost(kind), buy: () => placeAnywhere(game, kind) });
+  if (game.companies < game.cfg.soldiers.maxCompanies) list.push({ cost: game.defenderCost('soldiers'), buy: () => game.buySoldiers() });
+  for (const kind of ownedKinds(game)) {
     for (const track of TRACKS) list.push({ cost: game.upgradeCost(kind, track), buy: () => game.upgrade(kind, track) });
   }
   return list;
@@ -42,27 +50,36 @@ function cheapestShop(game: Game): void {
   }
 }
 
-/** Order a sensible player fills the empty slots in. */
-const BUILD_ORDER: [number, DefenderKind][] = [
-  [0, 'archers'],
-  [4, 'catapult'],
-  [6, 'soldiers'],
-  [3, 'archers'],
-  [5, 'catapult'],
-  [2, 'crossbow'],
+/** What a sensible player buys, in order, and where it goes. */
+const BUILD_ORDER: [DefenderKind, number, number][] = [
+  ['archers', 4, -1],
+  ['catapult', 0, -8],
+  ['soldiers', 0, 0],
+  ['archers', -12, -1],
+  ['archers', 12, -1],
+  ['catapult', -12, -8],
+  ['crossbow', 8, -1],
+  ['catapult', 12, -8],
 ];
 
-/** Planned shopping: keep walls healthy, fill slots in a set order, then spread upgrades. */
+/** Planned shopping: keep walls healthy, buy in a set order, then spread upgrades. */
 function plannedShop(game: Game): void {
   repairBelow(game, 0.75);
-  for (const [slot, kind] of BUILD_ORDER) {
-    if (game.slots[slot]?.defender) continue;
-    if (!game.buy(slot, kind)) break;
+  const want = new Map<DefenderKind, number>();
+  let done = true;
+  for (const [kind, x, y] of BUILD_ORDER) {
+    const n = (want.get(kind) ?? 0) + 1;
+    want.set(kind, n);
+    if (game.count(kind) >= n) continue;
+    const bought = kind === 'soldiers' ? game.buySoldiers() : game.place(kind, x, y) || placeAnywhere(game, kind);
+    if (!bought) {
+      done = false;
+      break;
+    }
   }
-  if (BUILD_ORDER.some(([slot]) => !game.slots[slot]?.defender) && game.gold < 150) return;
+  if (!done && game.gold < 150) return;
   for (;;) {
-    const owned = new Set(game.slots.map((s) => s.defender).filter((k): k is DefenderKind => !!k));
-    const options = [...owned].flatMap((kind) =>
+    const options = ownedKinds(game).flatMap((kind) =>
       TRACKS.filter((t) => kind !== 'soldiers' || t !== 'rate').map((track) => ({ kind, track, cost: game.upgradeCost(kind, track) })),
     );
     options.sort((a, b) => a.cost - b.cost);
