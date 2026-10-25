@@ -56,28 +56,69 @@ const loader = new THREE.TextureLoader();
 
 /** A finished sprite image, cropped to the unit (see tools/import-sprites.py). */
 export function imageSprite(url: string, aspect: number): SpriteArt {
-  return { texture: sharpen(loader.load(url)), aspect };
+  const t = loader.load(url, () => {
+    const img = t.image as HTMLImageElement;
+    if (img.width * img.height > 1024 * 1024) return;
+    t.image = cleanEdges(img);
+    t.needsUpdate = true;
+  });
+  return { texture: sharpen(t), aspect };
 }
 
-/** The giant open hand that comes down for a slap. */
-export function handTexture(): THREE.CanvasTexture {
-  const [c, ctx] = canvas(256, 256);
-  ctx.lineJoin = 'round';
-  ctx.translate(128, 140);
-  const fingers: [number, number, number][] = [[-62, -40, -0.5], [-30, -88, -0.15], [4, -96, 0], [38, -86, 0.15], [66, -58, 0.4]];
-  for (const [x, y, a] of fingers) {
-    ctx.save();
-    ctx.translate(x, y);
-    ctx.rotate(a);
-    ctx.beginPath();
-    ctx.roundRect(-15, -40, 30, 80, 15);
-    outline(ctx, '#f0c39a');
-    ctx.restore();
+/**
+ * Tidies a cut-out sprite's edges so it reads cleanly at a distance:
+ * - nearly opaque pixels become fully opaque (alpha-to-coverage would otherwise
+ *   let the ground show through the body), with a soft one-pixel edge kept;
+ * - the edge colour is bled out into the clear pixels round it, so the mipmaps
+ *   that draw far-off sprites blend into the outline's colour, not a halo.
+ */
+function cleanEdges(img: HTMLImageElement): HTMLCanvasElement {
+  const [c, ctx] = canvas(img.width, img.height);
+  ctx.drawImage(img, 0, 0);
+  const data = ctx.getImageData(0, 0, c.width, c.height);
+  const px = data.data;
+  const w = c.width;
+  const h = c.height;
+  const solid = new Uint8Array(w * h);
+  for (let i = 0; i < w * h; i++) {
+    const a = px[i * 4 + 3] / 255;
+    const clean = Math.max(0, Math.min(1, (a - 0.35) / 0.3));
+    px[i * 4 + 3] = Math.round(clean * 255);
+    solid[i] = clean > 0.5 ? 1 : 0;
   }
-  ctx.beginPath();
-  ctx.ellipse(0, 10, 78, 70, 0, 0, Math.PI * 2);
-  outline(ctx, '#f0c39a');
-  return texture(c);
+  // A few passes of dilation: each clear pixel takes the average colour of its solid neighbours.
+  for (let pass = 0; pass < 4; pass++) {
+    const grown: number[] = [];
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const i = y * w + x;
+        if (solid[i]) continue;
+        let r = 0;
+        let g = 0;
+        let b = 0;
+        let n = 0;
+        for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+          const nx = x + dx;
+          const ny = y + dy;
+          if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+          const j = ny * w + nx;
+          if (!solid[j]) continue;
+          r += px[j * 4];
+          g += px[j * 4 + 1];
+          b += px[j * 4 + 2];
+          n++;
+        }
+        if (!n) continue;
+        px[i * 4] = r / n;
+        px[i * 4 + 1] = g / n;
+        px[i * 4 + 2] = b / n;
+        grown.push(i);
+      }
+    }
+    for (const i of grown) solid[i] = 1;
+  }
+  ctx.putImageData(data, 0, 0);
+  return c;
 }
 
 /**
@@ -194,6 +235,25 @@ export function blobTexture(): THREE.CanvasTexture {
   g.addColorStop(1, 'rgba(0,0,0,0)');
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, 64, 64);
+  return texture(c);
+}
+
+/** A lumpy white puff of smoke, tinted per sprite: a few soft blobs overlapping. */
+export function puffTexture(): THREE.CanvasTexture {
+  const [c, ctx] = canvas(96, 96);
+  let s = 7;
+  const rnd = () => ((s = (s * 16807) % 2147483647) / 2147483647);
+  for (let i = 0; i < 7; i++) {
+    const x = 48 + (rnd() - 0.5) * 34;
+    const y = 48 + (rnd() - 0.5) * 34;
+    const r = 18 + rnd() * 16;
+    const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+    g.addColorStop(0, 'rgba(255,255,255,0.55)');
+    g.addColorStop(0.6, 'rgba(255,255,255,0.3)');
+    g.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, 96, 96);
+  }
   return texture(c);
 }
 

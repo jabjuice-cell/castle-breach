@@ -94,7 +94,7 @@ export interface Soldier {
   postY: number;
 }
 
-export type ProjectileKind = 'rock' | 'boulder' | 'bolt' | 'arrow' | 'stone';
+export type ProjectileKind = 'rock' | 'boulder' | 'enemyBolt' | 'bolt' | 'arrow' | 'stone';
 
 export interface Projectile {
   kind: ProjectileKind;
@@ -150,6 +150,8 @@ export interface Ball {
   milestone: number;
   /** It just banked off a bumper: the next orc hit does extra damage. */
   banked: boolean;
+  /** Curve from the shield's movement: how fast its path bends (radians per second, + is anticlockwise). */
+  spin: number;
 }
 
 /** A tower turret jutting out in front of the shield: a round bumper for bank shots. */
@@ -175,12 +177,15 @@ export type ShieldTrack = (typeof SHIELD_TRACKS)[number];
 
 export type GameEvent =
   | { type: 'kill'; x: number; y: number; kind: EnemyKind }
-  | { type: 'slap'; x: number; y: number }
   /** A ball or boulder hit the shield. parry: a heave power hit. trick: an edge-zone trick shot. */
   | { type: 'deflect'; x: number; y: number; parry: boolean; trick: boolean }
   /** A heave smashed through an orc line from x0 to x1. */
   | { type: 'line'; x0: number; x1: number; y: number }
   | { type: 'bank'; x: number; y: number }
+  /** The Royal Ball rebounded off the back of the field. */
+  | { type: 'rebound'; x: number; y: number }
+  /** A caught boulder sailed off the top of the field. */
+  | { type: 'flyOff'; x: number; y: number }
   | { type: 'shotDown'; x: number; y: number }
   | { type: 'salvo'; size: number }
   | { type: 'combo'; x: number; y: number; combo: number }
@@ -190,10 +195,12 @@ export type GameEvent =
   | { type: 'heave'; x: number }
   | { type: 'boltFired'; x: number; y: number }
   | { type: 'volley'; x: number; y: number; arrows: number }
-  | { type: 'hit'; x: number; y: number }
+  /** combo: the ball's combo after this hit (only for ball hits). */
+  | { type: 'hit'; x: number; y: number; combo?: number }
   | { type: 'bounce'; x: number; y: number }
   | { type: 'splash'; x: number; y: number; radius: number }
-  | { type: 'wallHit'; x: number; y: number; segment: number }
+  /** damage: how hard, so a boulder can throw more stone about than a pebble. */
+  | { type: 'wallHit'; x: number; y: number; segment: number; damage: number }
   | { type: 'ballLost'; x: number; kind: BallKind }
   | { type: 'caught'; x: number; y: number; kind: CapsuleKind }
   | { type: 'segmentDestroyed'; segment: number }
@@ -267,7 +274,6 @@ export class Game {
   tower: SiegeTower | null = null;
   /** Barrel blasts waiting to go off (chain reactions run through this queue). */
   private blasts: { x: number; y: number; at: number; mult: number; ball: number }[] = [];
-  vigor: number;
   /** Capsule effects: the game time each one runs out. */
   effects = { banner: 0, flask: 0, tea: 0, trick: 0 };
   stickyCatches = 0;
@@ -287,7 +293,6 @@ export class Game {
     this.seed = seed;
     this.rng = new Rng(seed);
     this.segmentHp = new Array(cfg.wall.segments).fill(cfg.wall.segmentHp);
-    this.vigor = cfg.slap.vigorMax;
     this.gold = cfg.economy.startGold;
     this.spots = castleSpots(cfg);
     this.openSpots = this.spots.map((s) => cfg.castle.startOpen.includes(s.id));
@@ -369,31 +374,6 @@ export class Game {
     for (const b of this.balls) {
       if (!b.stuck && !b.heaved && b.vy > 0 && this.time - b.hitShieldAt <= this.heaveWindow()) this.powerUp(b);
     }
-    return true;
-  }
-
-  /** Right-click slap. Costs Vigor; returns false when there isn't enough. */
-  slap(x: number, y: number): boolean {
-    const { radius, damage, impulse, vigorCost } = this.cfg.slap;
-    if (this.phase !== 'battle' && this.phase !== 'preview') return false;
-    if (this.vigor < vigorCost) return false;
-    this.vigor -= vigorCost;
-    for (const e of this.enemies) {
-      const dx = e.x - x;
-      const dy = e.y - y;
-      const d = Math.hypot(dx, dy);
-      if (d > radius + this.cfg[e.kind].radius * 0.5) continue;
-      const nx = d > 1e-3 ? dx / d : 0;
-      const ny = d > 1e-3 ? dy / d : 1;
-      const mass = this.cfg[e.kind].mass;
-      // Push outward, biased away from the castle.
-      e.vx += (nx * impulse) / mass;
-      e.vy += ((ny * 0.5 + 0.8) * impulse) / mass;
-      e.hp -= damage;
-      if (e.state !== 'stand' && e.state !== 'march') e.state = 'march';
-      e.foe = null;
-    }
-    this.events.push({ type: 'slap', x, y });
     return true;
   }
 
@@ -722,7 +702,6 @@ export class Game {
   step(dt = STEP): void {
     if (this.over || this.phase === 'council') return;
     this.time += dt;
-    this.vigor = Math.min(this.cfg.slap.vigorMax, this.vigor + this.cfg.slap.vigorRegen * dt);
     this.updateShield(dt);
     // Queen's tea slows everything but the shield.
     const edt = this.time < this.effects.tea ? dt * this.cfg.capsules.teaSpeed : dt;
@@ -939,7 +918,8 @@ export class Game {
 
   private updateShield(dt: number): void {
     const s = this.shield;
-    const limit = this.cfg.field.halfWidth - this.shieldHalfWidth();
+    // It can run right out to the ends of the wall, half over the tree line.
+    const limit = this.cfg.field.halfWidth - this.shieldHalfWidth() * 0.5;
     const target = Math.max(-limit, Math.min(limit, s.targetX));
     const maxStep = this.cfg.shield.speed * dt;
     const before = s.x;
@@ -1014,6 +994,15 @@ export class Game {
           const share = this.cfg[o.kind].mass / (stats.mass + this.cfg[o.kind].mass);
           px += (dx / d) * (min - d) * share * 2;
           py += (dy / d) * (min - d) * share * 2;
+          // A knocked orc bowls into the ones it hits, passing on some of its momentum.
+          const v2 = e.vx * e.vx + e.vy * e.vy;
+          if (v2 > 9 && (e.vx * -dx + e.vy * -dy) > 0) {
+            const give = 0.35 * (stats.mass / this.cfg[o.kind].mass);
+            o.vx += e.vx * give;
+            o.vy += e.vy * give;
+            e.vx *= 0.75;
+            e.vy *= 0.75;
+          }
         }
       });
 
@@ -1080,7 +1069,7 @@ export class Game {
             e.timer -= dt;
             if (e.timer <= 0) {
               e.timer = this.cfg.chucker.throwInterval;
-              this.throwAtWall(e.x, e.y, 'rock');
+              this.throwAtWall(e.x, e.y, e.phase < this.cfg.chucker.boltShare ? 'enemyBolt' : 'rock');
             }
           }
           break;
@@ -1172,7 +1161,7 @@ export class Game {
     if (this.segmentHp[seg] <= 0) return;
     this.wallDamage[source] = (this.wallDamage[source] ?? 0) + Math.min(amount, this.segmentHp[seg]);
     this.segmentHp[seg] = Math.max(0, this.segmentHp[seg] - amount);
-    if (this.rng.next() < 0.03) this.events.push({ type: 'wallHit', x, y: 0, segment: seg });
+    if (this.rng.next() < 0.03) this.events.push({ type: 'wallHit', x, y: 0, segment: seg, damage: amount });
     if (this.segmentHp[seg] === 0) this.events.push({ type: 'segmentDestroyed', segment: seg });
   }
 
@@ -1196,7 +1185,7 @@ export class Game {
   }
 
   /** Throws a rock or boulder at the wall at tx, landing after flight seconds (default: its normal speed). */
-  private throwAtWall(x: number, y: number, kind: 'rock' | 'boulder', tx?: number, flight?: number): void {
+  private throwAtWall(x: number, y: number, kind: 'rock' | 'boulder' | 'enemyBolt', tx?: number, flight?: number): void {
     const hw = this.cfg.field.halfWidth;
     const target = tx ?? (kind === 'boulder' ? this.boulderTarget(x) : Math.max(-hw + 1, Math.min(hw - 1, x + this.rng.range(-8, 8))));
     const dx = target - x;
@@ -1403,8 +1392,13 @@ export class Game {
       let alive = true;
 
       if (!p.friendly) {
-        const r = this.cfg[p.kind as 'rock' | 'boulder'].radius;
-        if (prevY > sy + r && p.y <= sy + r && Math.abs(p.x - this.shield.x) <= this.shieldHalfWidth() + r) {
+        const r = this.cfg[p.kind as 'rock' | 'boulder' | 'enemyBolt'].radius;
+        if (prevY > sy + r && p.y <= sy + r && Math.abs(p.x - this.shield.x) <= this.shieldHalfWidth() + r && p.kind === 'enemyBolt') {
+          // A bolt just splinters on the steel.
+          this.blocked++;
+          this.events.push({ type: 'deflect', x: p.x, y: sy, parry: false, trick: false });
+          alive = false;
+        } else if (prevY > sy + r && p.y <= sy + r && Math.abs(p.x - this.shield.x) <= this.shieldHalfWidth() + r) {
           // Blocked: the boulder is ours now, and becomes a ball.
           this.blocked++;
           const b = this.addBall(p.kind === 'boulder' ? 'claimed' : 'pebble', p.x, sy + r, p.vx, p.vy);
@@ -1415,7 +1409,7 @@ export class Game {
           const seg = this.segmentAt(p.x);
           this.missed++;
           this.damageSegment(seg, p.damage, p.x, p.kind);
-          this.events.push({ type: 'wallHit', x: p.x, y: 0, segment: seg });
+          this.events.push({ type: 'wallHit', x: p.x, y: 0, segment: seg, damage: p.damage });
           alive = false;
         }
       } else if (p.kind === 'arrow') {
@@ -1452,7 +1446,7 @@ export class Game {
   private addBall(kind: BallKind, x: number, y: number, vx: number, vy: number, primary = false): Ball {
     const b: Ball = {
       id: this.nextBallId++, kind, x, y, vx, vy, primary, power: 1, combo: 0, behind: false, heaved: false,
-      stuck: false, stuckOffset: 0, stuckAt: 0, hitShieldAt: -99, born: this.time, passing: null, lines: 0, milestone: 0, banked: false,
+      stuck: false, stuckOffset: 0, stuckAt: 0, hitShieldAt: -99, born: this.time, passing: null, lines: 0, milestone: 0, banked: false, spin: 0,
     };
     this.balls.push(b);
     this.enforceCap();
@@ -1489,35 +1483,39 @@ export class Game {
       b.stuck = false;
       any = true;
       // A centred serve still gets a little angle, so it doesn't go straight up and down forever.
-      const offset = Math.abs(b.stuckOffset) < 0.1 ? this.rng.range(-0.35, 0.35) : b.stuckOffset / this.shieldHalfWidth();
-      this.launch(b, offset, this.cfg.balls.speed);
+      this.serve(b);
     }
     return any;
   }
 
   /**
-   * Angle control: where the ball meets the shield (-1 left edge to +1 right edge)
-   * sets its angle off straight up. The outer edge zone is a near-flat trick shot.
+   * The Hybrid bounce: the angle off straight up a ball leaves the shield at. Across the
+   * middle the shield is a flat mirror, so it leaves at the angle it came in (inAngle,
+   * measured the same way: + heading right). The edges (offset beyond edgeZone, -1 is the
+   * left edge) kick it wide outward, a trick shot.
    */
-  bounceAngle(offset: number): number {
+  bounceAngle(offset: number, inAngle = 0): number {
     const c = this.cfg.shield;
     const o = Math.max(-1, Math.min(1, offset));
     const a = Math.abs(o);
-    let angle: number;
-    if (a <= c.centreZone) angle = (a / c.centreZone) * c.centreAngle;
-    else if (a <= c.midEnd) angle = c.centreAngle + ((a - c.centreZone) / (c.midEnd - c.centreZone)) * (c.midAngle - c.centreAngle);
-    else if (a <= c.edgeZone) angle = c.midAngle + ((a - c.midEnd) / (c.edgeZone - c.midEnd)) * (c.trickMin - c.midAngle);
-    else angle = c.trickMin + ((a - c.edgeZone) / (1 - c.edgeZone)) * (c.trickMax - c.trickMin);
-    return Math.sign(o) * angle;
+    if (a <= c.edgeZone) return inAngle;
+    return Math.sign(o) * (c.trickMin + ((a - c.edgeZone) / (1 - c.edgeZone)) * (c.trickMax - c.trickMin));
   }
 
-  /** Sends a ball up off the shield at the angle its hit point gives, plus any English from the shield's motion. */
-  private launch(b: Ball, offset: number, speed: number, english = 0): void {
+  /** Sends a ball up off the shield at an angle off straight up, at a speed. */
+  private launch(b: Ball, angle: number, speed: number): void {
     const max = this.cfg.shield.trickMax;
-    const angle = Math.max(-max, Math.min(max, this.bounceAngle(offset) + english));
-    b.vx = Math.sin(angle) * speed;
-    b.vy = Math.cos(angle) * speed;
+    const a = Math.max(-max, Math.min(max, angle));
+    b.vx = Math.sin(a) * speed;
+    b.vy = Math.cos(a) * speed;
     b.y = this.cfg.shield.y + this.cfg.balls.radius + 0.01;
+  }
+
+  /** Serves a ball riding on the shield: it goes up at an angle set by where it sits (a centred one gets a little nudge). */
+  private serve(b: Ball): void {
+    const off = Math.abs(b.stuckOffset) < 0.1 ? this.rng.range(-0.35, 0.35) : b.stuckOffset / this.shieldHalfWidth();
+    b.spin = 0;
+    this.launch(b, off * this.cfg.shield.serveAngle, b.kind === 'royal' ? this.cfg.balls.royalSpeed : this.cfg.balls.speed);
   }
 
   private powerUp(b: Ball): void {
@@ -1536,8 +1534,12 @@ export class Game {
     const s = this.shield;
     const half = this.shieldHalfWidth();
     const offset = (b.x - s.x) / half;
-    const speed = Math.min(c.maxSpeed, Math.max(c.speed, Math.hypot(b.vx, b.vy) * c.speedUp));
-    this.launch(b, offset, speed, (s.vx / this.cfg.shield.speed) * this.cfg.shield.english);
+    const base = b.kind === 'royal' ? c.royalSpeed : c.speed;
+    const speed = Math.min(c.maxSpeed, Math.max(base, Math.hypot(b.vx, b.vy) * c.speedUp));
+    // Hybrid bounce: mirror off the flat middle, kick off the edges, plus English and curve from the shield's movement.
+    const move = s.vx / this.cfg.shield.speed;
+    this.launch(b, this.bounceAngle(offset, Math.atan2(b.vx, -b.vy)) + move * this.cfg.shield.english, speed);
+    b.spin = -move * this.cfg.shield.curve;
     const trick = Math.abs(offset) > this.cfg.shield.edgeZone;
     b.combo = trick ? c.trickCombo : 0;
     b.milestone = 0;
@@ -1584,8 +1586,7 @@ export class Game {
         b.y = sy;
         if (this.time - b.stuckAt >= c.autoServeSeconds) {
           b.stuck = false;
-          const offset = Math.abs(b.stuckOffset) < 0.1 ? this.rng.range(-0.35, 0.35) : b.stuckOffset / this.shieldHalfWidth();
-          this.launch(b, offset, c.speed);
+          this.serve(b);
         }
         keep.push(b);
         continue;
@@ -1595,6 +1596,16 @@ export class Game {
       const steps = Math.max(1, Math.ceil((sp * dt) / 0.3));
       const h = dt / steps;
       let alive = true;
+      // Curve: the path bends while the spin lasts.
+      if (b.spin !== 0) {
+        const turn = b.spin * dt;
+        const cs = Math.cos(turn);
+        const sn = Math.sin(turn);
+        [b.vx, b.vy] = [b.vx * cs - b.vy * sn, b.vx * sn + b.vy * cs];
+        b.spin *= Math.exp(-dt / this.cfg.shield.curveSeconds);
+        if (Math.abs(b.spin) < 0.01) b.spin = 0;
+        this.steepen(b);
+      }
       for (let k = 0; k < steps && alive && !b.stuck; k++) {
         const prevY = b.y;
         b.x += b.vx * h;
@@ -1610,9 +1621,16 @@ export class Game {
           this.steepen(b);
         }
         if (b.y > top - r) {
+          // Only the Royal Ball rebounds off the back; a caught boulder sails away over the horde.
+          if (b.kind !== 'royal') {
+            this.events.push({ type: 'flyOff', x: b.x, y: top });
+            alive = false;
+            break;
+          }
           b.y = top - r;
           b.vy = -Math.abs(b.vy);
           b.behind = true;
+          this.events.push({ type: 'rebound', x: b.x, y: top });
         }
         if (b.vy < 0 && prevY >= sy && b.y < sy && Math.abs(b.x - this.shield.x) <= this.shieldHalfWidth() + r) {
           this.shieldHit(b);
@@ -1630,6 +1648,40 @@ export class Game {
       if (alive) keep.push(b);
     }
     this.balls = keep;
+    this.ballVsBalls();
+  }
+
+  /** Balls knock into each other: an equal-mass elastic bounce, with a hit size a touch smaller than they look. */
+  private ballVsBalls(): void {
+    const min = this.cfg.balls.radius * 2;
+    const free = this.balls.filter((b) => !b.stuck);
+    for (let i = 0; i < free.length; i++) {
+      for (let j = i + 1; j < free.length; j++) {
+        const a = free[i];
+        const b = free[j];
+        const dx = b.x - a.x;
+        const dy = b.y - a.y;
+        const d = Math.hypot(dx, dy);
+        if (d >= min || d === 0) continue;
+        const nx = dx / d;
+        const ny = dy / d;
+        const rel = (a.vx - b.vx) * nx + (a.vy - b.vy) * ny;
+        // Push apart, and swap the velocity along the line between them if they're closing.
+        const push = (min - d) / 2 + 0.01;
+        a.x -= nx * push;
+        a.y -= ny * push;
+        b.x += nx * push;
+        b.y += ny * push;
+        if (rel <= 0) continue;
+        a.vx -= rel * nx;
+        a.vy -= rel * ny;
+        b.vx += rel * nx;
+        b.vy += rel * ny;
+        this.steepen(a);
+        this.steepen(b);
+        this.events.push({ type: 'bounce', x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+      }
+    }
   }
 
   private loseBall(b: Ball): void {
@@ -1638,7 +1690,7 @@ export class Game {
     this.damageSegment(seg, damage, b.x, `missed ${b.kind}`);
     this.ballsLost++;
     this.events.push({ type: 'ballLost', x: b.x, kind: b.kind });
-    this.events.push({ type: 'wallHit', x: b.x, y: 0, segment: seg });
+    this.events.push({ type: 'wallHit', x: b.x, y: 0, segment: seg, damage });
     if (b.primary) this.royalDue = this.time + this.cfg.balls.reserveSeconds;
   }
 
@@ -1743,7 +1795,8 @@ export class Game {
     }
 
     const flask = this.time < this.effects.flask;
-    e.hp -= c.damage * b.power * boost;
+    // The Royal Ball flattens anything but a boss.
+    e.hp -= b.kind === 'royal' && e.kind !== 'warlord' ? Math.max(e.hp, c.damage) : c.damage * b.power * boost;
     e.goldMult = mult;
     e.lastBall = b.id;
     this.addCombo(b, 1);
@@ -1772,7 +1825,7 @@ export class Game {
       }
     });
     if (flask) this.events.push({ type: 'splash', x: e.x, y: e.y, radius: sr });
-    this.events.push({ type: 'hit', x: e.x, y: e.y });
+    this.events.push({ type: 'hit', x: e.x, y: e.y, combo: b.combo });
 
     if (e.kind === 'warlord') {
       // The Warlord bats it back down at the wall with his club.

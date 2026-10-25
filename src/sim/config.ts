@@ -19,11 +19,11 @@ export const defaultConfig = {
   // ---- enemies (the bricks) ---------------------------------------------------
   // mass divides knockback; climbSeconds 0 means it smashes the wall without climbing.
   // wallDps is damage per second once it has climbed. Speeds are for loose orcs; blocks march at march.speed.
-  grunt: { hp: 10, speed: 1.2, radius: 0.45, mass: 1, wallDps: 1, meleeDps: 2, climbSeconds: 3, gold: 1, threat: 1 },
-  /** A brick that shoots back: throws pebbles at the wall as its block marches. */
-  chucker: { hp: 10, speed: 1.2, radius: 0.5, mass: 1, wallDps: 1, meleeDps: 2, climbSeconds: 3, gold: 2, threat: 2, throwFromY: 44, throwInterval: 4 },
+  grunt: { hp: 10, speed: 1.8, radius: 0.45, mass: 1, wallDps: 1, meleeDps: 2, climbSeconds: 3, gold: 1, threat: 1 },
+  /** A brick that shoots back: throws pebbles at the wall as its block marches, or (boltShare of them) fires fast bolts. */
+  chucker: { hp: 10, speed: 1.8, radius: 0.5, mass: 1, wallDps: 1, meleeDps: 2, climbSeconds: 3, gold: 2, threat: 2, throwFromY: 44, throwInterval: 4, boltShare: 0.5 },
   /** Riders zig-zag across the field in a skirmish line. */
-  rider: { hp: 8, speed: 1.8, radius: 0.55, mass: 1.2, wallDps: 1, meleeDps: 3, climbSeconds: 2, gold: 2, threat: 2, zigSpeed: 4, zigRate: 1.6 },
+  rider: { hp: 8, speed: 2.6, radius: 0.55, mass: 1.2, wallDps: 1, meleeDps: 3, climbSeconds: 2, gold: 2, threat: 2, zigSpeed: 4, zigRate: 1.6 },
   /** The ball source: marches at the back of a block, then parks and lobs boulders at the wall. */
   orcCatapult: {
     hp: 60, speed: 1.2, radius: 1, mass: 6, wallDps: 5, meleeDps: 5, climbSeconds: 0, gold: 15, threat: 0,
@@ -51,7 +51,7 @@ export const defaultConfig = {
   /** Blocks march down the field like Space Invaders, faster as they shrink. */
   march: {
     /** 0.5 tiles/s. */
-    speed: 0.83,
+    speed: 1.25,
     growthPerWave: 0.01,
     /** A block with shrinkAt of its orcs left marches this much faster (linear in between). */
     shrinkBoost: 0.5,
@@ -60,7 +60,7 @@ export const defaultConfig = {
     pull: 3,
     /** Seconds between re-packing a block that has lost orcs (closing ranks). */
     regroupSeconds: 0.5,
-    spacing: 1.05,
+    spacing: 1.35,
   },
 
   /** Enemy projectiles: what reaches the wall does wallDamage. A blocked one becomes a ball. */
@@ -74,6 +74,8 @@ export const defaultConfig = {
   },
 
   rock: { speed: 12, wallDamage: 5, radius: 0.4 },
+  /** Orc crossbow bolts: fast and straight. The shield stops them, but they don't become balls. */
+  enemyBolt: { speed: 32, wallDamage: 4, radius: 0.3 },
   boulder: { speed: 13.3, wallDamage: 25, radius: 0.7 },
 
   // ---- the Breakout core --------------------------------------------------------
@@ -85,25 +87,27 @@ export const defaultConfig = {
     /** 60 tiles/s, so it can't teleport. */
     speed: 100,
     /**
-     * Angle control. The hit point runs from -1 (left edge) to +1 (right edge):
-     * the centre zone goes nearly straight up, the middle rises evenly to midAngle,
-     * and the edge zone is a trick shot at trickMin to trickMax. Radians.
+     * The Hybrid bounce. The hit point runs from -1 (left edge) to +1 (right edge). Across
+     * the middle (out to edgeZone) the shield is a flat mirror: angle in = angle out. The
+     * edges kick the ball wide, a trick shot at trickMin to trickMax. Radians.
      */
-    centreZone: 0.2,
-    centreAngle: 0.1745,
-    midEnd: 0.8,
-    midAngle: 0.96,
-    edgeZone: 0.9,
+    edgeZone: 0.8,
     trickMin: 1.134,
     trickMax: 1.309,
-    /** Moving the shield at full speed adds up to this much angle in the direction of travel. */
-    english: 0.1745,
+    /** A serve off the shield goes up at up to this angle, by where the ball sits on it. */
+    serveAngle: 0.6,
+    /** Moving the shield at full speed adds up to this much angle in the direction of travel (20 degrees)... */
+    english: 0.35,
+    /** ...and this much curve (radians per second the path bends), fading over curveSeconds: about 20 degrees in all. */
+    curve: 0.3,
+    curveSeconds: 1.2,
     /** Clicking this close to an impact heaves: a power hit. */
     heaveWindow: 0.15,
-    heaveCooldown: 1,
+    /** A heave is a big effort: one every 3 seconds. */
+    heaveCooldown: 3,
     heaveSpeed: 1.5,
-    /** A heave smashes through a whole orc line (up to lineMax orcs) at heaveDamage each. */
-    heaveLines: 1,
+    /** A heave ploughs through orc lines (up to lineMax orcs each) at heaveDamage each, instead of bouncing. */
+    heaveLines: 3,
     heaveDamage: 20,
     lineMax: 12,
   },
@@ -111,13 +115,15 @@ export const defaultConfig = {
     radius: 0.45,
     /** 12 tiles/s off the shield, +2% a bounce, up to 20 tiles/s. */
     speed: 20,
+    /** The Royal Ball is quicker: about 16 tiles/s. */
+    royalSpeed: 26,
     maxSpeed: 33,
     speedUp: 1.02,
     damage: 10,
     /** Orcs this close to a hit orc are knocked back and take splashDamage. */
     splashRadius: 1.33,
     splashDamage: 5,
-    knockback: 7,
+    knockback: 9,
     cap: 12,
     comboStep: 0.1,
     comboMax: 5,
@@ -155,7 +161,7 @@ export const defaultConfig = {
     width: { cost: 60, step: 0.42, max: 8 },
     window: { cost: 80, step: 0.015, max: 8 },
     power: { cost: 150, step: 1, max: 2 },
-    recovery: { cost: 70, step: 0.1, max: 6 },
+    recovery: { cost: 70, step: 0.3, max: 6 },
     plating: { cost: 120, step: 1, max: 3 },
   },
   /** Power-ups fall from knocked-out orcs and only count if the shield catches them. */
@@ -263,14 +269,13 @@ export const defaultConfig = {
   },
 
   // ---- player skills ----------------------------------------------------------
-  slap: { radius: 1.6, damage: 6, impulse: 7, vigorMax: 10, vigorRegen: 2, vigorCost: 1 },
   physics: { friction: 6, separation: 8 },
 
   // ---- run structure ----------------------------------------------------------
   waves: {
     previewSeconds: 8,
     /** Threat budget in grunt-equivalents: base * growth^(wave - 1). */
-    budgetBase: 20,
+    budgetBase: 30,
     budgetGrowth: 1.17,
     /**
      * Enemy HP grows this much per wave (bosses excluded). Grunts stay one-hit bricks,
@@ -290,9 +295,9 @@ export const defaultConfig = {
     ridersFromWave: 6,
     riderShare: 0.15,
     /** Orc catapults come every wave on top of the budget: base + perWave * (n - 1). */
-    orcCatapultsBase: 2,
-    orcCatapultsPerWave: 0.3,
-    orcCatapultsMax: 9,
+    orcCatapultsBase: 3,
+    orcCatapultsPerWave: 0.45,
+    orcCatapultsMax: 14,
     ogresFromWave: 12,
     ogreShare: 0.12,
     /** Bosses: the siege tower on 10, the warlord on 20, and the warlord riding the tower on the last. */

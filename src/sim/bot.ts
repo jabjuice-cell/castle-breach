@@ -167,25 +167,41 @@ function intercept(game: Game, x: number, y: number, vx: number, vy: number, bou
   return { x: ix, eta };
 }
 
-/** The offset on the shield (-0.85 to 0.85) that sends a ball from x toward (tx, ty). */
-function aimOffset(game: Game, x: number, tx: number, ty: number): number {
+/** How long before impact a sweeping shield starts its run, and at what share of its top speed. */
+const SWEEP_SECONDS = 0.08;
+const SWEEP_SHARE = 0.85;
+
+/**
+ * The offset on the shield (-1 to 1) and the sweep (-1, 0 or 1: moving the shield at full
+ * speed through the hit, for English) that best send a ball arriving at inAngle from x toward (tx, ty).
+ */
+function aimShot(game: Game, x: number, inAngle: number, tx: number, ty: number): { offset: number; sweep: number } {
   const want = Math.atan2(tx - x, ty - game.cfg.shield.y);
-  let best = 0;
-  let bestErr = Infinity;
-  for (let o = -0.85; o <= 0.851; o += 0.05) {
-    const err = Math.abs(game.bounceAngle(o) - want);
-    if (err < bestErr) {
-      bestErr = err;
-      best = o;
+  const c = game.cfg.shield;
+  // English, plus about half the curve on the way up.
+  const turn = SWEEP_SHARE * (c.english + 0.5 * c.curve * c.curveSeconds);
+  let best = { offset: 0, sweep: 0 };
+  let bestErr = Math.abs(game.bounceAngle(0, inAngle) - want);
+  for (const sweep of [0, -1, 1]) {
+    // A moving shield is harder to put in the right place, so stay off its edges.
+    const reach = sweep ? 0.6 : 0.95;
+    for (let o = -reach; o <= reach + 0.001; o += 0.05) {
+      const err = Math.abs(game.bounceAngle(o, inAngle) + sweep * turn - want);
+      // A sweep is riskier than standing still, so it has to be clearly better.
+      if (err < bestErr - (sweep ? 0.02 : 0)) {
+        bestErr = err;
+        best = { offset: o, sweep };
+      }
     }
   }
   return best;
 }
 
+
 /**
  * A paddle bot: tracks whatever reaches the shield line soonest (balls, boulders,
  * pebbles, then capsules) with a reaction delay and aim error, and sometimes heaves.
- * strong: plans its shopping, calls waves early and slaps climbers.
+ * strong: plans its shopping and calls waves early.
  */
 export type Placement = 'planned' | 'cheapest' | 'random';
 
@@ -221,14 +237,17 @@ export function paddleBot(skill: PaddleSkill, strong: boolean, placement: Placem
     let want = game.shield.x;
     if (next) {
       if (!errors.has(next.key)) errors.set(next.key, rng.range(-skill.error, skill.error));
-      let offset = 0;
+      let shot = { offset: 0, sweep: 0 };
       if (skill.aim && !('kind' in next.key && (next.key as { kind: string }).kind === 'grog')) {
         // The siege tower first, when there is one; otherwise the biggest block.
         const block = game.blocks.reduce<(typeof game.blocks)[number] | undefined>((a, b) => (!a || b.members.length > a.members.length ? b : a), undefined);
         const aim = game.tower ?? block;
-        if (aim) offset = aimOffset(game, next.x, aim.x, aim.y);
+        const k = next.key as { vx: number; vy: number };
+        if (aim) shot = aimShot(game, next.x, Math.atan2(k.vx, -k.vy), aim.x, aim.y);
       }
-      want = next.x - offset * half * 0.9 + errors.get(next.key)!;
+      want = next.x - shot.offset * half * 0.9 + errors.get(next.key)!;
+      // For English, wait to one side and run through the hit at full speed, allowing for the delay.
+      if (shot.sweep) want -= shot.sweep * SWEEP_SHARE * skill.speed * Math.max(0, Math.min(SWEEP_SECONDS, next.eta - skill.delay));
     }
     history.push({ t: game.time, x: want });
     while (history.length > 1 && history[1].t <= game.time - skill.delay) history.shift();
@@ -243,14 +262,6 @@ export function paddleBot(skill: PaddleSkill, strong: boolean, placement: Placem
     }
     // Serve straight away when nothing is about to land.
     if (skill.heaveRate > 0 && game.balls.some((b) => b.stuck) && (!next || next.eta > 0.5)) game.heave();
-
-    if (!strong || game.vigor < game.cfg.slap.vigorCost + 2) return;
-    for (const e of game.enemies) {
-      if (e.state === 'wall' || e.state === 'climb') {
-        game.slap(e.x, e.y);
-        return;
-      }
-    }
   };
 }
 

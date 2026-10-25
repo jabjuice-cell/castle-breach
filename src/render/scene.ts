@@ -29,7 +29,7 @@ import warlordUrl from '../assets/sprites/enemy-warlord.webp';
 import { type BurstOptions, Fireworks } from './fireworks';
 import { Terrain } from './terrain';
 import {
-  GroundCanvas, type SpriteArt, blobTexture, capsuleTexture, detailTexture, glowTexture, handTexture, imageSprite, loadImage, setAnisotropy,
+  GroundCanvas, type SpriteArt, blobTexture, capsuleTexture, detailTexture, glowTexture, imageSprite, puffTexture, loadImage, setAnisotropy,
 } from './textures';
 
 /**
@@ -57,6 +57,10 @@ const VOXEL = 0.5;
 const MAX_ENEMIES = 4000;
 const MAX_PROJECTILES = 2500;
 const MAX_DEBRIS = 1500;
+/** Smoke puffs over a badly damaged wall are separate sprites, so they are capped low. */
+const MAX_SMOKE = 60;
+/** Wall stone, for rubble. */
+const STONE = ['#e2d2ad', '#d6c49a', '#8f8a82', '#efe1bf'];
 const MAX_ARCHERS = 20 * 30;
 const MAX_BALLS = 64;
 const MAX_BARRELS = 300;
@@ -96,6 +100,15 @@ const SHIELD_ART_FILL = 0.86;
 /** The shield leans back so its face points up at the incoming boulders (radians from flat). */
 const SHIELD_TILT = 0.37;
 const SHIELD_H = 1.2;
+/** The camera: height, distance back, and the point on the field it looks at. */
+const CAM_Y = 54;
+const CAM_Z = 29;
+const CAM_LOOK = -22;
+/** A heave's shove: quick, so it feels like a punch. */
+const HEAVE_SECONDS = 0.15;
+/** Balls fly at this height, and are drawn this much bigger than their hit size so they read from up here. */
+const BALL_Y = 0.9;
+const BALL_DRAW = 1.7;
 
 /** Sprite height relative to the orc grunt (and defenders), from the art guide. */
 const SIZE: Record<EnemyKind, number> = { grunt: 1, chucker: 1, barrel: 1, rider: 1.4, orcCatapult: 2, ogre: 2.5, warlord: 3 };
@@ -107,6 +120,26 @@ const CLIMBERS = new Set<EnemyKind>(['grunt', 'chucker', 'barrel', 'rider']);
 
 /** The castle's shape. Towers stand on the wall joints; defenders on them stand higher. */
 const WALL_H = 3;
+/** The gatehouse in the middle of the wall: half its width, and how many voxels it rises above the wall. */
+const GATE_HALF = 2.6;
+const GATE_RISE = 3;
+
+/**
+ * The gate's colour at a voxel on the gatehouse face, or null for plain stone: an arched
+ * oak door with iron bands and studs, framed by dark stone.
+ */
+function gateDoor(x: number, iy: number): string | null {
+  const ax = Math.abs(x);
+  // The arch: full width up to iy 4, narrowing over the top two rows.
+  const half = iy < 5 ? 1.5 : iy === 5 ? 1.0 : iy === 6 ? 0.5 : 0;
+  if (ax < half) {
+    if (iy === 1 || iy === 4) return '#2b2420';
+    if (ax < 0.26) return '#3b2618';
+    return (Math.round(x / 0.5) + iy) % 2 ? '#7a4a24' : '#8d5a2c';
+  }
+  if (ax < half + 0.5 && iy < 8) return '#5c564e';
+  return null;
+}
 const TOWER_H = 4.5;
 const TOWER_HALF = 1.5;
 const TOWER_Z = 1;
@@ -150,7 +183,7 @@ export interface PlanPreview {
 }
 
 interface Effect {
-  kind: 'hand' | 'ring' | 'flash' | 'parry' | 'explosion' | 'impact' | 'fireball';
+  kind: 'ring' | 'flash' | 'parry' | 'explosion' | 'impact' | 'fireball';
   x: number;
   z: number;
   t: number;
@@ -166,6 +199,7 @@ const tmpQ2 = new THREE.Quaternion();
 const FORWARD = new THREE.Vector3(0, 0, 1);
 const AHEAD = new THREE.Vector3(0, 0, -1);
 const tmpV = new THREE.Vector3();
+const tmpV2 = new THREE.Vector3();
 const tmpD = new THREE.Vector3();
 const tmpS = new THREE.Vector3();
 const tmpC = new THREE.Color();
@@ -209,13 +243,18 @@ export class BattleScene {
   private debrisMesh: THREE.InstancedMesh;
   private debris: Debris[] = [];
   private effects: Effect[] = [];
-  private handTex = handTexture();
 
   private shieldMesh: THREE.Mesh;
   private shieldShadow: THREE.Mesh;
   private shieldJolt = 0;
   /** Time since the last heave, for the shove animation. */
   private heaveT = 9;
+  private puffTex = puffTexture();
+  private smoke: { sprite: THREE.Sprite; vel: THREE.Vector3; life: number; max: number; size: number }[] = [];
+  private shieldAspect = 1;
+  /** How far toward the camera the shield is slid so its rim lines up with the bounce line. */
+  private shieldSlide = 0;
+  private shieldSlideFor = '';
   private balls: THREE.InstancedMesh;
   private halos: THREE.InstancedMesh;
   private barrels: THREE.InstancedMesh;
@@ -244,11 +283,11 @@ export class BattleScene {
   /** Placement ghost: where a defender would go, green if it fits. */
   private ghost: THREE.Mesh;
   private ghostVisible = false;
-  private cursor: THREE.Mesh;
   private shake = 0;
   // Steep enough (about 57 degrees at the wall) that the wall doesn't hide the fighting at its foot.
-  private camBase = new THREE.Vector3(0, 52, 34);
-  private camLook = new THREE.Vector3(0, 0, -16);
+  // The wall sits low on the screen so most of it is battlefield.
+  private camBase = new THREE.Vector3(0, CAM_Y, CAM_Z);
+  private camLook = new THREE.Vector3(0, 0, CAM_LOOK);
   private raycaster = new THREE.Raycaster();
   private groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
   private time = 0;
@@ -267,7 +306,8 @@ export class BattleScene {
     this.scene.add(this.fireworks.points);
     this.renderer.shadowMap.enabled = false;
     this.scene.background = new THREE.Color('#9cc4d8');
-    this.scene.fog = new THREE.Fog('#9cc4d8', 80, 140);
+    // Light haze only: the far end of the field stays clear.
+    this.scene.fog = new THREE.Fog('#9cc4d8', 120, 230);
 
     this.camera = new THREE.PerspectiveCamera(46, 1, 0.5, 300);
     this.camera.position.copy(this.camBase);
@@ -346,22 +386,27 @@ export class BattleScene {
     this.bolts = makeFlat(2.6, 300);
     this.arrows = makeFlat(1.5, MAX_PROJECTILES);
 
+    // Rubble and sparks fly in front of the shield, so they draw after it.
     this.debrisMesh = new THREE.InstancedMesh(
       new THREE.BoxGeometry(VOXEL * 0.8, VOXEL * 0.8, VOXEL * 0.8),
-      new THREE.MeshLambertMaterial(),
+      new THREE.MeshLambertMaterial({ transparent: true }),
       MAX_DEBRIS,
     );
+    this.debrisMesh.renderOrder = 9;
     this.debrisMesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(MAX_DEBRIS * 3), 3);
     this.debrisMesh.frustumCulled = false;
     this.scene.add(this.debrisMesh);
 
     // The royal shield: the painted shield, leaning back so its face catches the boulders.
     const shieldArt = imageSprite(royalShieldUrl, aspects['royal-shield']);
+    // It is drawn over the balls, their glow and trails, so a ball can't show through it; and it
+    // is slid toward the camera so its top rim sits exactly where balls bounce (see placeShield).
     this.shieldMesh = new THREE.Mesh(
       new THREE.PlaneGeometry(1, 1 / shieldArt.aspect),
-      new THREE.MeshBasicMaterial({ map: shieldArt.texture, alphaTest: 0.5, alphaToCoverage: true, side: THREE.DoubleSide }),
+      new THREE.MeshBasicMaterial({ map: shieldArt.texture, alphaTest: 0.5, transparent: true, depthTest: false, depthWrite: false, side: THREE.DoubleSide }),
     );
-    this.shieldMesh.renderOrder = 3;
+    this.shieldAspect = shieldArt.aspect;
+    this.shieldMesh.renderOrder = 8.5;
     this.scene.add(this.shieldMesh);
     this.shieldShadow = new THREE.Mesh(
       new THREE.PlaneGeometry(1, 0.5).rotateX(-Math.PI / 2),
@@ -370,7 +415,7 @@ export class BattleScene {
     this.shieldShadow.position.y = 0.05;
     this.scene.add(this.shieldShadow);
 
-    // Balls: shiny spheres drawn over everything (so the shield never hides one), each with an additive halo.
+    // Balls: shiny spheres drawn over the field and the orcs (but under the shield), each with an additive halo.
     const r = game.cfg.balls.radius;
     this.balls = new THREE.InstancedMesh(
       new THREE.IcosahedronGeometry(r, 3),
@@ -461,11 +506,6 @@ export class BattleScene {
     this.ghost.visible = false;
     this.scene.add(this.ghost);
 
-    this.cursor = new THREE.Mesh(
-      new THREE.RingGeometry(game.cfg.slap.radius - 0.15, game.cfg.slap.radius, 48).rotateX(-Math.PI / 2),
-      new THREE.MeshBasicMaterial({ color: '#fff4c2', transparent: true, opacity: 0.5, depthWrite: false }),
-    );
-    this.scene.add(this.cursor);
   }
 
   /** Swaps in a fresh game (after a restart) and rebuilds the castle and ground. */
@@ -507,7 +547,7 @@ export class BattleScene {
     this.camera.aspect = w / h;
     // Pull back on narrow screens so the whole field stays in view.
     const pull = Math.max(1, 1.3 / this.camera.aspect);
-    this.camBase.set(0, 52 * pull, 34 * pull - (pull - 1) * 8);
+    this.camBase.set(0, CAM_Y * pull, CAM_Z * pull - (pull - 1) * 8);
     this.camera.updateProjectionMatrix();
     this.fireworks.setViewport(h * this.renderer.getPixelRatio(), this.camera.fov);
   }
@@ -550,12 +590,6 @@ export class BattleScene {
     return { x: ((tmpV.x + 1) / 2) * r.width, y: ((1 - tmpV.y) / 2) * r.height };
   }
 
-  setCursor(x: number, y: number, ready: boolean, visible = true) {
-    this.cursor.visible = visible;
-    this.cursor.position.set(x, this.groundHeight(x, -y) + 0.08, -y);
-    (this.cursor.material as THREE.MeshBasicMaterial).opacity = ready ? 0.55 : 0.15;
-  }
-
   /** Shows where a defender would go: a ring of its footprint, green if it fits there, red if not. */
   setGhost(x: number, y: number, radius: number, ok: boolean) {
     this.ghostVisible = true;
@@ -574,14 +608,6 @@ export class BattleScene {
     const sy = g.cfg.shield.y;
     for (const ev of events) {
       switch (ev.type) {
-        case 'slap':
-          this.spawnEffect('hand', ev.x, -ev.y, 0.35);
-          this.spawnEffect('ring', ev.x, -ev.y, 0.4);
-          this.ground.stamp(ev.x, -ev.y, 3.2, 'rgba(70,50,25,0.45)');
-          this.terrain.crater(ev.x, -ev.y, 1.4, 0.15);
-          fw.burst(ev.x, 0.3, -ev.y, { count: 30, colors: ['#e8d8b0', '#b09870', '#ffffff'], speed: 9, life: 0.5, size: 0.35, ring: true, gravity: 0, drag: 4 });
-          this.shake = Math.max(this.shake, 0.5);
-          break;
         case 'kill': {
           const big = SIZE[ev.kind];
           if (big >= 2) {
@@ -631,9 +657,9 @@ export class BattleScene {
           // Clang: a fan of sparks off the steel, bigger for a heave, pink for a trick shot.
           const colors = ev.trick ? ['#ff5ad9', '#ffffff', '#c08aff'] : ev.parry ? GOLD : STEEL;
           this.spawnEffect(ev.parry ? 'parry' : 'flash', ev.x, -sy, ev.parry ? 0.3 : 0.15);
-          fw.burst(ev.x, SHIELD_H + 0.6, -sy - 0.5, { count: ev.parry ? 70 : 26, colors, speed: ev.parry ? 14 : 9, life: 0.5, size: 0.38, up: 0.5, gravity: 14 });
+          fw.burst(ev.x, BALL_Y + 0.4, -sy - 0.3, { count: ev.parry ? 70 : 26, colors, speed: ev.parry ? 14 : 9, life: 0.5, size: 0.38, up: 0.5, gravity: 14 });
           if (ev.parry) fw.burst(ev.x, 0.4, -sy, { count: 40, colors: GOLD, speed: 14, life: 0.35, size: 0.4, ring: true, gravity: 0, drag: 6 });
-          this.sparks(ev.x, 2.2, -sy, ev.parry ? 18 : 8);
+          this.sparks(ev.x, BALL_Y + 0.4, -sy - 0.3, ev.parry ? 18 : 8);
           this.shieldJolt = ev.parry ? 1 : 0.7;
           this.shake = Math.max(this.shake, ev.parry ? 0.5 : 0.25);
           if (ev.parry) this.flash(0.18, '#fff6c8');
@@ -690,7 +716,7 @@ export class BattleScene {
           break;
         case 'caught': {
           const look = CAPSULE_LOOK[ev.kind];
-          fw.burst(ev.x, SHIELD_H + 0.8, -sy, { count: 50, colors: [look.color, '#ffffff'], speed: 10, life: 0.7, size: 0.45, up: 0.7, twinkle: true });
+          fw.burst(ev.x, BALL_Y + 0.6, -sy - 0.3, { count: 50, colors: [look.color, '#ffffff'], speed: 10, life: 0.7, size: 0.45, up: 0.7, twinkle: true });
           this.flash(0.15, look.color);
           break;
         }
@@ -703,14 +729,30 @@ export class BattleScene {
           fw.burst(ev.x, 0.9, -ev.y, { count: 5, colors: ['#ffffff', '#ffd34a'], speed: 5, life: 0.25, size: 0.3, gravity: 4 });
           if (this.effects.length < 30 && Math.random() < 0.3) this.spawnEffect('impact', ev.x, -ev.y, 0.2, 0.9);
           break;
-        case 'wallHit':
-          this.burst(ev.x, 2.5, 0, 3, '#8c8a80', 5);
-          fw.burst(ev.x, 2, -0.2, { count: 10, colors: ['#e8d8b0', '#ffb43a'], speed: 6, life: 0.4, size: 0.35, up: 0.4 });
-          if (this.effects.length < 40) this.spawnEffect('impact', ev.x, 0.5, 0.25, 1.6);
+        case 'wallHit': {
+          // Rock on stone: blocks of the wall fly, more and further for a bigger hit, with a puff of dust.
+          const k = Math.min(1, ev.damage / 25);
+          for (let i = 0; i < 3 + k * 4; i++) this.burst(ev.x + (Math.random() - 0.5) * 1.5, 2.5, 0.3, 2 + Math.round(k * 2), STONE[i % STONE.length], 6 + k * 10);
+          fw.burst(ev.x, 2, -0.2, { count: 10 + k * 40, colors: ['#e8d8b0', '#ffb43a', '#ffffff'], speed: 6 + k * 8, life: 0.45, size: 0.4, up: 0.5 });
+          for (let i = 0; i < 1 + k * 4; i++) this.puff(ev.x + (Math.random() - 0.5) * 2, 2 + Math.random(), 0.5, 2 + k * 2.5, '#d8ccb0', 0.8 + k * 0.6);
+          if (this.effects.length < 40) this.spawnEffect('impact', ev.x, 0.5, 0.25, 1.6 + k * 1.6);
+          if (ev.damage >= 3) this.shake = Math.max(this.shake, 0.15 + k * 0.45);
+          if (k >= 0.8) this.flash(0.15, '#ffb43a');
           break;
-        case 'segmentDestroyed':
-          this.shake = Math.max(this.shake, 0.9);
+        }
+        case 'segmentDestroyed': {
+          // The breach: the whole section blows apart in fire, stone and smoke.
+          const sx = -g.cfg.field.halfWidth + (ev.segment + 0.5) * g.segmentWidth();
+          this.spawnEffect('fireball', sx, 0.5, 0.8, 7);
+          this.spawnEffect('explosion', sx, 0.5, 0.7, 6);
+          for (let i = 0; i < 16; i++) this.burst(sx + (Math.random() - 0.5) * g.segmentWidth(), 1.5 + Math.random() * 1.5, 0.5, 4, STONE[i % STONE.length], 18);
+          fw.burst(sx, 2, 0, { count: 260, colors: FIRE, speed: 22, life: 1.2, size: 0.7, up: 0.6, gravity: 8, twinkle: true });
+          fw.burst(sx, 0.5, 0, { count: 120, colors: ['#e8d8b0', '#c8b898', '#ffffff'], speed: 26, life: 0.6, size: 0.6, ring: true, gravity: 0, drag: 4 });
+          for (let i = 0; i < 14; i++) this.puff(sx + (Math.random() - 0.5) * g.segmentWidth(), 1 + Math.random() * 3, Math.random() * 2, 4 + Math.random() * 4, '#5a524a', 2.5);
+          this.flash(0.8, '#ff5a3c');
+          this.shake = Math.max(this.shake, 1.4);
           break;
+        }
         default:
           break;
       }
@@ -761,7 +803,8 @@ export class BattleScene {
       this.lastWave = g.wave;
     }
     this.ground.flush(time, QUALITY[this.quality].upload);
-    this.updateCastle();
+    this.updateCastle(dt);
+    this.updateSmoke(dt);
     this.updateEnemies(time);
     this.updateSoldiers(time);
     this.updateDefenders();
@@ -800,17 +843,60 @@ export class BattleScene {
     const w = (hw * 2) / SHIELD_ART_FILL;
     // A heave shoves the shield up and forward and stands it up a little, then it settles back.
     this.heaveT += dt;
-    const shove = this.heaveT < 0.3 ? Math.sin((this.heaveT / 0.3) * Math.PI) : 0;
+    const shove = this.heaveT < HEAVE_SECONDS ? Math.sin((this.heaveT / HEAVE_SECONDS) * Math.PI) : 0;
     this.shieldJolt = Math.max(0, this.shieldJolt - dt * 6);
     const m = this.shieldMesh;
     m.scale.set(w, w, 1);
-    m.position.set(g.shield.x, SHIELD_H + shove * 0.7 + this.shieldJolt * 0.25, -g.cfg.shield.y - shove * 0.9);
+    this.placeShield(w);
+    m.position.set(g.shield.x, SHIELD_H + shove * 0.7 + this.shieldJolt * 0.25, -g.cfg.shield.y + this.shieldSlide - shove * 0.9);
     m.rotation.set(-Math.PI / 2 + SHIELD_TILT + shove * 0.35, 0, this.shieldJolt * 0.05 * Math.sin(this.time * 60));
     // Dimmed while it recovers from a heave.
     (m.material as THREE.MeshBasicMaterial).color.setScalar(g.canHeave ? 1 : 0.72);
+    // Dragged hard along the battlements, its rim throws a spray of sparks behind it.
+    const drag = g.phase === 'battle' ? g.shield.vx / g.cfg.shield.speed : 0;
+    if (Math.abs(drag) > 0.2) {
+      const half = w / this.shieldAspect / 2;
+      const lean = -Math.PI / 2 + SHIELD_TILT;
+      const by = m.position.y - Math.cos(lean) * half * 0.85;
+      const bz = m.position.z - Math.sin(lean) * half * 0.85;
+      this.scrapeSparks(g.shield.x - Math.sign(drag) * w * 0.12, Math.max(WALL_H + 0.2, by), bz, Math.sign(drag), Math.abs(drag) * 3 * Math.min(2, dt * 60));
+    }
     this.shieldShadow.position.x = g.shield.x;
     this.shieldShadow.position.z = -g.cfg.shield.y + 0.4;
     this.shieldShadow.scale.set(w * 1.05, 1, w * 0.9);
+  }
+
+  /**
+   * Finds how far to slide the shield toward the camera so that, on screen, its top rim
+   * touches a ball sitting on the bounce line. The shield is drawn over everything near
+   * it, so the slide only changes where it shows, not what it hides behind.
+   */
+  private placeShield(w: number) {
+    const g = this.game;
+    const key = `${w.toFixed(3)} ${this.camBase.y.toFixed(2)} ${this.camera.aspect.toFixed(3)}`;
+    if (key === this.shieldSlideFor) return;
+    this.shieldSlideFor = key;
+    this.camera.position.copy(this.camBase);
+    this.camera.lookAt(this.camLook);
+    this.camera.updateMatrixWorld();
+    const up = tmpV2.set(0, 1, 0).applyQuaternion(this.camera.quaternion);
+    // The bottom of a ball (as drawn) resting against the shield.
+    const sy = g.cfg.shield.y + g.cfg.balls.radius;
+    const ballR = g.cfg.balls.radius * BALL_DRAW * 1.1;
+    const target = new THREE.Vector3(0, BALL_Y, -sy).addScaledVector(up, -ballR).project(this.camera).y;
+    // The rim: half the art's height up the leaning face.
+    const half = w / this.shieldAspect / 2;
+    const lean = -Math.PI / 2 + SHIELD_TILT;
+    const rimAt = (slide: number) => new THREE.Vector3(0, SHIELD_H + Math.cos(lean) * half, -g.cfg.shield.y + slide + Math.sin(lean) * half).project(this.camera).y;
+    let lo = -4;
+    let hi = 12;
+    for (let i = 0; i < 30; i++) {
+      const mid = (lo + hi) / 2;
+      // Sliding toward the camera moves the rim down the screen.
+      if (rimAt(mid) > target) lo = mid;
+      else hi = mid;
+    }
+    this.shieldSlide = (lo + hi) / 2;
   }
 
   /** A ball's colour: by kind, then hotter as its combo climbs. */
@@ -832,10 +918,8 @@ export class BattleScene {
     for (const b of g.balls) {
       if (n >= MAX_BALLS) break;
       const color = this.ballColor(b);
-      const y = b.stuck ? SHIELD_H + 1 : 0.9;
-      // Drawn bigger than its hit size so it reads at a glance from up here.
-      const size = (b.kind === 'pebble' ? 0.75 : b.kind === 'royal' ? 1.25 : 1) * 1.7;
-      tmpV.set(b.x, y, -b.y);
+      const size = (b.kind === 'pebble' ? 0.75 : b.kind === 'royal' ? 1.25 : 1) * BALL_DRAW;
+      tmpV.set(b.x, BALL_Y, -b.y);
       this.balls.setMatrixAt(n, tmpM.compose(tmpV, tmpQ.setFromAxisAngle(FORWARD, this.time * 3 + b.id), tmpS.setScalar(size)));
       this.balls.setColorAt(n++, tmpC.set(color));
       const glow = (b.heaved && b.lines > 0 ? 6 : b.combo >= 10 ? 5 : 3.5) * r * size;
@@ -844,7 +928,7 @@ export class BattleScene {
       // A comet trail, longer and hotter with the combo.
       if (!b.stuck) {
         const hot = b.combo >= 10 || (b.heaved && b.lines > 0);
-        this.fireworks.burst(b.x, y, -b.y, {
+        this.fireworks.burst(b.x, BALL_Y, -b.y, {
           count: hot ? 3 : 1.2, colors: [color, '#ffffff'], speed: 0.8, life: hot ? 0.45 : 0.3, size: r * size * (hot ? 1.8 : 1.3), gravity: 0, drag: 4,
         });
       }
@@ -1127,18 +1211,21 @@ export class BattleScene {
       const cells: Cell[] = [];
       for (let ix = 0; ix < nx; ix++) {
         const cx = x0 + (ix + 0.5) * VOXEL;
+        // The gatehouse: the middle of the gate segment stands taller than the wall.
+        const house = gate && Math.abs(cx) < GATE_HALF;
+        const top = house ? ny + GATE_RISE : ny;
         for (let iz = 0; iz < nz; iz++) {
-          for (let iy = 0; iy < ny; iy++) {
-            // The gate: a tall wooden door in the middle of the front face.
-            const door = gate && iz === 0 && Math.abs(cx) < 1.6 && iy < 6;
+          const face = iz === 0 || iz === nz - 1;
+          for (let iy = 0; iy < top; iy++) {
+            const door = house && face && gateDoor(cx, iy);
             const slit = iz === 0 && iy === 5 && ix % 6 === 3;
             cells.push({
               p: new THREE.Vector3(cx, (iy + 0.5) * VOXEL, (iz + 0.5) * VOXEL),
-              c: door ? stone('#6b4528', 0.06) : slit ? new THREE.Color('#3a2e22') : wallStone(iy),
+              c: door ? new THREE.Color(door) : slit ? new THREE.Color('#3a2e22') : house && iy >= ny ? stone('#e9dab6', 0.07) : wallStone(iy),
             });
           }
-          // Crenellations along the front edge.
-          if (iz === 0 && ix % 4 < 2) cells.push({ p: new THREE.Vector3(cx, (ny + 0.5) * VOXEL, 0.5 * VOXEL), c: stone('#efe1bf', 0.06) });
+          // Crenellations along the front edge (and both edges of the gatehouse).
+          if ((iz === 0 || (house && iz === nz - 1)) && ix % 4 < 2) cells.push({ p: new THREE.Vector3(cx, (top + 0.5) * VOXEL, (iz + 0.5) * VOXEL), c: stone('#efe1bf', 0.06) });
         }
       }
       this.segments.push(addGroup(cells));
@@ -1212,9 +1299,57 @@ export class BattleScene {
     this.voxels.instanceMatrix.needsUpdate = true;
   }
 
-  private updateCastle() {
+  private updateCastle(dt: number) {
     const g = this.game;
-    g.segmentHp.forEach((hp, i) => this.crumble(this.segments[i], hp / g.cfg.wall.segmentHp));
+    const segW = g.segmentWidth();
+    g.segmentHp.forEach((hp, i) => {
+      const frac = hp / g.cfg.wall.segmentHp;
+      this.crumble(this.segments[i], frac);
+      // A hurt section smokes; a nearly broken one burns, with embers going up.
+      if (frac >= 0.5 || g.phase === 'council') return;
+      const x = -g.cfg.field.halfWidth + (Math.random() * 0.8 + 0.1) * segW + i * segW;
+      const burning = frac < g.cfg.wall.warnBelow;
+      if (Math.random() < dt * (burning ? 7 : 2)) this.puff(x, 2.2, 0.8, burning ? 3 : 2, burning ? '#3a3430' : '#8a8278', burning ? 2.2 : 1.6);
+      if (burning && Math.random() < dt * 14) {
+        this.fireworks.burst(x, 2.2, 0.6, { count: 3, colors: FIRE, speed: 2, life: 0.8, size: 0.55, up: 1, gravity: -4, drag: 1 });
+      }
+    });
+  }
+
+  /** A puff of smoke or dust that rises, swells and fades. */
+  private puff(x: number, y: number, z: number, size: number, color: string, life: number) {
+    let p = this.smoke.find((s) => s.life <= 0);
+    if (!p) {
+      if (this.smoke.length >= MAX_SMOKE) return;
+      const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.puffTex, transparent: true, depthWrite: false }));
+      sprite.renderOrder = 9;
+      this.scene.add(sprite);
+      p = { sprite, vel: new THREE.Vector3(), life: 0, max: 1, size: 1 };
+      this.smoke.push(p);
+    }
+    p.sprite.visible = true;
+    p.sprite.position.set(x, y, z);
+    p.sprite.material.color.set(color);
+    p.sprite.material.rotation = Math.random() * Math.PI * 2;
+    p.vel.set((Math.random() - 0.5) * 1.5, 2 + Math.random() * 2, (Math.random() - 0.5) * 1.5);
+    p.life = p.max = life * (0.8 + Math.random() * 0.4);
+    p.size = size;
+  }
+
+  private updateSmoke(dt: number) {
+    for (const p of this.smoke) {
+      if (p.life <= 0) continue;
+      p.life -= dt;
+      if (p.life <= 0) {
+        p.sprite.visible = false;
+        continue;
+      }
+      const u = 1 - p.life / p.max;
+      p.sprite.position.addScaledVector(p.vel, dt);
+      p.vel.multiplyScalar(1 - dt * 0.8);
+      p.sprite.scale.setScalar(p.size * (0.5 + u));
+      p.sprite.material.opacity = u < 0.15 ? u / 0.15 : 1 - (u - 0.15) / 0.85;
+    }
   }
 
   // ---- defenders -------------------------------------------------------------
@@ -1401,6 +1536,8 @@ export class BattleScene {
         const sp = Math.hypot(p.vx, p.vy) || 1;
         tmpQ.setFromUnitVectors(AHEAD, tmpD.set(p.vx / sp, 0, -p.vy / sp));
         this.bolts.setMatrixAt(b++, tmpM.compose(tmpV.set(p.x, 1.8, -p.y), tmpQ, tmpS.set(1, 1, 1)));
+        // Orc bolts streak red, so they read as a threat at a glance.
+        if (p.kind === 'enemyBolt') this.fireworks.burst(p.x, 1.8, -p.y, { count: 2, colors: ['#ff5a3c', '#ffb43a'], speed: 0.4, life: 0.22, size: 0.4, gravity: 0, drag: 6 });
       }
     }
     for (const kind of ['rock', 'boulder', 'stone'] as const) {
@@ -1445,6 +1582,21 @@ export class BattleScene {
     }
   }
 
+  /** Sparks scraped off the shield's rim as it moves (dir: which way it moves), thrown back the other way. */
+  private scrapeSparks(x: number, y: number, z: number, dir: number, n: number) {
+    const count = Math.floor(n) + (Math.random() < n % 1 ? 1 : 0);
+    for (let i = 0; i < count && this.debris.length < MAX_DEBRIS; i++) {
+      this.debris.push({
+        pos: new THREE.Vector3(x + (Math.random() - 0.5) * 0.8, y, z + (Math.random() - 0.5) * 0.6),
+        vel: new THREE.Vector3(-dir * (5 + Math.random() * 10), 3 + Math.random() * 6, (Math.random() - 0.3) * 4),
+        spin: new THREE.Vector3(20, 20, 20),
+        rot: new THREE.Euler(),
+        life: 0.2 + Math.random() * 0.25,
+        color: new THREE.Color(Math.random() < 0.3 ? '#ffffff' : Math.random() < 0.6 ? '#fff2a8' : '#ffb43a'),
+      });
+    }
+  }
+
   private updateDebris(dt: number) {
     const alive: Debris[] = [];
     for (const d of this.debris) {
@@ -1473,12 +1625,9 @@ export class BattleScene {
     if (this.debrisMesh.instanceColor) this.debrisMesh.instanceColor.needsUpdate = true;
   }
 
-  private spawnEffect(kind: Effect['kind'], x: number, z: number, duration: number, size = this.game.cfg.slap.radius) {
+  private spawnEffect(kind: Effect['kind'], x: number, z: number, duration: number, size = 3) {
     let obj: THREE.Object3D;
-    if (kind === 'hand') {
-      const geo = new THREE.PlaneGeometry(5, 5).rotateX(-Math.PI / 2);
-      obj = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ map: this.handTex, alphaTest: 0.5, side: THREE.DoubleSide }));
-    } else if (kind === 'ring') {
+    if (kind === 'ring') {
       obj = new THREE.Mesh(
         new THREE.RingGeometry(0.8, 1, 40).rotateX(-Math.PI / 2),
         new THREE.MeshBasicMaterial({ color: '#fff1c7', transparent: true, depthWrite: false }),
@@ -1496,7 +1645,7 @@ export class BattleScene {
         new THREE.MeshBasicMaterial({ color: kind === 'parry' ? '#ffd76a' : '#d8f4ff', transparent: true, depthWrite: false }),
       );
     }
-    obj.position.set(x, kind === 'hand' ? 8 : kind === 'explosion' || kind === 'fireball' ? size * 0.6 : kind === 'impact' ? 1.2 : 0.1, z);
+    obj.position.set(x, kind === 'explosion' || kind === 'fireball' ? size * 0.6 : kind === 'impact' ? 1.2 : 0.1, z);
     this.scene.add(obj);
     this.effects.push({ kind, x, z, t: 0, duration, obj, size });
   }
@@ -1507,11 +1656,7 @@ export class BattleScene {
       const u = Math.min(1, fx.t / fx.duration);
       const mesh = fx.obj as THREE.Mesh;
       const mat = mesh.material as THREE.MeshBasicMaterial;
-      if (fx.kind === 'hand') {
-        // Slam down fast, hold, then lift away.
-        const down = Math.min(1, u * 4);
-        fx.obj.position.y = 8 * (1 - down) + 0.2 + Math.max(0, u - 0.6) * 12;
-      } else if (fx.kind === 'ring') {
+      if (fx.kind === 'ring') {
         const r = 0.5 + u * fx.size * 1.1;
         fx.obj.scale.set(r, 1, r);
         mat.opacity = 1 - u;

@@ -107,11 +107,13 @@ export function planWave(n: number, seed: number, cfg: Config): WavePlan {
   const groups: SpawnGroup[] = [];
   // Foot orcs are split across the blocks; catapults stand at the back of them.
   const split = (total: number, i: number) => Math.floor((total * (i + 1)) / blocks) - Math.floor((total * i) / blocks);
-  // Five lanes, one per wall section. Blocks spread over them; a sixth doubles up.
+  // Five lanes, one per wall section. Foot blocks keep to the path down the middle three;
+  // the riders come through the sides.
   const segs = cfg.wall.segments;
   const laneX = (lane: number) => -cfg.field.halfWidth + ((lane + 0.5) / segs) * cfg.field.halfWidth * 2;
-  const lanes = rng.shuffle([...Array(segs).keys()]);
-  while (lanes.length < blocks) lanes.push(rng.int(0, segs - 1));
+  const path = [...Array(segs).keys()].slice(1, segs - 1);
+  const lanes = rng.shuffle([...path]);
+  while (lanes.length < blocks) lanes.push(path[rng.int(0, path.length - 1)]);
   for (let i = 0; i < blocks; i++) {
     const members = [
       { kind: 'grunt' as const, count: split(totals.grunt, i) },

@@ -32,12 +32,16 @@
       .label { font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; opacity: 0.85; display: flex; justify-content: space-between; }
       .bar { height: 12px; background: rgba(0, 0, 0, 0.45); border-radius: 3px; overflow: hidden; margin-top: 5px; }
       .bar > i { display: block; height: 100%; width: 100%; transform-origin: left; transition: transform 0.15s linear; }
-      .seg { position: absolute; width: 74px; transform: translate(-50%, -100%); }
-      .seg .bar { height: 8px; margin: 0; border: 2px solid rgba(20, 16, 12, 0.75); }
-      .seg .bar > i { background: linear-gradient(#e8dcb8, #b9ab84); }
-      .seg.warn .bar > i { background: linear-gradient(#ff7a62, #c43c28); }
-      .seg.warn .bar { animation: warn 0.6s steps(2, jump-none) infinite; }
-      @keyframes warn { 50% { border-color: #ff7a62; box-shadow: 0 0 10px #ff5a3c; } }
+      /* Wall bars in the fighting-game style: yellow health, with a red chunk that drains away behind it after a hit. */
+      .seg { position: absolute; width: 84px; transform: translate(-50%, -100%) skewX(-18deg); }
+      .seg .bar { position: relative; height: 12px; margin: 0; border: 2px solid #14100c; border-radius: 1px; background: #2a1712; box-shadow: 0 2px 0 rgba(0, 0, 0, 0.35), inset 0 0 0 1px rgba(255, 255, 255, 0.18); }
+      .seg .bar > b, .seg .bar > i { position: absolute; inset: 0; display: block; transform-origin: left; }
+      .seg .bar > b { background: linear-gradient(#ff5a3c, #b8160c); }
+      .seg .bar > i { background: linear-gradient(#fff6a0 0%, #ffd21f 45%, #e89a00 100%); transition: none; }
+      .seg.warn .bar > i { background: linear-gradient(#fff0a0, #ff9a1f 45%, #e8590c); }
+      .seg.warn .bar { animation: warn 0.5s steps(2, jump-none) infinite; }
+      .seg.hit .bar { transform: translateY(-2px); }
+      @keyframes warn { 50% { border-color: #ff3a2a; box-shadow: 0 0 12px #ff3a2a; } }
       #heaveBar { background: linear-gradient(#ffe38a, #e8a920); }
       #heaveBar.locked { background: linear-gradient(#a8a090, #6d6250); }
       .play { display: flex; gap: 12px; align-items: baseline; margin-top: 6px; font-weight: 800; font-size: 14px; min-height: 18px; }
@@ -53,6 +57,11 @@
       .floater.c40 { font-size: 52px; color: #fff6c8; text-shadow: 0 2px 0 var(--ink), 0 0 18px #ffd34a; }
       .floater.smash { font-size: 30px; color: #fff6c8; }
       .floater.trick { font-size: 22px; color: #ff9ae8; }
+      .floater.rebound { font-size: 34px; color: #ffe066; letter-spacing: 0.04em; text-shadow: 0 3px 0 var(--ink), 0 0 16px #ffb43a; }
+      .floater.bank { font-size: 24px; color: #8ae6ff; }
+      .floater.chain { font-size: 22px; color: #fff; }
+      .floater.chain.hot { font-size: 28px; color: #ffa040; }
+      .floater.breach { font-size: 44px; color: #ff5a3c; text-shadow: 0 3px 0 var(--ink), 0 0 20px #ff3a1a; }
       .floater.good { font-family: var(--ui); font-size: 18px; color: #fff; }
       .floater.bad { font-family: var(--ui); font-size: 18px; color: #ff8a7a; }
       .spot { position: absolute; transform: translate(-50%, -100%); pointer-events: auto; font-size: 11px; padding: 1px 5px; opacity: 0.9; box-shadow: 0 2px 0 var(--ink); white-space: nowrap; }
@@ -67,12 +76,8 @@
       button .ico { width: 20px; height: 20px; margin: -3px 4px -3px -4px; }
       .wallimg { width: 36px; height: 48px; flex: none; background-image: var(--wall-states); background-size: 400% 100%; background-repeat: no-repeat; }
       #council .row.wall > div:first-child { display: flex; align-items: center; gap: 8px; }
-      .bottom { position: absolute; bottom: max(14px, env(safe-area-inset-bottom, 0px)); left: 50%; transform: translateX(-50%); display: flex; gap: 12px; align-items: stretch; width: min(560px, calc(100% - 32px)); }
+      .bottom { position: absolute; bottom: max(14px, env(safe-area-inset-bottom, 0px)); left: max(16px, env(safe-area-inset-left, 0px)); display: flex; gap: 12px; align-items: stretch; width: min(340px, calc(100% - 32px)); }
       .bottom .panel { flex: 1; }
-      .slap { flex: 0 0 auto !important; }
-      .pips { display: grid; grid-template-columns: repeat(5, 12px); gap: 4px; margin-top: 6px; }
-      .pips i { height: 12px; border-radius: 2px; background: rgba(0, 0, 0, 0.45); overflow: hidden; position: relative; }
-      .pips i::after { content: ''; position: absolute; inset: 0; background: #f0c39a; transform: scaleY(var(--f, 1)); transform-origin: bottom; }
       .hint { font-size: 12px; opacity: 0.85; margin-top: 6px; }
       kbd { font-family: var(--ui); font-size: 11px; background: var(--parchment); color: var(--ink); border-radius: 3px; padding: 0 5px; }
       #preview { position: absolute; top: 34%; left: 50%; transform: translateX(-50%); text-align: center; pointer-events: auto; max-width: calc(100% - 32px); }
@@ -90,7 +95,7 @@
       #boss { position: absolute; top: max(78px, calc(env(safe-area-inset-top, 0px) + 66px)); left: 50%; transform: translateX(-50%); width: min(420px, calc(100% - 32px)); text-align: center; }
       #boss .label { justify-content: center; font-family: var(--display); font-size: 20px; letter-spacing: 0.04em; text-transform: none; }
       #bossBar { background: linear-gradient(#ff7a62, #a8321e); }
-      #callEarly { position: absolute; bottom: max(150px, calc(env(safe-area-inset-bottom, 0px) + 136px)); left: 50%; transform: translateX(-50%); pointer-events: auto; max-width: calc(100% - 32px); }
+      #callEarly { position: absolute; bottom: max(16px, env(safe-area-inset-bottom, 0px)); right: max(16px, env(safe-area-inset-right, 0px)); pointer-events: auto; max-width: calc(100% - 32px); }
       #toast { position: absolute; top: 24%; left: 50%; transform: translateX(-50%); font-family: var(--display); font-size: 28px; color: var(--gold); text-shadow: 0 2px 0 var(--ink), 0 0 12px rgba(0, 0, 0, 0.5); white-space: nowrap; }
       #council { position: absolute; top: max(76px, calc(env(safe-area-inset-top, 0px) + 64px)); right: max(16px, env(safe-area-inset-right, 0px)); bottom: max(16px, env(safe-area-inset-bottom, 0px)); width: min(400px, calc(100% - 32px)); overflow-y: auto; pointer-events: auto; background: var(--parchment); color: var(--ink); border: 3px solid var(--ink); border-radius: 6px; padding: 14px 16px 16px; box-shadow: 0 8px 0 rgba(0, 0, 0, 0.35); }
       #council header { display: flex; justify-content: space-between; align-items: baseline; }
@@ -131,11 +136,11 @@
       .queen p { margin: 0; font-size: 14px; line-height: 1.35; font-style: italic; }
       .queen p b { display: block; font-style: normal; font-family: var(--display); font-size: 18px; color: #2a4fb0; }
       #council .queen { margin: 10px 0 4px; padding: 8px 10px; background: rgba(42, 79, 176, 0.08); border-radius: 6px; }
-      #queen { position: absolute; left: max(16px, env(safe-area-inset-left, 0px)); bottom: max(96px, calc(env(safe-area-inset-bottom, 0px) + 84px)); width: min(340px, calc(100% - 32px)); background: var(--parchment); color: var(--ink); border: 3px solid var(--ink); border-radius: 6px; padding: 10px 12px; box-shadow: 0 5px 0 rgba(0, 0, 0, 0.35); }
+      #queen { position: absolute; left: max(16px, env(safe-area-inset-left, 0px)); bottom: max(170px, calc(env(safe-area-inset-bottom, 0px) + 156px)); width: min(340px, calc(100% - 32px)); background: var(--parchment); color: var(--ink); border: 3px solid var(--ink); border-radius: 6px; padding: 10px 12px; box-shadow: 0 5px 0 rgba(0, 0, 0, 0.35); }
       #council .tip { margin: 8px 0 0; font-size: 12px; opacity: 0.75; }
       #council .row.placing { background: rgba(242, 193, 78, 0.3); border-radius: 4px; padding-left: 6px; }
       @media (max-width: 720px) { #council { top: auto; height: 58%; left: 16px; width: auto; } }
-      @media (max-width: 560px) { .wave { font-size: 24px; }  #preview h2 { font-size: 26px; } .hint { display: none; } #queen { display: none; } }
+      @media (max-width: 560px) { #callEarly { bottom: 150px; } .wave { font-size: 24px; }  #preview h2 { font-size: 26px; } .hint { display: none; } #queen { display: none; } }
       @media (prefers-reduced-motion: reduce) { .bar > i { transition: none; } .seg.warn .bar { animation: none; } }
     </style>
   </head>
@@ -172,11 +177,7 @@
           <div class="label"><span><img class="ico" data-icon="shield" alt="" />Heave</span><span id="heaveText">Ready</span></div>
           <div class="bar"><i id="heaveBar"></i></div>
           <div class="play"><span id="balls">0 balls</span><span id="combo" class="combo"></span><span id="effects"></span></div>
-          <div class="hint">Mouse moves the shield · <kbd>Left click</kbd> or <kbd>Space</kbd> as a ball lands to heave · <img class="ico" data-icon="slap" alt="" /><kbd>Right click</kbd> or <kbd>F</kbd> to slap</div>
-        </div>
-        <div class="panel slap">
-          <div class="label"><span><img class="ico" data-icon="vigor" alt="" />Vigor</span></div>
-          <div class="pips" id="vigor"></div>
+          <div class="hint">Mouse moves the shield: sweep it as a ball lands to bend the shot · <kbd>Left click</kbd> or <kbd>Space</kbd> as it lands to heave</div>
         </div>
       </div>
     </div>

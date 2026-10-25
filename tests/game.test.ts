@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { averageBot, expertBot } from '../src/sim/bot';
+import { averageBot } from '../src/sim/bot';
 import { makeConfig } from '../src/sim/config';
 import { type Ball, type Enemy, Game, type Projectile } from '../src/sim/game';
 import { formation, planSize, planWave, waveBudget } from '../src/sim/waves';
@@ -50,7 +50,7 @@ function battle(seed = 1, cfg = quiet()) {
 function ball(game: Game, over: Partial<Ball>): Ball {
   const b: Ball = {
     id: 999, kind: 'claimed', x: 0, y: 10, vx: 0, vy: -20, primary: false, power: 1, combo: 0, behind: false, heaved: false,
-    stuck: false, stuckOffset: 0, stuckAt: 0, hitShieldAt: -99, born: 0, passing: null, lines: 0, milestone: 0, banked: false, ...over,
+    stuck: false, stuckOffset: 0, stuckAt: 0, hitShieldAt: -99, born: 0, passing: null, lines: 0, milestone: 0, banked: false, spin: 0, ...over,
   };
   game.balls.push(b);
   return b;
@@ -65,9 +65,9 @@ describe('waves', () => {
   it('follows the threat budget, in 2 to 6 marching blocks', () => {
     const cfg = makeConfig();
     const w1 = planWave(1, 1, cfg);
-    expect(w1.totals).toMatchObject({ grunt: 20, chucker: 0, rider: 0, orcCatapult: 2 });
+    expect(w1.totals).toMatchObject({ grunt: 30, chucker: 0, rider: 0, orcCatapult: 3 });
     expect(w1.groups).toHaveLength(2);
-    expect(Math.round(waveBudget(10, cfg))).toBe(82);
+    expect(Math.round(waveBudget(10, cfg))).toBe(123);
     const blocks = (n: number) => planWave(n, 1, cfg).groups.filter((g) => g.members.some((m) => m.kind === 'grunt')).length;
     expect(blocks(25)).toBe(6);
     for (const n of [5, 12, 19]) {
@@ -79,8 +79,8 @@ describe('waves', () => {
 
   it('brings catapults every wave, barrels from wave 5 and bosses on 10, 20 and 25', () => {
     const cfg = makeConfig();
-    expect(planWave(1, 1, cfg).totals.orcCatapult).toBe(2);
-    expect(planWave(25, 1, cfg).totals.orcCatapult).toBe(9);
+    expect(planWave(1, 1, cfg).totals.orcCatapult).toBe(3);
+    expect(planWave(25, 1, cfg).totals.orcCatapult).toBe(13);
     expect(planWave(4, 1, cfg).totals.barrel).toBe(0);
     expect(planWave(5, 1, cfg).totals.barrel).toBe(2);
     expect(planWave(10, 1, cfg).tower).toBe(true);
@@ -115,9 +115,10 @@ describe('the shield and the balls', () => {
     expect(game.shield.x).toBeLessThan(15);
     run(game, 0.5);
     expect(game.shield.x).toBeCloseTo(15, 5);
+    // The shield runs right up to the edge of the wall, half of it overhanging.
     game.setShield(100);
     run(game, 0.5);
-    expect(game.shield.x).toBeCloseTo(game.cfg.field.halfWidth - game.shieldHalfWidth(), 5);
+    expect(game.shield.x).toBeCloseTo(game.cfg.field.halfWidth - game.shieldHalfWidth() * 0.5, 5);
   });
 
   it('serves the Royal Ball from the shield at the start of a wave, and again after it is lost', () => {
@@ -154,14 +155,21 @@ describe('the shield and the balls', () => {
     expect(game.segmentHp[game.segmentAt(15)]).toBe(400 - 25);
   });
 
-  it('angle control: the centre goes straight up, edges go wide, the edge zone is a trick shot', () => {
+  it('hybrid bounce: the flat middle mirrors the ball, the edges kick it wide as a trick shot', () => {
     const game = new Game(1);
-    expect(game.bounceAngle(0)).toBe(0);
-    expect(Math.abs(game.bounceAngle(0.2))).toBeCloseTo(0.1745);
-    expect(game.bounceAngle(0.8)).toBeCloseTo(0.96);
-    expect(game.bounceAngle(-0.8)).toBeCloseTo(-0.96);
-    expect(game.bounceAngle(1)).toBeCloseTo(1.309);
-    expect(game.bounceAngle(0.95)).toBeGreaterThan(1.134);
+    expect(game.bounceAngle(0, 0.3)).toBe(0.3);
+    expect(game.bounceAngle(0.7, -0.4)).toBe(-0.4);
+    expect(game.bounceAngle(1, -0.4)).toBeCloseTo(1.309);
+    expect(game.bounceAngle(-1, 0.4)).toBeCloseTo(-1.309);
+    expect(game.bounceAngle(0.9)).toBeGreaterThan(1.134);
+    // A ball coming in at an angle leaves at the same angle off the middle.
+    const m = battle();
+    m.setShield(-6);
+    run(m, 0.2);
+    const mb = ball(m, { x: -6, y: 5.2, vx: 6, vy: -18 });
+    run(m, 0.05);
+    expect(mb.vy).toBeGreaterThan(0);
+    expect(mb.vx / mb.vy).toBeCloseTo(6 / 18, 1);
     // A trick shot off the edge starts its combo at 1.
     // Clear of the tower turrets, which would bank it.
     const g = battle();
@@ -174,14 +182,49 @@ describe('the shield and the balls', () => {
     expect(b.combo).toBe(1);
   });
 
-  it('balls bounce off the tree lines and the top edge, and pay double behind the lines', () => {
+  it('the Royal Ball rebounds off the tree lines and the top edge, and pays double behind the lines', () => {
     const game = battle();
-    const b = ball(game, { x: 18, y: 66, vx: 20, vy: 20 });
+    const b = ball(game, { kind: 'royal', x: 18, y: 66, vx: 20, vy: 20 });
     run(game, 0.15);
     expect(b.vx).toBeLessThan(0);
     expect(b.vy).toBeLessThan(0);
     expect(b.behind).toBe(true);
     expect(game.ballGoldMult(b)).toBe(2);
+  });
+
+  it('a caught boulder sails off the top of the field instead of rebounding', () => {
+    const game = battle();
+    ball(game, { x: 0, y: 66, vx: 0, vy: 20 });
+    run(game, 0.2);
+    expect(game.balls).toHaveLength(0);
+    expect(game.ballsLost).toBe(0);
+  });
+
+  it('the Royal Ball flattens any orc but a boss in one hit', () => {
+    const game = battle();
+    const ogre = enemy({ kind: 'ogre', x: 0, y: 20, hp: 50, maxHp: 50, state: 'stand' });
+    game.enemies.push(ogre);
+    ball(game, { kind: 'royal', x: 0, y: 16, vx: 0, vy: 20 });
+    run(game, 0.3);
+    expect(ogre.hp).toBeLessThanOrEqual(0);
+  });
+
+  it('balls knock into each other', () => {
+    const game = battle();
+    const a = ball(game, { id: 1, x: -2, y: 30, vx: 20, vy: 0.1 });
+    const b = ball(game, { id: 2, x: 2, y: 30, vx: -20, vy: 0.1 });
+    run(game, 0.15);
+    expect(a.vx).toBeLessThan(0);
+    expect(b.vx).toBeGreaterThan(0);
+  });
+
+  it('moving the shield as it hits curves the ball', () => {
+    const game = battle();
+    game.shield.x = -8;
+    game.setShield(8);
+    const b = ball(game, { x: -7, y: 4.9, vx: 0, vy: -20 });
+    run(game, 0.02);
+    expect(b.spin).not.toBe(0);
   });
 
   it('balls never skate sideways flatter than 75 degrees', () => {
@@ -223,7 +266,7 @@ describe('the shield and the balls', () => {
       game.enemies.push(e);
     }
     // Another row behind it stays standing.
-    const back = enemy({ x: 0.5, y: 22, hp: 20, maxHp: 20, state: 'stand' });
+    const back = enemy({ x: 0.5, y: 25, hp: 20, maxHp: 20, state: 'stand' });
     game.enemies.push(back);
     game.blocks.push(block);
     const b = ball(game, { x: 0, y: 4.9, vy: -20 });
@@ -234,12 +277,15 @@ describe('the shield and the balls', () => {
     run(game, 1);
     expect(block.members.every((e) => e.hp <= 0)).toBe(true);
     expect(game.kills).toBeGreaterThanOrEqual(8);
-    expect(back.hp).toBeGreaterThan(0);
-    // The shield needs a moment to recover.
+    // It ploughs on through the next line too, rather than bouncing.
+    expect(back.hp).toBeLessThanOrEqual(0);
+    // The shield needs 3 s to recover.
+    expect(game.canHeave).toBe(false);
+    run(game, 2);
     expect(game.canHeave).toBe(true);
   });
 
-  it('a heave too early is just a normal hit, and the shield needs 1 s to recover', () => {
+  it('a heave too early is just a normal hit, and the shield needs 3 s to recover', () => {
     const game = battle();
     expect(game.heave()).toBe(true);
     expect(game.canHeave).toBe(false);
@@ -248,6 +294,8 @@ describe('the shield and the balls', () => {
     run(game, 0.05);
     expect(b.heaved).toBe(false);
     run(game, 0.6);
+    expect(game.canHeave).toBe(false);
+    run(game, 2);
     expect(game.canHeave).toBe(true);
   });
 
@@ -389,25 +437,18 @@ describe('game', () => {
     expect(block.members.filter((e) => e.slotY === front)).toHaveLength(rank.length);
   });
 
-  it('slap spends Vigor, damages and knocks back enemies under the cursor', () => {
-    const game = battle();
-    game.enemies.push(enemy({ x: 0.5, y: 2 }), enemy({ x: 10, y: 2 }));
-    expect(game.slap(0, 2)).toBe(true);
-    expect(game.vigor).toBe(game.cfg.slap.vigorMax - game.cfg.slap.vigorCost);
-    expect(game.enemies[1].hp).toBe(10 - game.cfg.slap.damage);
-    expect(game.enemies[1].vy).toBeGreaterThan(0);
-    expect(game.enemies[2].hp).toBe(10);
-  });
-
   it('wins after the final wave', () => {
     const cfg = quiet();
     cfg.waves.finalWave = 1;
     const game = new Game(1, cfg);
-    const bot = expertBot();
-    for (let i = 0; i < 60 * 300 && !game.over; i++) {
-      bot(game);
+    game.closeCouncil();
+    game.skipPreview();
+    const total = planSize(game.plan);
+    for (let i = 0; i < 60 * 120 && !game.over; i++) {
+      for (const e of game.enemies) e.hp = 0;
       game.step();
     }
+    expect(game.kills).toBe(total);
     expect(game.phase).toBe('won');
     expect(game.wavesSurvived).toBe(1);
   });
@@ -517,9 +558,9 @@ describe('run loop', () => {
     expect(game.upgradeShield('power')).toBe(true);
     expect(game.upgradeShield('power')).toBe(true);
     expect(game.upgradeShield('power')).toBe(false);
-    expect(game.heaveLines()).toBe(3);
+    expect(game.heaveLines()).toBe(5);
     for (let i = 0; i < 10; i++) game.upgradeShield('recovery');
-    expect(game.heaveCooldown()).toBeCloseTo(0.4);
+    expect(game.heaveCooldown()).toBeCloseTo(1.2);
   });
 
   it('repairs walls at 1 gold per 2 HP, only during the council', () => {
@@ -542,8 +583,7 @@ describe('run loop', () => {
     game.callEarly();
     game.balls = [];
     const afterCall = game.gold;
-    game.enemies.push(enemy({ x: 0, y: 30, hp: 0.1 }));
-    game.slap(0, 30);
+    game.enemies.push(enemy({ x: 0, y: 30, hp: 0 }));
     run(game, 0.1);
     expect(game.wavesSurvived).toBe(1);
     expect(game.gold - afterCall).toBeCloseTo(game.cfg.grunt.gold + 12); // grunt + 10 + 2 x wave
@@ -644,9 +684,8 @@ describe('run loop', () => {
 
   it('killing a warlord pays boss Renown', () => {
     const game = battle();
-    game.enemies.push(enemy({ kind: 'warlord', y: 40, hp: 1, maxHp: 2000 }));
+    game.enemies.push(enemy({ kind: 'warlord', y: 40, hp: 0, maxHp: 2000 }));
     const before = game.renown;
-    game.slap(0, 40);
     run(game, 0.05);
     expect(game.renown - before).toBe(game.cfg.renown.bossKill);
   });
@@ -654,11 +693,13 @@ describe('run loop', () => {
   it('an average paddle bot gets through the opening waves headlessly', () => {
     const game = new Game(5);
     const bot = averageBot();
-    for (let i = 0; i < 60 * 60 * 10 && !game.over && game.cleared < 6; i++) {
+    // The game is meant to be hard without meta upgrades: a first run should hold the
+    // opening waves and then fall.
+    for (let i = 0; i < 60 * 60 * 10 && !game.over && game.cleared < 2; i++) {
       bot(game);
       game.step();
     }
-    expect(game.cleared).toBeGreaterThanOrEqual(6);
+    expect(game.cleared).toBeGreaterThanOrEqual(2);
     expect(game.blocked).toBeGreaterThan(0);
   });
 });

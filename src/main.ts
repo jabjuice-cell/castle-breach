@@ -3,8 +3,6 @@ import callWaveUrl from './assets/icons/call-wave.png';
 import goldUrl from './assets/icons/gold.png';
 import renownUrl from './assets/icons/renown.png';
 import shieldUrl from './assets/icons/shield.png';
-import slapUrl from './assets/icons/slap.png';
-import vigorUrl from './assets/icons/vigor.png';
 import queenUrl from './assets/characters/queen.webp';
 import { queenAdvice } from './queen';
 import { BattleScene, CAPSULE_LOOK, type PlanPreview, QUALITIES, type Quality } from './render/scene';
@@ -15,7 +13,7 @@ import { ENEMY_KINDS, type EnemyKind } from './sim/waves';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
-const ICONS: Record<string, string> = { gold: goldUrl, renown: renownUrl, shield: shieldUrl, slap: slapUrl, vigor: vigorUrl, call: callWaveUrl };
+const ICONS: Record<string, string> = { gold: goldUrl, renown: renownUrl, shield: shieldUrl, call: callWaveUrl };
 const icon = (name: string) => `<img class="ico" src="${ICONS[name]}" alt="" />`;
 document.querySelectorAll<HTMLImageElement>('img[data-icon]').forEach((img) => (img.src = ICONS[img.dataset.icon!]));
 document.documentElement.style.setProperty('--wall-states', `url(${wallStatesUrl})`);
@@ -75,6 +73,7 @@ let running = false;
 const params = new URLSearchParams(location.search);
 if (params.has('debug')) {
   Object.defineProperty(window, 'game', { get: () => game });
+  Object.defineProperty(window, 'view', { get: () => view });
 }
 const autoplay = params.has('debug') && params.has('auto');
 
@@ -90,7 +89,7 @@ function autoShield() {
   if (best) input.shieldX = Math.max(-game.cfg.field.halfWidth, Math.min(game.cfg.field.halfWidth, best.x + Math.sin(game.time) * 1.5));
   if ((best && best.t < 0.05) || game.balls.some((b) => b.stuck)) game.heave();
 }
-/** The mouse on the ground (for slaps and placing) and along the shield's line. */
+/** The mouse on the ground (for placing) and along the shield's line. */
 const input = { x: 0, y: 30, shieldX: 0 };
 /** The defender being placed after a purchase, or the one being dragged to a new spot. */
 let placing: PlacedKind | null = null;
@@ -166,7 +165,6 @@ canvas.addEventListener('pointerdown', (e) => {
   sounds.unlock();
   if (e.button === 2) {
     if (placing) cancelPlacing();
-    else if (running) game.slap(input.x, input.y);
     return;
   }
   if (e.button !== 0) return;
@@ -202,7 +200,6 @@ window.addEventListener('keydown', (e) => {
     e.preventDefault();
     if (running && !e.repeat) game.heave();
   }
-  if (e.code === 'KeyF' && running) game.slap(input.x, input.y);
   if (e.code === 'Escape' && placing) cancelPlacing();
   if (e.code === 'Enter' && running && game.phase !== 'council') game.callEarly();
 });
@@ -277,7 +274,6 @@ const hud = {
   balls: $('balls'),
   combo: $('combo'),
   effects: $('effects'),
-  vigor: $('vigor'),
   wallBars: $('wallBars'),
   preview: $('preview'),
   previewTitle: $('previewTitle'),
@@ -395,7 +391,9 @@ function updateFloaters(dt: number) {
     }
     const p = view.project(f.x, f.y, 3 + f.t * 3);
     const u = f.t / f.life;
-    f.el.style.transform = `translate(${p.x}px, ${p.y}px) translate(-50%, -50%) scale(${u < 0.15 ? 0.6 + u * 2.7 : 1})`;
+    // Punch in past full size, settle, then drift up and fade.
+    const pop = u < 0.08 ? 0.4 + (u / 0.08) * 1.0 : u < 0.2 ? 1.4 - ((u - 0.08) / 0.12) * 0.4 : 1;
+    f.el.style.transform = `translate(${p.x}px, ${p.y}px) translate(-50%, -50%) scale(${pop})`;
     f.el.style.opacity = String(u > 0.7 ? 1 - (u - 0.7) / 0.3 : 1);
   }
 }
@@ -406,6 +404,11 @@ function toast(text: string) {
   hud.toast.hidden = false;
   toastTimer = 1.6;
 }
+
+/** Wall bars: how long the red chunk holds after a hit, and how fast it drains (share of a bar per second). */
+const BAR_HOLD = 0.45;
+const BAR_DRAIN = 0.5;
+let wallLag: { frac: number; hold: number }[] = [];
 
 function updateHud(dt: number) {
   const c = game.cfg;
@@ -445,15 +448,26 @@ function updateHud(dt: number) {
 
   game.segmentHp.forEach((hp, i) => {
     const el = hud.wallBars.children[i] as HTMLElement;
-    const frac = hp / c.wall.segmentHp;
+    const frac = Math.max(0, hp / c.wall.segmentHp);
     const p = view.project(-c.field.halfWidth + (i + 0.5) * game.segmentWidth(), -1, 6.2);
     el.style.left = `${p.x}px`;
     el.style.top = `${p.y}px`;
     el.classList.toggle('warn', frac < c.wall.warnBelow);
-    (el.firstElementChild!.firstElementChild as HTMLElement).style.transform = `scaleX(${frac})`;
-  });
-  Array.from(hud.vigor.children).forEach((pip, i) => {
-    (pip as HTMLElement).style.setProperty('--f', String(Math.max(0, Math.min(1, game.vigor - i))));
+    // The red chunk holds for a moment after a hit, then drains down to the yellow.
+    const lag = wallLag[i] ?? { frac, hold: 0 };
+    if (frac >= lag.frac) {
+      lag.frac = frac;
+      lag.hold = 0;
+    } else if (lag.hold < BAR_HOLD) {
+      lag.hold += dt;
+    } else {
+      lag.frac = Math.max(frac, lag.frac - dt * BAR_DRAIN);
+    }
+    wallLag[i] = lag;
+    el.classList.toggle('hit', lag.hold > 0 && lag.hold < 0.12);
+    const [red, yellow] = el.firstElementChild!.children as unknown as HTMLElement[];
+    red.style.transform = `scaleX(${lag.frac})`;
+    yellow.style.transform = `scaleX(${frac})`;
   });
 
   const previewing = game.phase === 'preview' && running;
@@ -652,15 +666,15 @@ function showEnd(won: boolean, segment = 0) {
 }
 
 function buildHud() {
+  wallLag = [];
   hud.wallBars.replaceChildren(
     ...game.segmentHp.map(() => {
       const el = document.createElement('div');
       el.className = 'seg';
-      el.innerHTML = '<div class="bar"><i></i></div>';
+      el.innerHTML = '<div class="bar"><b></b><i></i></div>';
       return el;
     }),
   );
-  hud.vigor.replaceChildren(...Array.from({ length: game.cfg.slap.vigorMax }, () => document.createElement('i')));
   councilShown = false;
   spotLabelsShown = false;
 }
@@ -696,13 +710,16 @@ function updateGhost() {
 
 let last = performance.now();
 let acc = 0;
+let hitStop = 0;
 function frame(now: number) {
   const dt = Math.min(0.1, (now - last) / 1000);
   last = now;
   if (running) {
     if (autoplay) autoShield();
     game.setShield(input.shieldX);
-    acc += dt;
+    // Hit-stop: the action freezes for a few frames on a big hit, so it lands with weight.
+    if (hitStop > 0) hitStop -= dt;
+    else acc += dt;
     let steps = 0;
     while (acc >= STEP && steps < 6) {
       game.step(STEP);
@@ -720,10 +737,34 @@ function frame(now: number) {
           showEnd(true);
           break;
         case 'deflect':
-          sounds.clang(ev.parry);
+          // A light clink for a bounce; the full clang for a heave or a trick shot off the rim.
+          if (ev.parry) hitStop = Math.max(hitStop, 0.04);
+          if (ev.parry || ev.trick) sounds.clang(ev.parry);
+          else sounds.clink();
           if (ev.trick) floater('Trick shot!', ev.x, game.cfg.shield.y, 'trick', 0.9);
           break;
+        case 'rebound':
+          floater('REBOUND!', ev.x, ev.y - 3, 'rebound', 1.1);
+          sounds.clink();
+          break;
+        case 'bank':
+          floater('BANK!', ev.x, ev.y + 1, 'bank', 0.8);
+          break;
+        case 'hit':
+          // The running combo pops off each hit; the milestones get their own big banner.
+          if (ev.combo !== undefined && ev.combo >= 3 && !game.cfg.balls.comboMilestones.includes(ev.combo)) {
+            floater(`${ev.combo} COMBO`, ev.x, ev.y, ev.combo >= 10 ? 'chain hot' : 'chain', 0.7);
+          }
+          break;
+        case 'wallHit':
+          if (ev.damage >= 3) sounds.crunch(ev.damage);
+          break;
+        case 'segmentDestroyed':
+          floater('BREACH!', -game.cfg.field.halfWidth + (ev.segment + 0.5) * game.segmentWidth(), 2, 'breach', 1.6);
+          sounds.boom();
+          break;
         case 'line':
+          hitStop = Math.max(hitStop, 0.06);
           floater('SMASH!', (ev.x0 + ev.x1) / 2, ev.y, 'smash', 0.9);
           break;
         case 'combo':
@@ -732,6 +773,7 @@ function frame(now: number) {
           break;
         case 'blast':
         case 'floorDown':
+          hitStop = Math.max(hitStop, 0.05);
           sounds.boom();
           break;
         case 'caught':
@@ -760,7 +802,7 @@ function frame(now: number) {
     game.events.length = 0;
   }
   updateGhost();
-  view.setCursor(input.x, input.y, game.vigor >= game.cfg.slap.vigorCost, false);
+  sounds.scrape(running && game.phase === 'battle' ? Math.abs(game.shield.vx) / game.cfg.shield.speed : 0);
   view.render(dt, now / 1000);
   updateHud(dt);
   updateCouncil();
