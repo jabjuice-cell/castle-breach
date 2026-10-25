@@ -11,18 +11,23 @@ export type Bot = (game: Game) => void;
 
 type Purchase = { cost: number; buy: () => boolean };
 
-/** Puts a defender on a spot, opening the spot first if it's closed. */
-function placeOn(game: Game, kind: PlacedKind, spotId: number): boolean {
-  const spot = game.spots[spotId];
-  if (game.defenders.some((d) => d.spot === spotId)) return false;
-  if (!game.openSpots[spotId] && game.gold < game.spotCost() + game.defenderCost(kind)) return false;
-  if (!game.openSpots[spotId] && !game.openSpot(spotId)) return false;
-  return game.place(kind, spot.x, spot.y);
+/** Puts a defender down at (x, y), unless one of that kind already stands there. */
+function placeAt(game: Game, kind: PlacedKind, x: number, y: number): boolean {
+  if (game.defenders.some((d) => d.kind === kind && Math.hypot(d.x - x, d.y - y) < 0.5)) return true;
+  return game.place(kind, x, y);
 }
 
-/** An open, empty spot, if any. */
-function emptySpots(game: Game): number[] {
-  return game.spots.filter((s) => game.openSpots[s.id] && !game.defenders.some((d) => d.spot === s.id)).map((s) => s.id);
+/** Candidate places a casual player tries in turn: along the wall walk from the gate outward, then the courtyard. */
+function casualPlaces(game: Game): { x: number; y: number }[] {
+  const hw = game.cfg.field.halfWidth - 1;
+  const out: { x: number; y: number }[] = [];
+  for (const y of [-1, -6]) {
+    for (let k = 0; k <= hw; k += 1) {
+      out.push({ x: k, y });
+      if (k) out.push({ x: -k, y });
+    }
+  }
+  return out;
 }
 
 function ownedKinds(game: Game): DefenderKind[] {
@@ -57,57 +62,59 @@ function repairBelow(game: Game, share: number): void {
     });
 }
 
-/** Casual shopping: patch badly hurt walls, then keep buying whatever is cheapest, in the first free spot. */
+/** Casual shopping: patch badly hurt walls, then keep buying whatever is cheapest, in the first place it fits. */
 function cheapestShop(game: Game): void {
   repairBelow(game, 0.5);
+  const places = casualPlaces(game);
   buyCheapest(game, () => {
     const list = upgrades(game);
-    const spot = emptySpots(game)[0];
-    if (spot !== undefined) {
-      for (const kind of PLACED_KINDS) if (game.unlocked(kind)) list.push({ cost: game.defenderCost(kind), buy: () => placeOn(game, kind, spot) });
+    for (const kind of PLACED_KINDS) {
+      if (!game.unlocked(kind)) continue;
+      const at = places.find((p) => game.canPlace(kind, p.x, p.y));
+      if (at) list.push({ cost: game.defenderCost(kind), buy: () => game.place(kind, at.x, at.y) });
     }
     return list;
   });
 }
 
-/** Random placement: the same budget, but defenders and new spots chosen at random. */
+/** Random placement: the same budget, but defenders dropped at random places on the castle. */
 function randomShop(game: Game, rng: Rng): void {
   repairBelow(game, 0.75);
-  for (let tries = 0; tries < 40; tries++) {
+  const c = game.cfg.castle;
+  const hw = game.cfg.field.halfWidth - c.edge;
+  for (let tries = 0; tries < 80; tries++) {
     const kinds = PLACED_KINDS.filter((k) => game.unlocked(k));
     const kind = kinds[rng.int(0, kinds.length - 1)];
-    const free = emptySpots(game);
-    const closed = game.spots.filter((s) => !game.openSpots[s.id]).map((s) => s.id);
-    const spot = free.length && (closed.length === 0 || rng.next() < 0.7) ? free[rng.int(0, free.length - 1)] : closed[rng.int(0, Math.max(0, closed.length - 1))];
-    if (spot === undefined || game.gold < game.defenderCost(kind)) break;
-    placeOn(game, kind, spot);
+    if (game.gold < game.defenderCost(kind)) break;
+    game.place(kind, rng.range(-hw, hw), rng.range(c.minY, c.maxY));
   }
   buyCheapest(game, () => upgrades(game));
 }
 
 /**
- * What a sensible player buys, in order, and where it goes. Spot ids: wall spots 0-9
- * (two per section), tower tops 10-15 (x -19.5, -12, -4, 4, 12, 19.5), courtyard 16-19.
- * Crossbows go on tower tops, where they can angle across two lanes at the catapults;
- * archers spread so their cones cover every section against boulders.
+ * What a sensible player buys, in order, and where it goes (x, y on the castle; the wall
+ * walk is y -2 to 0, the courtyard behind it). Crossbows go on the inner tower tops
+ * (x -4, 4, -12, 12), where they can angle across lanes at the catapults; archers spread
+ * between them so their cones cover every section against boulders; soldiers and
+ * catapults stand back in the courtyard.
  */
-const BUILD_ORDER: ([DefenderKind, number] | [ShieldTrack, number, 'shield'])[] = [
-  ['crossbow', 12],
+const BUILD_ORDER: ([DefenderKind, number, number] | [ShieldTrack, number, 'shield'])[] = [
+  ['crossbow', -4, -1],
   ['width', 1, 'shield'],
-  ['archers', 4],
-  ['crossbow', 13],
-  ['archers', 1],
-  ['archers', 8],
+  ['archers', 0, -1],
+  ['crossbow', 4, -1],
+  ['archers', -8, -1],
+  ['archers', 8, -1],
   ['recovery', 2, 'shield'],
-  ['soldiers', 5],
-  ['crossbow', 11],
-  ['crossbow', 14],
-  ['catapult', 17],
+  ['soldiers', 0, -5.5],
+  ['crossbow', -12, -1],
+  ['crossbow', 12, -1],
+  ['catapult', -8, -8],
   ['width', 3, 'shield'],
-  ['soldiers', 0],
-  ['soldiers', 9],
+  ['soldiers', -16, -5.5],
+  ['soldiers', 16, -5.5],
   ['window', 2, 'shield'],
-  ['catapult', 18],
+  ['catapult', 8, -8],
   ['power', 1, 'shield'],
 ];
 
@@ -115,15 +122,15 @@ const BUILD_ORDER: ([DefenderKind, number] | [ShieldTrack, number, 'shield'])[] 
 function plannedShop(game: Game): void {
   repairBelow(game, 0.75);
   for (const item of BUILD_ORDER) {
-    if (item.length === 3) {
+    if (item[2] === 'shield') {
       const [track, level] = item;
       if (game.shieldLevels[track] >= level) continue;
       if (!game.upgradeShield(track)) return;
       continue;
     }
-    const [kind, spot] = item;
-    if (!game.unlocked(kind) || game.defenders.some((d) => d.spot === spot)) continue;
-    if (!placeOn(game, kind, spot)) return;
+    const [kind, x, y] = item;
+    if (!game.unlocked(kind)) continue;
+    if (!placeAt(game, kind, x, y)) return;
   }
   buyCheapest(game, () => upgrades(game));
 }

@@ -5,36 +5,25 @@ import type { Config } from './config';
 export const DEFENDER_KINDS = ['crossbow', 'archers', 'catapult', 'soldiers'] as const;
 export type DefenderKind = (typeof DEFENDER_KINDS)[number];
 
-/** Every defender stands on one of the castle's fixed spots. Soldiers hold the foot of the wall below theirs. */
+/** Defenders go anywhere on the castle grounds. Soldiers hold the foot of the wall below theirs. */
 export const PLACED_KINDS = DEFENDER_KINDS;
 export type PlacedKind = DefenderKind;
 
-export type SpotKind = 'wall' | 'tower' | 'courtyard';
+/** What a defender stands on, which changes its reach: tower tops reach further, the courtyard less far. */
+export type Ground = 'wall' | 'tower' | 'courtyard';
 
-/** A fixed place a defender can stand: 2 on each wall section, the 6 tower tops and 4 in the courtyard. */
-export interface Spot {
-  id: number;
-  x: number;
-  y: number;
-  kind: SpotKind;
-}
-
-/** The castle's 20 defender spots, from the castle config. Ids: walls 0-9, towers 10-15, courtyard 16-19. */
-export function castleSpots(cfg: Config): Spot[] {
-  const c = cfg.castle;
+/** The x of each tower: one on every joint of the wall, the ends included. */
+export function towerXs(cfg: Config): number[] {
   const hw = cfg.field.halfWidth;
   const seg = (hw * 2) / cfg.wall.segments;
-  const spots: Spot[] = [];
-  for (let i = 0; i < cfg.wall.segments; i++) {
-    const mid = -hw + (i + 0.5) * seg;
-    for (const side of [-1, 1]) spots.push({ id: spots.length, x: mid + side * c.wallOffset, y: c.wallY, kind: 'wall' });
-  }
-  for (let i = 0; i <= cfg.wall.segments; i++) {
-    const x = Math.max(-hw + c.edge, Math.min(hw - c.edge, -hw + i * seg));
-    spots.push({ id: spots.length, x, y: c.wallY, kind: 'tower' });
-  }
-  for (const x of c.courtyardX) spots.push({ id: spots.length, x, y: c.courtyardY, kind: 'courtyard' });
-  return spots;
+  return Array.from({ length: cfg.wall.segments + 1 }, (_, i) => -hw + i * seg);
+}
+
+/** The ground at (x, y): a tower top, the wall walk, or the courtyard behind. */
+export function groundAt(cfg: Config, x: number, y: number): Ground {
+  const c = cfg.castle;
+  if (y < -cfg.wall.depth - c.wallSlack) return 'courtyard';
+  return towerXs(cfg).some((tx) => Math.abs(x - tx) <= c.towerHalf) ? 'tower' : 'wall';
 }
 
 export const TRACKS = ['damage', 'rate', 'special'] as const;
@@ -58,8 +47,8 @@ export const SPECIAL_NAMES: Record<DefenderKind, string> = {
 export interface Defender {
   id: number;
   kind: PlacedKind;
-  /** The spot it stands on. */
-  spot: number;
+  /** What it stands on. */
+  ground: Ground;
   x: number;
   y: number;
   /** Countdown to the next shot. */

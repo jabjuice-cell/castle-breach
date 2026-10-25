@@ -19,7 +19,7 @@ for (let i = 0; i < 60 * 60 * 60 && !game.over; i++) {
   for (const ev of game.events) {
     if (ev.type === 'waveStart') waveStart = game.time;
     if (ev.type === 'waveCleared' || ev.type === 'lost') {
-      console.log(`w${game.wave} ${ev.type} t=${(game.time - waveStart).toFixed(0)}s minWall=${minHp.toFixed(0)} gold=${game.gold.toFixed(0)} peak=${maxEnemies} balls=${maxBalls} blocked=${game.blocked}/${game.blocked + game.missed} lost=${game.ballsLost} combo=${game.bestCombo} defs=${game.defenders.map((d) => d.kind[0] + d.spot).join(',')} shield=${Object.values(game.shieldLevels).join('/')}`);
+      console.log(`w${game.wave} ${ev.type} t=${(game.time - waveStart).toFixed(0)}s minWall=${minHp.toFixed(0)} gold=${game.gold.toFixed(0)} peak=${maxEnemies} balls=${maxBalls} blocked=${game.blocked}/${game.blocked + game.missed} lost=${game.ballsLost} combo=${game.bestCombo} defs=${game.defenders.map((d) => `${d.kind[0]}${d.x.toFixed(0)},${d.y.toFixed(0)}`).join(',')} shield=${Object.values(game.shieldLevels).join('/')}`);
       minHp = 1e9; maxEnemies = 0; maxBalls = 0;
     }
   }

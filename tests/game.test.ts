@@ -477,26 +477,21 @@ describe('run loop', () => {
     expect(later.place('archers', -4, -1)).toBe(true);
   });
 
-  it('defenders stand on fixed spots: 20 in all, 6 open in run 1, more opened for gold', () => {
+  it('defenders go exactly where they are put on the castle, clear of each other', () => {
     const game = new Game(1, veteran());
-    expect(game.spots).toHaveLength(20);
-    expect(game.spots.filter((s) => s.kind === 'tower')).toHaveLength(6);
-    expect(game.openSpots.filter(Boolean)).toHaveLength(6);
     game.gold = 1000;
     expect(game.place('catapult', 0, 20)).toBe(false); // out on the battlefield
-    expect(game.place('crossbow', -3.5, -0.5)).toBe(true); // snaps to the tower top at x = -4
-    expect(game.defenders[0]).toMatchObject({ x: -4, y: -1, spot: 12 });
-    expect(game.place('catapult', -4, -1)).toBe(false); // taken
-    expect(game.place('catapult', -12, -7)).toBe(false); // courtyard spot still closed
-    expect(game.spotCost()).toBe(40);
-    expect(game.openSpot(16)).toBe(true);
-    expect(game.spotCost()).toBe(52);
-    expect(game.place('catapult', -12, -7)).toBe(true);
+    expect(game.place('crossbow', -3.5, -0.5)).toBe(true); // no snapping: it stands where it was put
+    expect(game.defenders[0]).toMatchObject({ x: -3.5, y: -0.5, ground: 'tower' });
+    expect(game.place('catapult', -2, -1)).toBe(false); // too close: they would overlap
+    expect(game.place('catapult', -12, -7.3)).toBe(true);
+    expect(game.defenders[1].ground).toBe('courtyard');
+    expect(game.place('soldiers', 1, -1.2)).toBe(true);
+    expect(game.defenders[2].ground).toBe('wall');
     // Each extra one of a kind costs more.
     expect(game.defenderCost('crossbow')).toBe(Math.round(100 * game.cfg.castle.priceGrowth));
     game.closeCouncil();
-    expect(game.place('archers', 4, -1)).toBe(false); // the shop is shut
-    expect(game.openSpot(17)).toBe(false);
+    expect(game.place('archers', 12, -1)).toBe(false); // the shop is shut
   });
 
   it('coverage: crossbows shoot up a lane, tower tops angle wider, catapults have a blind spot', () => {
@@ -504,7 +499,7 @@ describe('run loop', () => {
     game.gold = 2000;
     game.place('crossbow', -1.8, -1); // a wall spot
     game.place('crossbow', 4, -1); // a tower top
-    game.place('catapult', 1.8, -1);
+    game.place('catapult', 1.8, -6); // the courtyard
     const [wall, tower, cat] = game.defenders;
     expect(game.covers(wall, -1.8, 50)).toBe(true);
     expect(game.covers(wall, 6, 50)).toBe(false);

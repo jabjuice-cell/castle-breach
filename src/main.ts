@@ -7,7 +7,7 @@ import queenUrl from './assets/characters/queen.webp';
 import { queenAdvice } from './queen';
 import { BattleScene, CAPSULE_LOOK, type PlanPreview, QUALITIES, type Quality } from './render/scene';
 import { Sounds } from './render/sound';
-import { DEFENDER_KINDS, type DefenderKind, type PlacedKind, SPECIAL_NAMES, type Track, USEFUL_TRACKS } from './sim/defenders';
+import { DEFENDER_KINDS, type DefenderKind, type Ground, type PlacedKind, SPECIAL_NAMES, type Track, USEFUL_TRACKS, groundAt } from './sim/defenders';
 import { Game, SHIELD_TRACKS, STEP, type ShieldTrack } from './sim/game';
 import { ENEMY_KINDS, type EnemyKind } from './sim/waves';
 
@@ -120,7 +120,7 @@ function pointerToSim(e: PointerEvent | MouseEvent) {
   if (sx !== null) input.shieldX = sx;
 }
 
-/** Places the defender being bought: on the open spot under the mouse, or opens a closed one first if gold allows. */
+/** Places the defender being bought exactly where the mouse is on the castle. */
 function tryPlace(kind: PlacedKind) {
   if (game.place(kind, input.x, input.y)) {
     placing = null;
@@ -129,35 +129,23 @@ function tryPlace(kind: PlacedKind) {
     renderCouncil();
     return;
   }
-  const closed = nearestSpot(input.x, input.y, false);
-  if (closed !== undefined && game.gold >= game.spotCost() + game.defenderCost(kind)) {
-    const spot = game.spots[closed];
-    game.openSpot(closed);
-    if (game.place(kind, spot.x, spot.y)) {
-      placing = null;
-      toast(`Spot opened, ${DEFENDER_INFO[kind].name.toLowerCase()} in position`);
-      sounds.thunk();
-      renderCouncil();
-      return;
-    }
-  }
-  toast(closed !== undefined ? 'Not enough gold to open that spot' : game.canPlace(kind, input.x, input.y) ? 'Not enough gold' : 'Pick an open spot on the castle');
+  toast(game.canPlace(kind, input.x, input.y) ? 'Not enough gold' : whyNot(kind, input.x, input.y));
 }
 
-/** The nearest spot to (x, y) within snapping distance that is open (or closed), if any. */
-function nearestSpot(x: number, y: number, open: boolean): number | undefined {
-  let best: number | undefined;
-  let bestD = game.cfg.castle.snap;
-  for (const s of game.spots) {
-    if (game.openSpots[s.id] !== open) continue;
-    const d = Math.hypot(s.x - x, s.y - y);
-    if (d < bestD) {
-      best = s.id;
-      bestD = d;
-    }
-  }
-  return best;
+/** Why a defender can't stand at (x, y): off the castle grounds, or on top of another one. */
+function whyNot(kind: PlacedKind, x: number, y: number): string {
+  const c = game.cfg.castle;
+  const hw = game.cfg.field.halfWidth - c.edge;
+  if (x < -hw || x > hw || y < c.minY || y > c.maxY) return 'Put it on the castle: the wall, a tower top or the courtyard';
+  return `Too close to another defender${kind === 'archers' ? ': a squad of archers needs room' : ''}`;
 }
+
+/** What standing at (x, y) does for a defender, for the label that follows the ghost. */
+const GROUND_NOTE: Record<Ground, string> = {
+  tower: 'Tower top: +25% range',
+  wall: 'Wall walk',
+  courtyard: 'Courtyard: safe, but 20% less range',
+};
 
 canvas.addEventListener('pointermove', pointerToSim);
 canvas.addEventListener('pointerdown', (e) => {
@@ -184,7 +172,8 @@ canvas.addEventListener('pointerdown', (e) => {
 window.addEventListener('pointerup', (e) => {
   if (e.button !== 0 || dragging === null) return;
   const cost = game.moveCost();
-  if (!game.move(dragging, input.x, input.y)) toast(game.gold < cost ? `Moving costs ${cost} gold mid-battle` : "Can't put it there");
+  const moved = game.defenders.find((d) => d.id === dragging);
+  if (moved && !game.move(dragging, input.x, input.y)) toast(game.gold < cost ? `Moving costs ${cost} gold mid-battle` : whyNot(moved.kind, input.x, input.y));
   else if (cost > 0) toast(`Moved for ${cost} gold: it packs up for a moment`);
   dragging = null;
   renderCouncilIfOpen();
@@ -284,7 +273,7 @@ const hud = {
   bossName: $('bossName'),
   bossBar: $('bossBar'),
   markers: $('markers'),
-  spotLabels: $('spotLabels'),
+  placeTag: $('placeTag'),
   floaters: $('floaters'),
   flash: $('flash'),
   council: $('council'),
@@ -325,50 +314,22 @@ function updateMarkers() {
   });
 }
 
-/** Price tags on the closed spots during the War Council: click one to open it. */
-let spotLabelsShown = false;
-function updateSpotLabels() {
-  const show = running && game.phase === 'council';
-  if (!show) {
-    if (spotLabelsShown) hud.spotLabels.replaceChildren();
-    spotLabelsShown = false;
+/** A tag over the ghost while placing: what the ground there gives, or why it won't fit. */
+function updatePlaceTag(kind: PlacedKind | undefined, ok: boolean, ignoreId: number) {
+  const tag = hud.placeTag;
+  if (!kind) {
+    tag.hidden = true;
     return;
   }
-  const cost = game.spotCost();
-  if (!spotLabelsShown || hud.spotLabels.children.length !== game.spots.length) {
-    spotLabelsShown = true;
-    hud.spotLabels.replaceChildren(
-      ...game.spots.map((s) => {
-        const el = document.createElement('button');
-        el.type = 'button';
-        el.className = 'spot';
-        el.dataset.spot = String(s.id);
-        return el;
-      }),
-    );
-  }
-  game.spots.forEach((s, i) => {
-    const el = hud.spotLabels.children[i] as HTMLButtonElement;
-    el.hidden = game.openSpots[i];
-    if (el.hidden) return;
-    const p = view.project(s.x, s.y, view.standHeight(s.x, -s.y) + 0.6);
-    el.style.left = `${p.x}px`;
-    el.style.top = `${p.y}px`;
-    const label = `🔒 ${cost}g`;
-    if (el.textContent !== label) el.textContent = label;
-    el.disabled = game.gold < cost;
-    el.title = `Open this ${s.kind === 'tower' ? 'tower top (+25% range)' : s.kind === 'courtyard' ? 'courtyard spot (safe, but 20% less range)' : 'wall spot'} for ${cost} gold`;
-  });
+  tag.hidden = false;
+  const text = ok ? GROUND_NOTE[groundAt(game.cfg, input.x, input.y)] : game.canPlace(kind, input.x, input.y, ignoreId) ? 'Not enough gold' : whyNot(kind, input.x, input.y);
+  if (tag.textContent !== text) tag.textContent = text;
+  tag.classList.toggle('bad', !ok);
+  const p = view.project(input.x, input.y, view.standHeight(input.x, -input.y) + (kind === 'crossbow' ? 5 : 3.2));
+  tag.style.left = `${p.x}px`;
+  tag.style.top = `${p.y}px`;
 }
-hud.spotLabels.addEventListener('click', (e) => {
-  const el = (e.target as HTMLElement).closest<HTMLButtonElement>('button[data-spot]');
-  if (!el || el.disabled) return;
-  if (game.openSpot(Number(el.dataset.spot))) {
-    toast('Spot opened');
-    sounds.thunk();
-    renderCouncil();
-  }
-});
+
 
 /** Floating text over the field: combos, capsules, line smashes. */
 const floaters: { el: HTMLElement; x: number; y: number; t: number; life: number }[] = [];
@@ -502,7 +463,6 @@ function updateHud(dt: number) {
   hud.flash.style.opacity = String(view.flashLevel * (calm ? 0.25 : 0.6));
   hud.flash.style.setProperty('--flash', view.flashColor);
   updateMarkers();
-  updateSpotLabels();
   updateFloaters(dt);
 }
 
@@ -536,17 +496,15 @@ function councilHtml(): string {
   const btn = (action: string, label: string, cost: number, disabled = false) =>
     `<button type="button" data-action="${action}" ${disabled || cost > gold ? 'disabled' : ''}>${label} <span class="cost">${Number.isFinite(cost) ? `${cost}g` : ''}</span></button>`;
 
-  const freeSpots = game.spots.filter((s) => game.openSpots[s.id] && !game.defenders.some((d) => d.spot === s.id)).length;
-  const closedSpots = game.openSpots.filter((o) => !o).length;
   const recruits = DEFENDER_KINDS.map((k) => {
     if (!game.unlocked(k)) return `<div class="row locked"><div><b>${DEFENDER_INFO[k].name}</b><small>Unlocks with Renown in a later run.</small></div><small>🔒</small></div>`;
     const n = game.count(k);
-    const label = placing === k ? 'Click a spot…' : n ? 'Place another' : 'Place';
+    const label = placing === k ? 'Click the castle…' : n ? 'Place another' : 'Place';
     return `<div class="row${placing === k ? ' placing' : ''}"><div><b>${DEFENDER_INFO[k].name}</b><small>${n ? `${n} placed · ` : ''}${DEFENDER_INFO[k].blurb}</small></div>${btn(`place:${k}`, label, game.defenderCost(k))}</div>`;
   }).join('');
   const tip = placing
-    ? 'Click a gold ring on the castle. A grey one opens first if you can afford both. Right click or Esc to cancel.'
-    : `${freeSpots} open spot${freeSpots === 1 ? '' : 's'} free, ${closedSpots} still locked (click a 🔒 tag to open one for ${game.spotCost()}g). Tower tops reach 25% further; courtyard spots 20% less. The ground shows what each defender covers; red hatching is a blind spot. Drag defenders to move them.`;
+    ? 'Click anywhere on the castle to put it down: the wall, a tower top or the courtyard. It goes exactly where you click. Right click or Esc to cancel.'
+    : 'Put defenders anywhere on the castle. Tower tops reach 25% further; the courtyard is 20% shorter. The ground shows what each defender covers; red hatching is a blind spot. Drag defenders to move them.';
   const slots = `${recruits}<p class="tip">${tip}</p>`;
 
   const shield = SHIELD_TRACKS.map((t) => {
@@ -676,11 +634,10 @@ function buildHud() {
     }),
   );
   councilShown = false;
-  spotLabelsShown = false;
 }
 buildHud();
 
-/** The ring under the mouse while placing or dragging a defender, and the planning overlay with its coverage preview. */
+/** The see-through defender under the mouse while placing or dragging one, and the planning overlay with its coverage preview. */
 function updateGhost() {
   if (dragging !== null && !game.defenders.some((d) => d.id === dragging)) dragging = null;
   const planning = running && (game.phase === 'council' || game.phase === 'preview' || dragging !== null);
@@ -688,19 +645,17 @@ function updateGhost() {
   const dragged = dragging !== null ? game.defenders.find((d) => d.id === dragging) : undefined;
   const kind = placing ?? dragged?.kind;
   if (kind) {
-    const spot = game.spotAt(input.x, input.y, dragged?.id ?? -1);
-    const closed = placing ? nearestSpot(input.x, input.y, false) : undefined;
-    const target = spot ?? (closed !== undefined ? game.spots[closed] : undefined);
-    if (target) {
-      view.setGhost(target.x, target.y, game.cfg[kind].footprint, !!spot || game.gold >= game.spotCost() + game.defenderCost(kind));
-      preview = { kind, spot: target.id };
-    } else {
-      view.setGhost(input.x, input.y, game.cfg[kind].footprint, false);
-    }
+    const ignore = dragged?.id ?? -1;
+    const gold = placing ? game.defenderCost(kind) : game.moveCost();
+    const ok = game.canPlace(kind, input.x, input.y, ignore) && game.gold >= gold;
+    view.setGhost(kind, input.x, input.y, ok);
+    if (ok) preview = { kind, x: input.x, y: input.y };
+    updatePlaceTag(kind, ok, ignore);
+    canvas.style.cursor = 'none';
   } else {
+    view.hideGhost();
+    updatePlaceTag(undefined, false, -1);
     const hover = planning ? game.defenderAt(input.x, input.y) : undefined;
-    if (hover) view.setGhost(hover.x, hover.y, game.cfg[hover.kind].footprint, true);
-    else view.hideGhost();
     canvas.style.cursor = hover ? 'grab' : '';
   }
   view.setPlanning(planning, preview, game.phase === 'preview' || game.phase === 'council');

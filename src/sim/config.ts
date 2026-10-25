@@ -196,19 +196,13 @@ export const defaultConfig = {
   castle: {
     minY: -10,
     maxY: 0,
-    /** Spots keep this far from the side edges of the field. */
+    /** Defenders keep this far from the side edges of the field. */
     edge: 0.5,
-    /** Wall spots stand this far either side of their section's middle. */
-    wallOffset: 1.8,
-    wallY: -1,
-    courtyardY: -7,
-    courtyardX: [-12, -4, 4, 12],
-    /** Spots open at the start of a run: the four inner tower tops and the gate section's two. */
-    startOpen: [11, 12, 13, 14, 4, 5],
-    /** Opening another spot in the War Council: openCost, x openGrowth each time. */
-    openCost: 40,
-    openGrowth: 1.3,
-    /** Range multipliers by spot: tower tops reach further, the courtyard less far. */
+    /** A tower top: this far either side of a wall joint. */
+    towerHalf: 1.5,
+    /** The wall walk reaches this far behind the wall's back face. */
+    wallSlack: 0.5,
+    /** Range multipliers by ground: tower tops reach further, the courtyard less far. */
     towerRange: 1.25,
     courtyardRange: 0.8,
     /** Each extra defender of the same kind costs this much more than the last. */
@@ -217,8 +211,6 @@ export const defaultConfig = {
     packSeconds: 2,
     /** Moving mid-battle also costs moveGold x wave / 5. */
     moveGold: 10,
-    /** A placement click snaps to an open spot this close. */
-    snap: 3,
     /** The y of the tower tops, where a defender mans a turret. */
     start: { x: -4, y: -1 },
   },

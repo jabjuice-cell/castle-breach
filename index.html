@@ -64,8 +64,8 @@
       .floater.breach { font-size: 44px; color: #ff5a3c; text-shadow: 0 3px 0 var(--ink), 0 0 20px #ff3a1a; }
       .floater.good { font-family: var(--ui); font-size: 18px; color: #fff; }
       .floater.bad { font-family: var(--ui); font-size: 18px; color: #ff8a7a; }
-      .spot { position: absolute; transform: translate(-50%, -100%); pointer-events: auto; font-size: 11px; padding: 1px 5px; opacity: 0.9; box-shadow: 0 2px 0 var(--ink); white-space: nowrap; }
-      .spot:disabled { opacity: 0.55; cursor: not-allowed; }
+      #placeTag { position: absolute; transform: translate(-50%, -100%); font-size: 12px; font-weight: 700; padding: 2px 7px; border-radius: 4px; background: rgba(20, 40, 16, 0.85); color: #c8ffc8; white-space: nowrap; pointer-events: none; }
+      #placeTag.bad { background: rgba(60, 16, 12, 0.85); color: #ffb0a6; }
       #council .row.locked { opacity: 0.55; }
       .purse { display: flex; gap: 16px; font-weight: 800; font-size: 18px; }
       .purse .g { color: var(--gold); }
@@ -150,7 +150,7 @@
       <div class="markers" id="markers"></div>
       <div class="markers" id="wallBars"></div>
       <div class="markers" id="floaters"></div>
-      <div class="markers" id="spotLabels"></div>
+      <div class="markers"><div id="placeTag" hidden></div></div>
       <div class="top">
         <div class="panel wave"><span id="waveLabel">Wave 1</span><small id="phaseLabel">Get ready</small></div>
         <div class="topright">

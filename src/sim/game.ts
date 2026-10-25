@@ -1,7 +1,7 @@
 import { type Config, makeConfig } from './config';
 import {
-  type Defender, type DefenderKind, type Levels, type PlacedKind, type Spot, type Track,
-  castleSpots, emptyLevels, trackMult, upgradeCost,
+  type Defender, type DefenderKind, type Levels, type PlacedKind, type Track,
+  emptyLevels, groundAt, trackMult, upgradeCost,
 } from './defenders';
 import { Rng } from './rng';
 import { type EnemyKind, type Shape, type WavePlan, formation, planSize, planWave } from './waves';
@@ -243,10 +243,6 @@ export class Game {
   soldiers: Soldier[] = [];
   /** Archers, crossbows and catapults the player has placed. */
   defenders: Defender[] = [];
-  /** The castle's fixed defender spots, and which are open. */
-  readonly spots: Spot[];
-  openSpots: boolean[];
-  private spotsBought = 0;
   private nextDefenderId = 0;
   private nextBallId = 0;
   private nextBlockId = 0;
@@ -294,8 +290,6 @@ export class Game {
     this.rng = new Rng(seed);
     this.segmentHp = new Array(cfg.wall.segments).fill(cfg.wall.segmentHp);
     this.gold = cfg.economy.startGold;
-    this.spots = castleSpots(cfg);
-    this.openSpots = this.spots.map((s) => cfg.castle.startOpen.includes(s.id));
     this.plan = planWave(1, seed, cfg);
   }
 
@@ -442,36 +436,25 @@ export class Game {
     return Math.round(this.cfg[kind].cost * this.cfg.castle.priceGrowth ** this.count(kind));
   }
 
-  /** The open, empty spot nearest (x, y) within snapping distance, or undefined. */
-  spotAt(x: number, y: number, ignoreId = -1): Spot | undefined {
-    let best: Spot | undefined;
-    let bestD = this.cfg.castle.snap;
-    // The nearest open spot; if someone already stands there, nothing (no jumping to a neighbour).
-    for (const s of this.spots) {
-      if (!this.openSpots[s.id]) continue;
-      const d = Math.hypot(s.x - x, s.y - y);
-      if (d < bestD) {
-        best = s;
-        bestD = d;
-      }
-    }
-    if (best && this.defenders.some((d) => d.spot === best!.id && d.id !== ignoreId)) return undefined;
-    return best;
+  /**
+   * True if a defender could stand at (x, y): on the castle grounds (the wall, a tower
+   * top or the courtyard), clear of the field's edges and of every other defender.
+   */
+  canPlace(kind: PlacedKind, x: number, y: number, ignoreId = -1): boolean {
+    const c = this.cfg.castle;
+    const hw = this.cfg.field.halfWidth - c.edge;
+    if (x < -hw || x > hw || y < c.minY || y > c.maxY) return false;
+    const r = this.cfg[kind].footprint;
+    return this.defenders.every((d) => d.id === ignoreId || Math.hypot(d.x - x, d.y - y) >= r + this.cfg[d.kind].footprint);
   }
 
-  /** True if a defender could go at (x, y): an open, empty spot is close enough to snap to. */
-  canPlace(_kind: PlacedKind, x: number, y: number, ignoreId = -1): boolean {
-    return !!this.spotAt(x, y, ignoreId);
-  }
-
-  /** Buys a defender and puts it on the open spot nearest (x, y). */
+  /** Buys a defender and puts it down exactly at (x, y) on the castle grounds. */
   place(kind: PlacedKind, x: number, y: number): boolean {
     const cost = this.defenderCost(kind);
     if (!this.shopOpen || !this.unlocked(kind) || this.gold < cost) return false;
-    const spot = this.spotAt(x, y);
-    if (!spot) return false;
+    if (!this.canPlace(kind, x, y)) return false;
     this.gold -= cost;
-    this.addDefender(kind, spot);
+    this.addDefender(kind, x, y);
     if (kind === 'soldiers') this.musterSoldiers();
     return true;
   }
@@ -482,21 +465,20 @@ export class Game {
   }
 
   /**
-   * Moves a placed defender to the open spot nearest (x, y). Free in the War Council and
-   * the preview; mid-battle it costs gold and it has to pack up before it fires again.
+   * Moves a placed defender to (x, y). Free in the War Council and the preview;
+   * mid-battle it costs gold and it has to pack up before it fires again.
    */
   move(id: number, x: number, y: number): boolean {
     const d = this.defenders.find((o) => o.id === id);
-    if (!d || this.over) return false;
-    const spot = this.spotAt(x, y, id);
+    if (!d || this.over || !this.canPlace(d.kind, x, y, id)) return false;
+    if (d.x === x && d.y === y) return true;
     const cost = this.moveCost();
-    if (!spot || this.gold < cost) return false;
-    if (spot.id === d.spot) return true;
+    if (this.gold < cost) return false;
     this.gold -= cost;
-    d.spot = spot.id;
-    d.x = spot.x;
-    d.y = spot.y;
-    d.aimX = spot.x;
+    d.x = x;
+    d.y = y;
+    d.ground = groundAt(this.cfg, x, y);
+    d.aimX = x;
     d.aimY = 30;
     if (this.phase === 'battle') d.timer = Math.max(d.timer, this.cfg.castle.packSeconds);
     if (d.kind === 'soldiers') this.musterSoldiers();
@@ -517,29 +499,13 @@ export class Game {
     return best;
   }
 
-  /** Price of opening one more spot in the War Council. */
-  spotCost(): number {
-    const c = this.cfg.castle;
-    return Math.round(c.openCost * c.openGrowth ** this.spotsBought);
-  }
-
-  /** Opens a closed spot for gold (War Council only). */
-  openSpot(id: number): boolean {
-    const cost = this.spotCost();
-    if (!this.shopOpen || this.openSpots[id] !== false || this.gold < cost) return false;
-    this.gold -= cost;
-    this.openSpots[id] = true;
-    this.spotsBought++;
-    return true;
-  }
-
   owns(kind: DefenderKind): boolean {
     return this.count(kind) > 0;
   }
 
   /** Range multiplier from where a defender stands. */
   rangeMult(d: Defender): number {
-    const kind = this.spots[d.spot]?.kind;
+    const kind = d.ground;
     return kind === 'tower' ? this.cfg.castle.towerRange : kind === 'courtyard' ? this.cfg.castle.courtyardRange : 1;
   }
 
@@ -561,7 +527,7 @@ export class Game {
     switch (d.kind) {
       case 'crossbow':
         if (dy <= 0) return false;
-        return Math.abs(dx) <= c.crossbowLane || (this.spots[d.spot]?.kind === 'tower' && Math.abs(Math.atan2(dx, dy)) <= c.crossbowTowerAngle);
+        return Math.abs(dx) <= c.crossbowLane || (d.ground === 'tower' && Math.abs(Math.atan2(dx, dy)) <= c.crossbowTowerAngle);
       case 'archers':
         return dy > 0 && Math.abs(Math.atan2(dx, dy)) <= c.archerCone && y <= this.cfg.field.topY * c.archerReach * this.rangeMult(d);
       case 'catapult': {
@@ -777,8 +743,8 @@ export class Game {
     this.events.push({ type: 'waveCleared', wave: w, gold });
   }
 
-  private addDefender(kind: PlacedKind, spot: Spot): void {
-    this.defenders.push({ id: this.nextDefenderId++, kind, spot: spot.id, x: spot.x, y: spot.y, timer: 0, aimX: spot.x, aimY: 30, firedAt: -99 });
+  private addDefender(kind: PlacedKind, x: number, y: number): void {
+    this.defenders.push({ id: this.nextDefenderId++, kind, ground: groundAt(this.cfg, x, y), x, y, timer: 0, aimX: x, aimY: 30, firedAt: -99 });
   }
 
   private startWave(): void {

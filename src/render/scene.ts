@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import type { Defender, PlacedKind } from '../sim/defenders';
+import { type Defender, type PlacedKind, groundAt } from '../sim/defenders';
 import { type Ball, type Capsule, type CapsuleKind, type Game, type GameEvent } from '../sim/game';
 import { ENEMY_KINDS, type EnemyKind } from '../sim/waves';
 import aspects from '../assets/aspects.json';
@@ -145,6 +145,11 @@ const TOWER_HALF = 1.5;
 const TOWER_Z = 1;
 /** How a squad of archers stands: columns x rows around its spot. */
 const SQUAD_COLS = 6;
+/** Half-heights of the archer and soldier sprites: they come in crowds, so a little smaller than a grunt. */
+const ARCHER_SIZE = 0.8;
+const SOLDIER_SIZE = 0.85;
+/** A soldier company's banner group where it was placed (the rest muster at the wall). */
+const COMPANY = [[0, 0], [-0.7, 0.3], [0.7, 0.3], [-0.35, -0.4], [0.35, -0.4]];
 const SQUAD_SPACING = 0.75;
 
 interface VoxelGroup {
@@ -179,7 +184,8 @@ interface Rocket {
 /** A defender the player is about to place, for previewing its coverage. */
 export interface PlanPreview {
   kind: PlacedKind;
-  spot: number;
+  x: number;
+  y: number;
 }
 
 interface Effect {
@@ -237,6 +243,11 @@ export class BattleScene {
   };
   private towerArt = imageSprite(towerUrl, aspects['tower-crossbow']);
   private catapultArt = imageSprite(defCatapultUrl, aspects['defender-catapult']);
+  private soldierArt = imageSprite(soldierUrl, aspects['defender-soldier']);
+  private archerArt = imageSprite(archerUrl, aspects['defender-archer']);
+  /** The see-through defender that follows the mouse while placing or moving one, by kind. */
+  private ghosts = new Map<PlacedKind, THREE.Group>();
+  private ghostShown: { kind: PlacedKind; ok: boolean } | null = null;
   private crater = loadImage(craterUrl);
   private scorch = loadImage(scorchUrl);
   private lastWave = -1;
@@ -267,7 +278,6 @@ export class BattleScene {
   private towerFloors = 0;
   /** The tower drops a storey when its bottom floor gives way; this eases the drop. */
   private towerDrop = 0;
-  private spotRings: THREE.Mesh[] = [];
   private overlay: THREE.Mesh;
   private overlayCtx: CanvasRenderingContext2D;
   private overlayTex: THREE.CanvasTexture;
@@ -281,8 +291,6 @@ export class BattleScene {
   /** Crossbow towers and catapults, one model per placed defender. Archers are instanced. */
   private defenderObjs = new Map<number, { kind: PlacedKind; obj: THREE.Group | null }>();
   /** Placement ghost: where a defender would go, green if it fits. */
-  private ghost: THREE.Mesh;
-  private ghostVisible = false;
   private shake = 0;
   // Steep enough (about 57 degrees at the wall) that the wall doesn't hide the fighting at its foot.
   // The wall sits low on the screen so most of it is battlefield.
@@ -349,8 +357,8 @@ export class BattleScene {
     };
     for (const kind of ENEMY_KINDS) this.sprites[kind] = makeSprites(art[kind], SIZE[kind], kind === 'grunt' ? MAX_ENEMIES : 800);
     // Soldiers and archers come in big crowds, so they are drawn a little smaller than a grunt.
-    this.soldierSprites = makeSprites(imageSprite(soldierUrl, aspects['defender-soldier']), 0.85, 400);
-    this.archerSprites = makeSprites(imageSprite(archerUrl, aspects['defender-archer']), 0.8, MAX_ARCHERS);
+    this.soldierSprites = makeSprites(this.soldierArt, SOLDIER_SIZE, 400);
+    this.archerSprites = makeSprites(this.archerArt, ARCHER_SIZE, MAX_ARCHERS);
 
     const shadowGeo = new THREE.PlaneGeometry(1.3, 0.8);
     shadowGeo.rotateX(-Math.PI / 2);
@@ -470,16 +478,6 @@ export class BattleScene {
     this.towerTop.visible = false;
     this.scene.add(this.towerTop);
 
-    // Defender spots: a ring on each, shown while planning.
-    const ringGeo = new THREE.RingGeometry(0.62, 1, 40).rotateX(-Math.PI / 2);
-    for (let i = 0; i < game.spots.length; i++) {
-      const m = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({ color: '#ffd34a', transparent: true, depthWrite: false, depthTest: false }));
-      m.renderOrder = 6;
-      m.visible = false;
-      this.spotRings.push(m);
-      this.scene.add(m);
-    }
-
     // The planning overlay: who covers which bit of the field, blind spots in red, the coming lanes.
     const hw = game.cfg.field.halfWidth;
     const cols = Math.round((hw * 2) / OVERLAY_CELL);
@@ -498,13 +496,6 @@ export class BattleScene {
     this.overlay.renderOrder = 2;
     this.scene.add(this.overlay);
 
-    this.ghost = new THREE.Mesh(
-      new THREE.RingGeometry(0.82, 1, 48).rotateX(-Math.PI / 2),
-      new THREE.MeshBasicMaterial({ color: '#7dff8a', transparent: true, opacity: 0.85, depthWrite: false, depthTest: false }),
-    );
-    this.ghost.renderOrder = 10;
-    this.ghost.visible = false;
-    this.scene.add(this.ghost);
 
   }
 
@@ -591,15 +582,69 @@ export class BattleScene {
   }
 
   /** Shows where a defender would go: a ring of its footprint, green if it fits there, red if not. */
-  setGhost(x: number, y: number, radius: number, ok: boolean) {
-    this.ghostVisible = true;
-    this.ghost.position.set(x, this.standHeight(x, -y) + 0.1, -y);
-    this.ghost.scale.setScalar(radius);
-    (this.ghost.material as THREE.MeshBasicMaterial).color.set(ok ? '#7dff8a' : '#ff6a5a');
+  /**
+   * Shows the defender itself, see-through, standing exactly where it would go:
+   * tinted green where it can stand and red where it can't.
+   */
+  setGhost(kind: PlacedKind, x: number, y: number, ok: boolean) {
+    for (const [k, gh] of this.ghosts) if (k !== kind) gh.visible = false;
+    let ghost = this.ghosts.get(kind);
+    if (!ghost) {
+      ghost = this.buildFigure(kind, true);
+      this.scene.add(ghost);
+      this.ghosts.set(kind, ghost);
+    }
+    ghost.visible = true;
+    const h = this.standHeight(x, -y);
+    ghost.position.set(x, kind === 'crossbow' ? Math.max(0, h - 2.2) : h, -y);
+    this.ghostShown = { kind, ok };
   }
 
   hideGhost() {
-    this.ghostVisible = false;
+    for (const gh of this.ghosts.values()) gh.visible = false;
+    this.ghostShown = null;
+  }
+
+  /**
+   * A defender's figure, as billboards that face the camera: the crossbow tower or
+   * catapult, a squad of archers in ranks, or a soldier company's banner group.
+   * A ghost is see-through and drawn over everything, so it shows wherever the mouse is.
+   */
+  private buildFigure(kind: PlacedKind, ghost: boolean): THREE.Group {
+    const group = new THREE.Group();
+    const art = kind === 'crossbow' ? this.towerArt : kind === 'catapult' ? this.catapultArt : kind === 'archers' ? this.archerArt : this.soldierArt;
+    const h = kind === 'crossbow' ? 5.2 : kind === 'catapult' ? 4 : 2 * (kind === 'archers' ? ARCHER_SIZE : SOLDIER_SIZE);
+    const geo = new THREE.PlaneGeometry(h * art.aspect, h).translate(0, h / 2, 0);
+    const mat = ghost
+      ? new THREE.MeshBasicMaterial({ map: art.texture, transparent: true, alphaTest: 0.3, depthTest: false, depthWrite: false })
+      : new THREE.MeshBasicMaterial({ map: art.texture, alphaTest: 0.5 });
+    const at: number[][] = kind === 'archers'
+      ? Array.from({ length: this.game.cfg.archers.archers }, (_, i) => {
+        const rows = Math.ceil(this.game.cfg.archers.archers / SQUAD_COLS);
+        const col = i % SQUAD_COLS;
+        const row = Math.floor(i / SQUAD_COLS);
+        return [(col - (SQUAD_COLS - 1) / 2) * SQUAD_SPACING + (row % 2) * 0.2, (row - (rows - 1) / 2) * SQUAD_SPACING * 0.8];
+      })
+      : kind === 'soldiers' ? COMPANY : [[0, 0]];
+    for (const [dx, dz] of at) {
+      const m = new THREE.Mesh(geo, mat);
+      m.name = 'billboard';
+      m.position.set(dx, 0, dz);
+      m.renderOrder = ghost ? 10 : 0;
+      group.add(m);
+    }
+    return group;
+  }
+
+  /** Keeps the ghost's billboards facing the camera, pulsing, and tinted by whether it fits. */
+  private updateGhost(time: number) {
+    const shown = this.ghostShown;
+    if (!shown) return;
+    const ghost = this.ghosts.get(shown.kind)!;
+    const mat = (ghost.children[0] as THREE.Mesh).material as THREE.MeshBasicMaterial;
+    mat.color.set(shown.ok ? '#c8ffc8' : '#ff7a6a');
+    mat.opacity = shown.ok ? 0.75 + Math.sin(time * 6) * 0.15 : 0.6;
+    for (const child of ghost.children) child.quaternion.copy(this.camera.quaternion);
   }
 
   handleEvents(events: GameEvent[]) {
@@ -816,13 +861,12 @@ export class BattleScene {
     this.updateCapsules(time);
     this.updateBumpers();
     this.updateTower(dt);
-    this.updatePlanning(time);
+    this.updatePlanning();
     this.updateRockets(dt);
     this.fireworks.update(dt);
     this.flashLevel = Math.max(0, this.flashLevel - dt * 2.2);
 
-    this.ghost.visible = this.ghostVisible;
-    (this.ghost.material as THREE.MeshBasicMaterial).opacity = 0.6 + Math.sin(time * 6) * 0.25;
+    this.updateGhost(time);
 
     this.shake = Math.max(0, this.shake - dt * 2.5);
     const k = this.shake * this.shake;
@@ -1037,28 +1081,16 @@ export class BattleScene {
 
   // ---- planning view --------------------------------------------------------
 
-  private updatePlanning(time: number) {
+  private updatePlanning() {
     const g = this.game;
     const { show, preview } = this.planning;
-    const taken = new Set(g.defenders.map((d) => d.spot));
-    g.spots.forEach((spot, i) => {
-      const ring = this.spotRings[i];
-      const open = g.openSpots[i];
-      ring.visible = show && !taken.has(spot.id);
-      if (!ring.visible) return;
-      ring.position.set(spot.x, this.standHeight(spot.x, -spot.y) + 0.12, -spot.y);
-      const mat = ring.material as THREE.MeshBasicMaterial;
-      // Open spots pulse gold; closed ones sit grey until bought.
-      mat.color.set(open ? '#ffd34a' : '#9a9080');
-      mat.opacity = open ? 0.65 + Math.sin(time * 4 + i) * 0.25 : 0.45;
-      ring.scale.setScalar(open ? 1.1 : 0.9);
-    });
-
     const mat = this.overlay.material as THREE.MeshBasicMaterial;
     mat.opacity = Math.max(0, Math.min(1, mat.opacity + (show ? 0.08 : -0.08)));
     this.overlay.visible = mat.opacity > 0;
     if (!show) return;
-    const key = `${g.defenders.map((d) => `${d.kind}${d.spot}`).join(',')}|${preview ? `${preview.kind}${preview.spot}` : ''}|${this.planning.lanes ? g.plan.number : ''}|${g.unlocked('archers')}`;
+    // The preview is rounded to the overlay's cells, so moving the mouse within one doesn't repaint.
+    const cell = (v: number) => Math.round(v / OVERLAY_CELL);
+    const key = `${g.defenders.map((d) => `${d.kind}${d.x},${d.y}`).join(';')}|${preview ? `${preview.kind}${cell(preview.x)},${cell(preview.y)}` : ''}|${this.planning.lanes ? g.plan.number : ''}|${g.unlocked('archers')}`;
     if (key === this.overlayKey) return;
     this.overlayKey = key;
     this.drawOverlay();
@@ -1075,8 +1107,8 @@ export class BattleScene {
     const defs: Defender[] = [...g.defenders];
     const { preview, lanes } = this.planning;
     if (preview) {
-      const spot = g.spots[preview.spot];
-      defs.push({ id: -1, kind: preview.kind, spot: spot.id, x: spot.x, y: spot.y, timer: 0, aimX: spot.x, aimY: 30, firedAt: -99 });
+      const { kind, x, y } = preview;
+      defs.push({ id: -1, kind, ground: groundAt(g.cfg, x, y), x, y, timer: 0, aimX: x, aimY: 30, firedAt: -99 });
     }
     // A wall section is a blind spot if no archer cone reaches out in front of it and no crossbow lane runs up it.
     const seg = g.segmentWidth();
@@ -1354,17 +1386,9 @@ export class BattleScene {
 
   // ---- defenders -------------------------------------------------------------
 
+  /** A placed defender's model. Archer squads are drawn with the instanced archer sprites instead. */
   private buildDefender(kind: PlacedKind): THREE.Group | null {
-    if (kind === 'archers') return null;
-    const group = new THREE.Group();
-    const art = kind === 'crossbow' ? this.towerArt : this.catapultArt;
-    const h = kind === 'crossbow' ? 5.2 : 4; // catapult scale 2
-    const geo = new THREE.PlaneGeometry(h * art.aspect, h);
-    geo.translate(0, h / 2, 0);
-    const m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ map: art.texture, alphaTest: 0.5 }));
-    m.name = 'billboard';
-    group.add(m);
-    return group;
+    return kind === 'archers' ? null : this.buildFigure(kind, false);
   }
 
   /** Where a defender's model stands. Crossbow towers rise out of whatever they stand on. */
