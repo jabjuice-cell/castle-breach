@@ -206,6 +206,35 @@ export class Sounds {
     for (let i = 0; i < 2 + level; i++) this.tone(notes[i % notes.length], now + i * 0.07, 0.35, 0.12, 'triangle');
   }
 
+  /** The call to arms: a brassy two-note horn over a drum roll. */
+  horn() {
+    const ctx = this.ctx;
+    if (!ctx || this.muted) return;
+    const now = ctx.currentTime;
+    for (const [freq, at, len] of [[196, 0, 0.32], [294, 0.3, 0.7]] as const) {
+      for (const detune of [-6, 6]) {
+        const o = ctx.createOscillator();
+        o.type = 'sawtooth';
+        o.frequency.setValueAtTime(freq * 0.97, now + at);
+        o.frequency.linearRampToValueAtTime(freq, now + at + 0.06);
+        o.detune.value = detune;
+        const f = ctx.createBiquadFilter();
+        f.type = 'lowpass';
+        f.frequency.value = 1400;
+        const g = ctx.createGain();
+        g.gain.setValueAtTime(0.0001, now + at);
+        g.gain.exponentialRampToValueAtTime(0.09, now + at + 0.05);
+        g.gain.setValueAtTime(0.09, now + at + len - 0.08);
+        g.gain.exponentialRampToValueAtTime(0.0001, now + at + len);
+        o.connect(f).connect(g).connect(ctx.destination);
+        o.start(now + at);
+        o.stop(now + at + len + 0.02);
+      }
+    }
+    // Drums under it.
+    for (let i = 0; i < 6; i++) this.tone(70 + (i % 2) * 15, now + i * 0.11, 0.12, 0.35, 'sine');
+  }
+
   /** A deep boom for barrels and collapsing tower floors. */
   boom() {
     const ctx = this.ctx;

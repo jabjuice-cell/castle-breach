@@ -1,7 +1,7 @@
 import { type Config, makeConfig } from './config';
 import {
   type Defender, type DefenderKind, type Levels, type PlacedKind, type Track,
-  emptyLevels, groundAt, trackMult, upgradeCost,
+  type Stack, emptyLevels, groundAt, jointStacks, onWall, stackAt, trackMult, upgradeCost,
 } from './defenders';
 import { Rng } from './rng';
 import { type EnemyKind, type Shape, type WavePlan, formation, planSize, planWave } from './waves';
@@ -193,6 +193,7 @@ export type GameEvent =
   | { type: 'plank'; x: number; y: number }
   | { type: 'floorDown'; x: number; y: number; floorsLeft: number }
   | { type: 'heave'; x: number }
+  | { type: 'callToArms' }
   | { type: 'boltFired'; x: number; y: number }
   | { type: 'volley'; x: number; y: number; arrows: number }
   /** combo: the ball's combo after this hit (only for ball hits). */
@@ -249,6 +250,10 @@ export class Game {
   soldiers: Soldier[] = [];
   /** Archers, crossbows and catapults the player has placed. */
   defenders: Defender[] = [];
+  /** Towers on the wall: the joints' own, plus any the player builds or stacks higher. */
+  stacks: Stack[];
+  /** Tower storeys bought this level (each costs more). */
+  storeysBuilt = 0;
   private nextDefenderId = 0;
   private nextBallId = 0;
   private nextBlockId = 0;
@@ -300,6 +305,7 @@ export class Game {
     this.segmentHp = new Array(cfg.wall.segments).fill(cfg.wall.segmentHp);
     this.gold = cfg.economy.warChest;
     this.shieldLevels = { ...cfg.bonuses.shield };
+    this.stacks = jointStacks(cfg);
     this.wave = this.cleared = this.firstWave - 1;
     this.plan = planWave(this.firstWave, seed, cfg);
   }
@@ -394,6 +400,31 @@ export class Game {
     for (const b of this.balls) {
       if (!b.stuck && !b.heaved && b.vy > 0 && this.time - b.hitShieldAt <= this.heaveWindow()) this.powerUp(b);
     }
+    return true;
+  }
+
+  /** The call to arms: when it can sound again, and until when it lasts. */
+  arms = { readyAt: 0, until: 0 };
+
+  get armsActive(): boolean {
+    return this.time < this.arms.until;
+  }
+
+  get canCallToArms(): boolean {
+    return this.phase === 'battle' && this.time >= this.arms.readyAt;
+  }
+
+  /**
+   * Sounds the horn from the keep: for a few seconds every defender shoots twice as fast
+   * and the soldiers run. Then it needs a long rest.
+   */
+  callToArms(): boolean {
+    if (!this.canCallToArms) return false;
+    const c = this.cfg.callToArms;
+    this.arms = { readyAt: this.time + c.cooldown, until: this.time + c.seconds };
+    // Everyone fires at once as the horn sounds.
+    for (const d of this.defenders) d.timer = Math.min(d.timer, 0.1);
+    this.events.push({ type: 'callToArms' });
     return true;
   }
 
@@ -534,11 +565,43 @@ export class Game {
     this.gold -= cost;
     d.x = x;
     d.y = y;
-    d.ground = groundAt(this.cfg, x, y);
-    d.aimX = x;
-    d.aimY = 30;
+    d.ground = groundAt(this.cfg, x, y, this.stacks);
+    // An aim keeps its angle, within what the new ground allows.
+    if (d.heading !== null) d.heading = Math.max(-this.aimLimit(d), Math.min(this.aimLimit(d), d.heading));
+    d.aimX = d.heading === null ? x : x + Math.sin(d.heading) * 30;
+    d.aimY = d.heading === null ? 30 : y + Math.cos(d.heading) * 30;
     if (this.phase === 'battle') d.timer = Math.max(d.timer, this.cfg.castle.packSeconds);
     if (d.kind === 'soldiers') this.musterSoldiers();
+    return true;
+  }
+
+  /** How far off straight ahead a defender can be aimed: further from a tower top. */
+  aimLimit(d: Defender): number {
+    return d.ground === 'tower' ? this.cfg.coverage.aimTower : this.cfg.coverage.aimWall;
+  }
+
+  /** Whether a defender kind can be aimed (soldiers can't: they hold their stretch of wall). */
+  aimable(d: Defender): boolean {
+    return d.kind !== 'soldiers';
+  }
+
+  /**
+   * Aims a crossbow, an archer squad or a catapult at (x, y), as far round as it can turn.
+   * Only in the setup and between waves. null clears it back to its default facing.
+   */
+  aim(id: number, at: { x: number; y: number } | null): boolean {
+    const d = this.defenders.find((o) => o.id === id);
+    if (!d || !this.shopOpen || !this.aimable(d)) return false;
+    if (!at) {
+      d.heading = null;
+      d.aimX = d.x;
+      d.aimY = 30;
+      return true;
+    }
+    const lim = this.aimLimit(d);
+    d.heading = Math.max(-lim, Math.min(lim, Math.atan2(at.x - d.x, Math.max(0.1, at.y - d.y))));
+    d.aimX = d.x + Math.sin(d.heading) * 30;
+    d.aimY = d.y + Math.cos(d.heading) * 30;
     return true;
   }
 
@@ -560,10 +623,48 @@ export class Game {
     return this.count(kind) > 0;
   }
 
-  /** Range multiplier from where a defender stands. */
+  /** Range multiplier from where a defender stands: each storey of tower under it adds to its reach. */
   rangeMult(d: Defender): number {
-    const kind = d.ground;
-    return kind === 'tower' ? this.cfg.castle.towerRange : kind === 'courtyard' ? this.cfg.castle.courtyardRange : 1;
+    const c = this.cfg.castle;
+    if (d.ground === 'tower') return 1 + (c.towerRange - 1) * (stackAt(this.cfg, this.stacks, d.x, d.y)?.storeys ?? 1);
+    return d.ground === 'courtyard' ? c.courtyardRange : 1;
+  }
+
+  // ---- towers: built on the wall and stacked like blocks ---------------------
+
+  /** Price of the next tower storey. */
+  storeyCost(): number {
+    const t = this.cfg.towers;
+    return Math.round(t.cost * t.costGrowth ** this.storeysBuilt);
+  }
+
+  /**
+   * What building at (x, y) would do: raise the tower there by a storey, put up a new
+   * one-storey tower on a clear stretch of the wall walk, or nothing (and why not).
+   */
+  towerPlan(x: number, y: number): { ok: true; stack: Stack | null } | { ok: false; why: string } {
+    const c = this.cfg.castle;
+    const hw = this.cfg.field.halfWidth - c.towerHalf;
+    if (!onWall(this.cfg, y) || Math.abs(x) > hw + c.towerHalf) return { ok: false, why: 'Towers go on the wall' };
+    const stack = stackAt(this.cfg, this.stacks, x, y);
+    if (stack) return stack.storeys >= this.cfg.towers.maxStoreys ? { ok: false, why: 'As tall as it goes' } : { ok: true, stack };
+    if (Math.abs(x) > hw) return { ok: false, why: 'Too close to the end of the wall' };
+    if (this.stacks.some((s) => Math.abs(s.x - x) < c.towerHalf * 2)) return { ok: false, why: 'Too close to another tower' };
+    return { ok: true, stack: null };
+  }
+
+  /** Builds a tower storey at (x, y): stacks it on the tower there, or starts a new tower. */
+  buildTower(x: number, y: number): boolean {
+    const plan = this.towerPlan(x, y);
+    const cost = this.storeyCost();
+    if (!this.shopOpen || !plan.ok || this.gold < cost) return false;
+    this.gold -= cost;
+    this.storeysBuilt++;
+    if (plan.stack) plan.stack.storeys++;
+    else this.stacks.push({ x, storeys: 1 });
+    // Defenders standing there are now up on the tower.
+    for (const d of this.defenders) d.ground = groundAt(this.cfg, d.x, d.y, this.stacks);
+    return true;
   }
 
   /** The stretch of wall a soldier company holds: its section plus a spill into each neighbour. */
@@ -581,15 +682,23 @@ export class Game {
     const dx = x - d.x;
     const dy = y - d.y;
     if (y > this.cfg.field.topY) return false;
+    const h = d.heading;
+    // The angle of the point off the way the defender faces.
+    const off = Math.abs(Math.atan2(dx, dy) - (h ?? 0));
     switch (d.kind) {
       case 'crossbow':
         if (dy <= 0) return false;
-        return Math.abs(dx) <= c.crossbowLane || (d.ground === 'tower' && Math.abs(Math.atan2(dx, dy)) <= c.crossbowTowerAngle);
+        if (h !== null) {
+          // Aimed: a lane the same width, running out along the aim.
+          const along = dx * Math.sin(h) + dy * Math.cos(h);
+          return along > 0 && Math.abs(dx * Math.cos(h) - dy * Math.sin(h)) <= c.crossbowLane;
+        }
+        return Math.abs(dx) <= c.crossbowLane || (d.ground === 'tower' && off <= c.crossbowTowerAngle);
       case 'archers':
-        return dy > 0 && Math.abs(Math.atan2(dx, dy)) <= c.archerCone && y <= this.cfg.field.topY * c.archerReach * this.rangeMult(d);
+        return dy > 0 && off <= c.archerCone && y <= this.cfg.field.topY * c.archerReach * this.rangeMult(d);
       case 'catapult': {
         const dist = Math.hypot(dx, dy);
-        return dy > 0 && dist >= c.catapultMin && dist <= c.catapultMax * this.rangeMult(d);
+        return dy > 0 && dist >= c.catapultMin && dist <= c.catapultMax * this.rangeMult(d) && (h === null || off <= c.catapultAimSpread);
       }
       case 'soldiers': {
         const [lo, hi] = this.soldierRange(d);
@@ -658,7 +767,8 @@ export class Game {
   /** A defender stat's multiplier: its upgrade track, times the town's bonus for damage and rate of fire. */
   mult(kind: DefenderKind, track: Track): number {
     const b = this.cfg.bonuses;
-    return trackMult(this.levels[kind][track], this.cfg) * (track === 'damage' ? b.damage : track === 'rate' ? b.rate : 1);
+    const arms = track === 'rate' && this.armsActive ? this.cfg.callToArms.rate : 1;
+    return trackMult(this.levels[kind][track], this.cfg) * (track === 'damage' ? b.damage : track === 'rate' ? b.rate * arms : 1);
   }
 
   crossbowPierce(): number {
@@ -778,7 +888,7 @@ export class Game {
   }
 
   private addDefender(kind: PlacedKind, x: number, y: number, paid = 0): void {
-    this.defenders.push({ id: this.nextDefenderId++, kind, ground: groundAt(this.cfg, x, y), x, y, paid, timer: 0, aimX: x, aimY: 30, firedAt: -99 });
+    this.defenders.push({ id: this.nextDefenderId++, kind, ground: groundAt(this.cfg, x, y, this.stacks), x, y, paid, heading: null, timer: 0, aimX: x, aimY: 30, firedAt: -99 });
   }
 
   private startWave(): void {
@@ -1126,6 +1236,8 @@ export class Game {
     const reachY = c.y + 1.2 + c.guard;
     const columns: Enemy[][] = Array.from({ length: hw * 2 + 1 }, () => []);
     for (const e of this.enemies) if (e.y < reachY) columns[Math.max(0, Math.min(hw * 2, Math.floor(e.x + hw)))].push(e);
+    // Orcs on the wall anywhere: soldiers with nothing to do at their post trudge over to them.
+    const breachers = this.enemies.filter((e) => e.hp > 0 && (e.state === 'climb' || e.state === 'wall'));
     for (const s of this.soldiers) {
       if (s.hp <= 0) continue;
       let target: Enemy | undefined;
@@ -1144,14 +1256,27 @@ export class Game {
       }
       // Everyone piles onto ogres and warlords from further along the wall.
       for (const e of heavies) consider(e, c.guard * c.heavyGuard);
+      // Nothing near their post: walk (slowly) to the nearest orc on the wall, wherever it is.
+      if (!target) {
+        for (const e of breachers) {
+          const d = Math.hypot(e.x - s.x, e.y - s.y) - this.cfg[e.kind].radius;
+          if (d < best) {
+            best = d;
+            target = e;
+          }
+        }
+      }
       const gx = target ? target.x : s.postX;
       const gy = target ? target.y : s.postY;
       const dx = gx - s.x;
       const dy = gy - s.y;
       const dist = Math.hypot(dx, dy);
       const stopAt = target ? c.reach * 0.8 + this.cfg[target.kind].radius : 0.05;
+      // They rush what is close to their post, but trudge along the wall to anything further.
+      const near = Math.hypot(gx - s.postX, gy - s.postY) <= c.guard * (target && heavies.includes(target) ? c.heavyGuard : 1);
       if (dist > stopAt) {
-        const stepLen = Math.min(dist - stopAt, c.speed * dt);
+        const rush = this.armsActive ? this.cfg.callToArms.run : 1;
+        const stepLen = Math.min(dist - stopAt, (near ? c.speed : c.walk) * rush * dt);
         s.x += (dx / dist) * stepLen;
         s.y += (dy / dist) * stepLen;
       }
@@ -1255,14 +1380,17 @@ export class Game {
         rank = r;
       }
     }
-    if (!target) return;
+    // A siege tower in its lane comes after catapults: heavy bolts knock its planks out.
+    const tw = this.tower;
+    const aim = tw && rank < 3 && this.covers(def, tw.x, tw.y + 1) ? { x: tw.x, y: tw.y + 1 } : target;
+    if (!aim) return;
     def.timer = cb.interval / this.mult('crossbow', 'rate');
     def.firedAt = this.time;
-    const dx = target.x - def.x;
-    const dy = target.y - def.y;
+    const dx = aim.x - def.x;
+    const dy = aim.y - def.y;
     const d = Math.hypot(dx, dy) || 1;
-    def.aimX = target.x;
-    def.aimY = target.y;
+    def.aimX = aim.x;
+    def.aimY = aim.y;
     this.projectiles.push({
       kind: 'bolt', x: def.x, y: def.y, vx: (dx / d) * cb.boltSpeed, vy: (dy / d) * cb.boltSpeed,
       friendly: true, travelled: 0, flight: cb.range, damage: cb.damage * this.mult('crossbow', 'damage'),
@@ -1350,11 +1478,13 @@ export class Game {
     if (!crowd) return;
     def.timer = c.interval / this.mult('catapult', 'rate');
     def.firedAt = this.time;
-    def.aimX = crowd.x;
-    def.aimY = crowd.y;
-    // Launched from clear of the shield and the turrets.
+    if (def.heading === null) {
+      def.aimX = crowd.x;
+      def.aimY = crowd.y;
+    }
+    // Launched from clear of the shield and the turrets: along its aim, or at the crowd.
     const y = this.cfg.bumpers.y + 2;
-    const angle = Math.max(-c.spread, Math.min(c.spread, Math.atan2(crowd.x - def.x, crowd.y - y)));
+    const angle = def.heading ?? Math.max(-c.spread, Math.min(c.spread, Math.atan2(crowd.x - def.x, crowd.y - y)));
     const sp = this.cfg.balls.speed;
     const b = this.addBall('royal', def.x, y, Math.sin(angle) * sp, Math.cos(angle) * sp);
     b.power = this.mult('catapult', 'damage');
@@ -1373,7 +1503,9 @@ export class Game {
       }
     });
     if (!target) return;
-    target.hp -= p.damage;
+    // Shooting straight down the face of their own wall, archers mostly miss: soldiers are the answer there.
+    const onWall = target.state === 'climb' || target.state === 'wall';
+    target.hp -= p.damage * (onWall ? this.cfg.archers.wallShare : 1);
     if (p.burn) {
       target.burn = Math.max(target.burn, p.burn);
       target.burnTime = this.cfg.archers.burnSeconds;
@@ -1436,6 +1568,13 @@ export class Game {
           return p.hitsLeft <= 0;
         });
         if (p.hitsLeft <= 0) alive = false;
+        // A crossbow bolt that reaches the siege tower thuds into its bottom floor.
+        const tw = this.tower;
+        const st = this.cfg.siegeTower;
+        if (alive && p.kind === 'bolt' && tw && Math.abs(p.x - tw.x) <= st.halfWidth && p.y >= tw.y && p.y <= tw.y + st.depth) {
+          this.hitPlank(0, p.x, 1);
+          alive = false;
+        }
         if (p.travelled > p.flight || Math.abs(p.x) > hw + 5 || p.y > this.cfg.field.spawnY + 10) alive = false;
       }
       if (alive) keep.push(p);

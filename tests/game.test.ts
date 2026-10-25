@@ -68,7 +68,7 @@ describe('waves', () => {
     const w1 = planWave(1, 1, cfg);
     expect(w1.totals).toMatchObject({ grunt: 30, chucker: 0, rider: 0, orcCatapult: 3 });
     expect(w1.groups).toHaveLength(2);
-    expect(Math.round(waveBudget(10, cfg))).toBe(123);
+    expect(Math.round(waveBudget(10, cfg))).toBe(318);
     const blocks = (n: number) => planWave(n, 1, cfg).groups.filter((g) => g.members.some((m) => m.kind === 'grunt')).length;
     expect(blocks(25)).toBe(6);
     for (const n of [5, 12, 19]) {
@@ -503,7 +503,7 @@ describe('run loop', () => {
     expect(game.segmentHp[0]).toBe(plain.segmentHp[0] * 1.2);
     expect(game.mult('crossbow', 'damage')).toBeCloseTo(1.15);
     expect(game.gold).toBe(plain.gold + 60);
-    expect(plain.gold).toBe(800);
+    expect(plain.gold).toBe(500);
   });
 
   it('sells defenders back: in full during the setup, at half price once the level is under way', () => {
@@ -554,6 +554,52 @@ describe('run loop', () => {
     expect(game.covers(cat, 1.8, 5)).toBe(false); // too close to the wall
     expect(game.covers(cat, 1.8, 30)).toBe(true);
     expect(game.sectionCover(2)).toBeGreaterThan(game.sectionCover(0));
+  });
+
+  it('aims crossbows, archers and catapults in the setup, further round from a tower top', () => {
+    const game = new Game(1, veteran(quiet()));
+    game.gold = 2000;
+    game.place('crossbow', -1.8, -1); // the wall walk
+    game.place('crossbow', 4, -1); // a tower top
+    game.place('soldiers', -12, -6);
+    const [wall, tower, men] = game.defenders;
+    expect(game.covers(wall, 10, 30)).toBe(false);
+    expect(game.aim(wall.id, { x: 10, y: 30 })).toBe(true);
+    expect(wall.heading).toBeCloseTo(Math.atan2(11.8, 31));
+    expect(game.covers(wall, 10, 30)).toBe(true);
+    expect(game.covers(wall, -1.8, 30)).toBe(false); // the old lane is no longer covered
+    // A hard turn is clamped: about 26 degrees from the wall, 46 from a tower.
+    game.aim(wall.id, { x: 40, y: 1 });
+    game.aim(tower.id, { x: 40, y: 1 });
+    expect(wall.heading).toBeCloseTo(0.45);
+    expect(tower.heading).toBeCloseTo(0.8);
+    expect(game.aim(men.id, { x: 0, y: 10 })).toBe(false);
+    game.aim(wall.id, null);
+    expect(game.covers(wall, -1.8, 30)).toBe(true);
+    game.endSetup();
+    game.skipPreview();
+    expect(game.aim(tower.id, { x: 0, y: 30 })).toBe(false); // not mid-battle
+  });
+
+  it('builds towers on the wall and stacks them; each storey adds 25% reach', () => {
+    const game = new Game(1, veteran(quiet()));
+    game.gold = 2000;
+    game.place('archers', 0, -1); // the wall walk, between towers
+    const squad = game.defenders[0];
+    expect(game.rangeMult(squad)).toBe(1);
+    expect(game.storeyCost()).toBe(50);
+    expect(game.buildTower(0, -1)).toBe(true); // a new tower, under the squad
+    expect(squad.ground).toBe('tower');
+    expect(game.rangeMult(squad)).toBeCloseTo(1.25);
+    expect(game.storeyCost()).toBe(65);
+    expect(game.buildTower(0.5, -1)).toBe(true); // stacks on the same tower
+    expect(game.rangeMult(squad)).toBeCloseTo(1.5);
+    expect(game.buildTower(0, -1)).toBe(true);
+    expect(game.towerPlan(0, -1)).toEqual({ ok: false, why: 'As tall as it goes' });
+    expect(game.towerPlan(2, -1).ok).toBe(false); // too close to it and the joint's tower
+    expect(game.towerPlan(10, -6).ok).toBe(false); // the courtyard
+    expect(game.buildTower(-12, -1)).toBe(true); // a joint's tower goes up to two storeys
+    expect(game.stacks.find((t) => t.x === -12)!.storeys).toBe(2);
   });
 
   it('moves defenders for free between waves; mid-battle costs gold and a pack-up', () => {
@@ -671,6 +717,25 @@ describe('run loop', () => {
     expect(game.enemies[0].hp).toBeLessThan(1000);
   });
 
+  it('soldiers with nothing to do walk slowly along the wall to orcs climbing elsewhere', () => {
+    const game = new Game(1, veteran(quiet()));
+    game.gold = 1000;
+    game.place('soldiers', 16, -1);
+    game.endSetup();
+    game.plan.groups = [];
+    game.skipPreview();
+    game.balls = [];
+    game.royalDue = Infinity;
+    const climber = enemy({ x: -16, y: 0.6, state: 'wall', hp: 1e6, maxHp: 1e6, timer: 0 });
+    game.enemies.push(climber);
+    run(game, 3);
+    // Still on their way after 3 seconds: they walk, they don't run.
+    expect(climber.hp).toBe(1e6);
+    expect(Math.min(...game.soldiers.map((s) => s.x))).toBeLessThan(10);
+    run(game, 30);
+    expect(climber.hp).toBeLessThan(1e6);
+  });
+
   it('the castle catapult lobs fresh Royal Balls up the field', () => {
     const game = new Game(1, veteran(quiet()));
     game.gold = 150;
@@ -714,6 +779,19 @@ describe('run loop', () => {
     game.enemies.push(enemy({ x: 0, y: 10, state: 'stand' }), enemy({ kind: 'orcCatapult', x: 5, y: 50, state: 'stand', hp: 60, maxHp: 60 }));
     run(game, 0.05);
     expect(game.defenders[0].aimY).toBe(50);
+  });
+
+  it('the call to arms doubles every defender\'s rate of fire for a while, then rests', () => {
+    const game = battle();
+    expect(game.mult('crossbow', 'rate')).toBe(1);
+    expect(game.callToArms()).toBe(true);
+    expect(game.mult('crossbow', 'rate')).toBe(2);
+    expect(game.callToArms()).toBe(false);
+    run(game, game.cfg.callToArms.seconds + 0.1);
+    expect(game.mult('crossbow', 'rate')).toBe(1);
+    expect(game.canCallToArms).toBe(false);
+    run(game, game.cfg.callToArms.cooldown);
+    expect(game.canCallToArms).toBe(true);
   });
 
   it('killing a warlord pays boss Renown', () => {

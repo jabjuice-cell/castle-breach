@@ -200,7 +200,7 @@ export const defaultConfig = {
     towerHalf: 1.5,
     /** The wall walk reaches this far behind the wall's back face. */
     wallSlack: 0.5,
-    /** Range multipliers by ground: tower tops reach further, the courtyard less far. */
+    /** Range multipliers by ground: each storey of tower adds 25% reach; the courtyard reaches less far. */
     towerRange: 1.25,
     courtyardRange: 0.8,
     /** Each extra defender of the same kind costs this much more than the last. */
@@ -212,6 +212,10 @@ export const defaultConfig = {
     /** The y of the tower tops, where a defender mans a turret. */
     start: { x: -4, y: -1 },
   },
+  /** The call to arms from the keep: defenders fire this much faster and soldiers move this much quicker, for a while. */
+  callToArms: { seconds: 6, cooldown: 45, rate: 2, run: 2.5 },
+  /** Towers the player builds on the wall walk or stacks on the joints' towers, a storey at a time. */
+  towers: { cost: 50, costGrowth: 1.3, maxStoreys: 3 },
   /**
    * Coverage: what each defender can reach decides where it is worth placing.
    * Crossbows shoot straight up a lane (tower tops can angle 15 degrees), archers cover
@@ -224,6 +228,11 @@ export const defaultConfig = {
     archerReach: 0.6,
     catapultMin: 13.3,
     catapultMax: 50,
+    /** How far round the player can aim a defender (radians): about 26 degrees, or 46 from a tower top. */
+    aimWall: 0.45,
+    aimTower: 0.8,
+    /** An aimed catapult only reaches this far either side of its aim. */
+    catapultAimSpread: 0.3,
     /** Soldiers hold their section plus this much of each neighbour. */
     soldierSpill: 4,
     /** A section counts as covered against boulders if a stopper covers this far out from it. */
@@ -240,14 +249,17 @@ export const defaultConfig = {
     burnSeconds: 3, footprint: 2.6,
     /** Each volley has this chance to shoot down each enemy boulder in its cover. */
     shootDown: 0.3,
+    /** Arrows do only this share of their damage to orcs climbing or hacking at the wall. */
+    wallShare: 0.25,
   },
   /** The castle's own catapult lobs a fresh Royal Ball up the field: the idle player's multiball. */
   catapult: { cost: 150, interval: 10, spread: 0.5, footprint: 1.8 },
   /**
    * The soldiers are the last line of defence: companies spread along the foot of the wall
-   * and rush any orc that gets close to it. The fallen return each wave.
+   * and rush any orc that gets close to it. With nothing to do at their post they walk, slowly,
+   * to orcs on the wall elsewhere (so where they start matters). The fallen return each wave.
    */
-  soldiers: { cost: 60, count: 40, footprint: 1.5, hp: 30, dps: 6, reach: 1.1, y: 2.6, guard: 4.5, heavyGuard: 2.5, speed: 4 },
+  soldiers: { cost: 60, count: 40, footprint: 1.5, hp: 30, dps: 6, reach: 1.1, y: 2.6, guard: 4.5, heavyGuard: 2.5, speed: 4, walk: 1.2 },
   upgrades: {
     /** Each track's first level costs this share of the defender's price. */
     baseCostShare: 0.4,
@@ -270,7 +282,7 @@ export const defaultConfig = {
   levels: {
     waves: 5,
     names: ['The Old Road', 'Mill Ford', 'The Black Gate'],
-    warChest: [200, 450, 800],
+    warChest: [200, 350, 500],
   },
   /** Bonuses from the town's permanent upgrades (meta.ts sets them; 1 and 0 mean none). */
   bonuses: {
@@ -287,7 +299,7 @@ export const defaultConfig = {
     previewSeconds: 12,
     /** Threat budget in grunt-equivalents: base * growth^(wave - 1). */
     budgetBase: 30,
-    budgetGrowth: 1.17,
+    budgetGrowth: 1.3,
     /**
      * Enemy HP grows this much per wave (bosses excluded). Grunts stay one-hit bricks,
      * so most of the growth is in how many orcs come.

@@ -99,11 +99,11 @@ function randomShop(game: Game, rng: Rng): void {
  */
 const BUILD_ORDER: [DefenderKind, number, number][] = [
   ['crossbow', -4, -1],
+  ['soldiers', 0, -5.5],
   ['archers', 0, -1],
   ['crossbow', 4, -1],
   ['archers', -8, -1],
   ['archers', 8, -1],
-  ['soldiers', 0, -5.5],
   ['crossbow', -12, -1],
   ['crossbow', 12, -1],
   ['catapult', -8, -8],
@@ -114,7 +114,7 @@ const BUILD_ORDER: [DefenderKind, number, number][] = [
 
 /** Planned shopping: keep walls healthy, buy in a set order, then spread upgrades. */
 function plannedShop(game: Game): void {
-  repairBelow(game, 0.75);
+  repairBelow(game, 0.5);
   for (const [kind, x, y] of BUILD_ORDER) {
     if (!game.unlocked(kind)) continue;
     if (!placeAt(game, kind, x, y)) return;
@@ -220,6 +220,8 @@ export function paddleBot(skill: PaddleSkill, strong: boolean, placement: Placem
       return;
     }
     if (strong && game.canCallEarly()) game.callEarly();
+    // Sound the horn when the field is crowded or orcs are on the wall.
+    if (strong && game.canCallToArms && (game.enemies.length >= 25 || game.enemies.some((e) => e.state === 'wall'))) game.callToArms();
 
     let next: Incoming | undefined;
     const consider = (key: object, hit: { x: number; eta: number } | null) => {

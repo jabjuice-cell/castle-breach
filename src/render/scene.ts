@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { type Defender, type PlacedKind, groundAt } from '../sim/defenders';
-import { type Ball, type Capsule, type CapsuleKind, type Game, type GameEvent } from '../sim/game';
-import { ENEMY_KINDS, type EnemyKind } from '../sim/waves';
+import { type Ball, type Capsule, type CapsuleKind, type Enemy, type Game, type GameEvent } from '../sim/game';
+import { ENEMY_KINDS, type EnemyKind, formation } from '../sim/waves';
 import aspects from '../assets/aspects.json';
 import keepUrl from '../assets/castle/keep.webp';
 import tavernUrl from '../assets/castle/tavern.webp';
@@ -113,6 +113,8 @@ const SHIELD_H = 1.2;
 const CAM_Y = 54;
 const CAM_Z = 29;
 const CAM_LOOK = -22;
+/** How far up the field the camera glides to show the coming horde. */
+const LOOK_AHEAD = 38;
 /** A heave's shove: quick, so it feels like a punch. */
 const HEAVE_SECONDS = 0.15;
 /** How long the hit glint takes to fade off the shield. */
@@ -154,6 +156,10 @@ function gateDoor(x: number, iy: number): string | null {
 const TOWER_H = 4.5;
 const TOWER_HALF = 1.5;
 const TOWER_Z = 1;
+/** Each storey the player stacks on a tower adds this much height. */
+const STOREY_H = 2.5;
+/** How high the top of a tower of n storeys is. */
+const towerTop = (storeys: number) => TOWER_H + (storeys - 1) * STOREY_H;
 /** How a squad of archers stands: columns x rows around its spot. */
 const SQUAD_COLS = 6;
 /** Half-heights of the archer and soldier sprites: they come in crowds, so a little smaller than a grunt. */
@@ -237,6 +243,16 @@ export class BattleScene {
   private voxelColor: THREE.Color[] = [];
   private segments: VoxelGroup[] = [];
   private towerX: number[] = [];
+  private stackMesh: THREE.InstancedMesh | null = null;
+  /** The coming wave, mustered beyond the top of the field while it waits (drawn only, not in the sim). */
+  private horde: Enemy[] = [];
+  private hordeFor = -1;
+  /** Looking up the field at the horde: 0 is the battle view, 1 is the far end. lookAhead is where it is heading. */
+  lookAhead = 0;
+  private lookNow = 0;
+  private aimMesh: THREE.Mesh | null = null;
+  private aimKey = '';
+  private stackKey = '';
 
   private sprites = {} as Record<EnemyKind, THREE.InstancedMesh>;
   private soldierSprites: THREE.InstancedMesh;
@@ -537,6 +553,7 @@ export class BattleScene {
 
   /** Swaps in a fresh game (after a restart) and rebuilds the castle and ground. */
   setGame(game: Game) {
+    this.hordeFor = -1;
     this.game = game;
     this.rebuildCastle();
     this.ground.reset();
@@ -601,7 +618,8 @@ export class BattleScene {
     const hit = this.raycaster.ray.intersectPlane(this.groundPlane, tmpV);
     if (!hit) return null;
     // Clicks on the wall or a tower land on its top, not the ground behind it.
-    for (const h of [TOWER_H, WALL_H]) {
+    const tops = [...new Set(this.game.stacks.map((s) => towerTop(s.storeys)))].sort((a, b) => b - a);
+    for (const h of [...tops, WALL_H]) {
       this.groundPlane.constant = -h;
       const top = this.raycaster.ray.intersectPlane(this.groundPlane, tmpD);
       this.groundPlane.constant = 0;
@@ -639,6 +657,51 @@ export class BattleScene {
   hideGhost() {
     for (const gh of this.ghosts.values()) gh.visible = false;
     this.ghostShown = null;
+  }
+
+  /**
+   * Paints the ground a defender's aim covers, in gold: a crossbow's lane, an archer
+   * squad's cone or a catapult's band. null hides it.
+   */
+  showAim(d: Defender | null) {
+    if (!d || d.kind === 'soldiers') {
+      if (this.aimMesh) this.aimMesh.visible = false;
+      return;
+    }
+    const g = this.game;
+    const c = g.cfg.coverage;
+    const h = d.heading ?? 0;
+    const reach = d.kind === 'archers' ? g.cfg.field.topY * c.archerReach * g.rangeMult(d) : d.kind === 'catapult' ? c.catapultMax * g.rangeMult(d) : g.cfg.field.topY;
+    const key = `${d.kind}${d.x},${d.y},${h.toFixed(3)},${reach.toFixed(2)}`;
+    if (!this.aimMesh) {
+      this.aimMesh = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial({ color: '#ffd34a', transparent: true, opacity: 0.45, depthWrite: false, depthTest: false, side: THREE.DoubleSide }));
+      this.aimMesh.renderOrder = 3;
+      this.scene.add(this.aimMesh);
+    }
+    this.aimMesh.visible = true;
+    if (key === this.aimKey) return;
+    this.aimKey = key;
+    // The shape in sim space, as (x, y) points around the defender; the crossbow's lane is a long strip.
+    const pts: [number, number][] = [];
+    const dir = (a: number, r: number): [number, number] => [d.x + Math.sin(a) * r, d.y + Math.cos(a) * r];
+    if (d.kind === 'crossbow') {
+      const w = c.crossbowLane;
+      const along = (r: number, side: number): [number, number] => [d.x + Math.sin(h) * r + Math.cos(h) * w * side, d.y + Math.cos(h) * r - Math.sin(h) * w * side];
+      pts.push(along(1, -1), along(reach, -1), along(reach, 1), along(1, 1));
+    } else {
+      const half = d.kind === 'archers' ? c.archerCone : d.heading === null ? 1.2 : c.catapultAimSpread;
+      const inner = d.kind === 'catapult' ? c.catapultMin : 1;
+      for (let i = 0; i <= 16; i++) pts.push(dir(h - half + (i / 16) * half * 2, reach));
+      for (let i = 16; i >= 0; i--) pts.push(dir(h - half + (i / 16) * half * 2, inner));
+    }
+    // Clip to the field, then lay it flat just above the ground.
+    const hw = g.cfg.field.halfWidth;
+    const shape = new THREE.Shape(pts.map(([x, y]) => new THREE.Vector2(Math.max(-hw, Math.min(hw, x)), Math.min(g.cfg.field.topY, y))));
+    const geo = new THREE.ShapeGeometry(shape);
+    geo.rotateX(-Math.PI / 2);
+    geo.translate(0, 0.2, 0);
+    this.aimMesh.geometry.dispose();
+    this.aimMesh.geometry = geo;
   }
 
   /**
@@ -745,6 +808,14 @@ export class BattleScene {
           this.shieldFlashT = 0;
           this.shake = Math.max(this.shake, ev.parry ? 0.5 : 0.25);
           if (ev.parry) this.flash(0.18, '#fff6c8');
+          break;
+        }
+        case 'callToArms': {
+          // Gold and blue bursts off every tower top, and a warm flash.
+          this.flash(0.25, '#ffe9a0');
+          for (const st of this.game.stacks) {
+            fw.burst(st.x, this.standHeight(st.x, TOWER_Z) + 0.5, -TOWER_Z, { count: 30, colors: ['#ffd34a', '#2a4fb0', '#ffffff'], speed: 7, life: 0.9, size: 0.45, up: 1, gravity: 8 });
+          }
           break;
         }
         case 'heave':
@@ -907,12 +978,15 @@ export class BattleScene {
 
     this.shake = Math.max(0, this.shake - dt * 2.5);
     const k = this.shake * this.shake;
+    // Looking ahead glides the camera up the field and down closer to the horde (eased), and back.
+    this.lookNow += (this.lookAhead - this.lookNow) * Math.min(1, dt * 2.2);
+    const ahead = this.lookNow * this.lookNow * (3 - 2 * this.lookNow) * LOOK_AHEAD;
     this.camera.position.set(
       this.camBase.x + (Math.random() - 0.5) * k * 1.2,
-      this.camBase.y + (Math.random() - 0.5) * k * 1.2,
-      this.camBase.z,
+      this.camBase.y + (Math.random() - 0.5) * k * 1.2 - ahead * 0.6,
+      this.camBase.z - ahead,
     );
-    this.camera.lookAt(this.camLook);
+    this.camera.lookAt(tmpD.copy(this.camLook).setZ(this.camLook.z - ahead));
     this.renderer.render(this.scene, this.camera);
   }
 
@@ -1147,7 +1221,7 @@ export class BattleScene {
     if (!show) return;
     // The preview is rounded to the overlay's cells, so moving the mouse within one doesn't repaint.
     const cell = (v: number) => Math.round(v / OVERLAY_CELL);
-    const key = `${g.defenders.map((d) => `${d.kind}${d.x},${d.y}`).join(';')}|${preview ? `${preview.kind}${cell(preview.x)},${cell(preview.y)}` : ''}|${this.planning.lanes ? g.plan.number : ''}|${g.unlocked('archers')}`;
+    const key = `${g.defenders.map((d) => `${d.kind}${d.x},${d.y},${d.heading?.toFixed(2) ?? ''}`).join(';')}|${preview ? `${preview.kind}${cell(preview.x)},${cell(preview.y)}` : ''}|${this.planning.lanes ? g.plan.number : ''}|${g.unlocked('archers')}`;
     if (key === this.overlayKey) return;
     this.overlayKey = key;
     this.drawOverlay();
@@ -1165,7 +1239,7 @@ export class BattleScene {
     const { preview, lanes } = this.planning;
     if (preview) {
       const { kind, x, y } = preview;
-      defs.push({ id: -1, kind, ground: groundAt(g.cfg, x, y), x, y, paid: 0, timer: 0, aimX: x, aimY: 30, firedAt: -99 });
+      defs.push({ id: -1, kind, ground: groundAt(g.cfg, x, y, g.stacks), x, y, paid: 0, heading: null, timer: 0, aimX: x, aimY: 30, firedAt: -99 });
     }
     // A wall section is a blind spot if no archer cone reaches out in front of it and no crossbow lane runs up it.
     const seg = g.segmentWidth();
@@ -1246,7 +1320,7 @@ export class BattleScene {
 
   /** How high a defender at world (x, z) stands: on a tower, on the wall, or on the ground. */
   standHeight(x: number, z: number): number {
-    for (const tx of this.towerX) if (Math.abs(x - tx) <= TOWER_HALF && Math.abs(z - TOWER_Z) <= TOWER_HALF) return TOWER_H;
+    for (const s of this.game.stacks) if (Math.abs(x - s.x) <= TOWER_HALF && Math.abs(z - TOWER_Z) <= TOWER_HALF) return towerTop(s.storeys);
     if (z >= 0 && z <= this.game.cfg.wall.depth && Math.abs(x) <= this.game.cfg.field.halfWidth) return WALL_H;
     return Math.max(0, this.groundHeight(x, z));
   }
@@ -1356,6 +1430,59 @@ export class BattleScene {
     this.scene.add(this.voxels);
   }
 
+  /**
+   * The towers the player has built or stacked higher: the same cream shells, rebuilt
+   * whenever one goes up. A joint's own tower is part of the wall; only its new storeys are drawn here.
+   */
+  private updateStacks() {
+    const stacks = this.game.stacks;
+    const key = stacks.map((s) => `${s.x}:${s.storeys}`).join(';');
+    if (key === this.stackKey) return;
+    this.stackKey = key;
+    if (this.stackMesh) {
+      this.scene.remove(this.stackMesh);
+      this.stackMesh.dispose();
+      this.stackMesh = null;
+    }
+    let s = 7;
+    const rnd = () => ((s = (s * 16807) % 2147483647) / 2147483647);
+    const stone = (base: string, v: number) => new THREE.Color(base).offsetHSL(0, 0, (rnd() - 0.5) * v);
+    const cells: { p: THREE.Vector3; c: THREE.Color }[] = [];
+    const n = Math.round((TOWER_HALF * 2) / VOXEL);
+    for (const st of stacks) {
+      const joint = this.towerX.some((tx) => Math.abs(tx - st.x) < 0.01);
+      if (joint && st.storeys <= 1) continue;
+      // New storeys start above the joint tower's battlements; a new tower rises from the ground.
+      const from = joint ? Math.round(TOWER_H / VOXEL) + 1 : 0;
+      const th = Math.round(towerTop(st.storeys) / VOXEL);
+      const x0 = st.x - TOWER_HALF;
+      const z0 = TOWER_Z - TOWER_HALF;
+      for (let ix = 0; ix < n; ix++) {
+        for (let iz = 0; iz < n; iz++) {
+          const edge = ix === 0 || iz === 0 || ix === n - 1 || iz === n - 1;
+          const p = (iy: number) => new THREE.Vector3(x0 + (ix + 0.5) * VOXEL, (iy + 0.5) * VOXEL, z0 + (iz + 0.5) * VOXEL);
+          for (let iy = from; iy < th; iy++) {
+            if (!edge && iy < th - 1) continue;
+            const banner = iz === 0 && ix >= 2 && ix <= n - 3 && iy >= th - 6 && iy <= th - 2;
+            const trim = banner && (iy === th - 6 || ix === 2 || ix === n - 3);
+            // A darker band marks each storey, so a stacked tower reads as blocks.
+            const band = (th - iy) % Math.round(STOREY_H / VOXEL) === 0;
+            cells.push({ p: p(iy), c: banner ? new THREE.Color(trim ? '#e8b730' : '#2a4fb0') : iy < 2 ? stone('#8f8a82', 0.1) : band ? stone('#c9b78e', 0.06) : stone('#e7d8b4', 0.08) });
+          }
+          if (edge && (ix + iz) % 2 === 0) cells.push({ p: p(th), c: stone('#efe1bf', 0.06) });
+        }
+      }
+    }
+    if (!cells.length) return;
+    const mesh = new THREE.InstancedMesh(new THREE.BoxGeometry(VOXEL, VOXEL, VOXEL), new THREE.MeshLambertMaterial(), cells.length);
+    cells.forEach((c, i) => {
+      mesh.setMatrixAt(i, tmpM.makeTranslation(c.p));
+      mesh.setColorAt(i, c.c);
+    });
+    this.stackMesh = mesh;
+    this.scene.add(mesh);
+  }
+
   /** The keep and the tavern behind the courtyard. Scenery; the wall is what you defend. */
   private addTown() {
     const billboard = (art: SpriteArt, h: number, x: number, z: number) => {
@@ -1390,6 +1517,7 @@ export class BattleScene {
 
   private updateCastle(dt: number) {
     const g = this.game;
+    this.updateStacks();
     const segW = g.segmentWidth();
     g.segmentHp.forEach((hp, i) => {
       const frac = hp / g.cfg.wall.segmentHp;
@@ -1521,12 +1649,48 @@ export class BattleScene {
 
   // ---- units ---------------------------------------------------------------
 
+  /**
+   * The next wave standing in its blocks past the spawn line, lane by lane, so the player
+   * can look up the field and see what is coming. Later blocks in a lane stand further back.
+   */
+  private musterHorde(): Enemy[] {
+    const g = this.game;
+    const waiting = g.phase === 'setup' || g.phase === 'preview';
+    if (!waiting) return [];
+    if (this.hordeFor === g.plan.number) return this.horde;
+    this.hordeFor = g.plan.number;
+    const depth: Record<number, number> = {};
+    const far = g.cfg.field.spawnY + 13;
+    this.horde = [];
+    for (const grp of g.plan.groups) {
+      const kinds: EnemyKind[] = [];
+      for (const m of grp.members) for (let i = 0; i < m.count; i++) kinds.push(m.kind);
+      const spacing = 0.45 * 2 * g.cfg.march.spacing;
+      const slots = formation(grp.shape, kinds.length, spacing);
+      const back = depth[grp.lane] ?? 0;
+      let deepest = 0;
+      kinds.forEach((kind, i) => {
+        const s = slots[i] ?? { dx: 0, dy: 0 };
+        const y = Math.min(far, g.cfg.field.spawnY + 1 + back + (kind === 'orcCatapult' ? deepest + 2.5 : s.dy));
+        if (kind !== 'orcCatapult') deepest = Math.max(deepest, s.dy);
+        const x = Math.max(-g.cfg.field.halfWidth + 0.5, Math.min(g.cfg.field.halfWidth - 0.5, grp.x + (kind === 'orcCatapult' ? (i % 3 - 1) * 3 : s.dx)));
+        this.horde.push({
+          kind, x, y, vx: 0, vy: 0, hp: 1, maxHp: 1, state: 'stand', standY: y, timer: 0, phase: (i * 0.618) % 1,
+          burn: 0, burnTime: 0, rally: 1, foe: null, block: null, slotX: 0, slotY: 0, goldMult: 1, lastBall: -1, stagger: 0, blasted: false,
+        });
+      });
+      depth[grp.lane] = back + deepest + 4;
+    }
+    return this.horde;
+  }
+
   private updateEnemies(time: number) {
     const camQ = this.camera.quaternion;
     const counts = Object.fromEntries(ENEMY_KINDS.map((k) => [k, 0])) as Record<EnemyKind, number>;
     let shadowN = 0;
     let barrels = 0;
-    for (const e of this.game.enemies) {
+    const horde = this.musterHorde();
+    for (const e of horde.length ? [...this.game.enemies, ...horde] : this.game.enemies) {
       const mesh = this.sprites[e.kind];
       const i = counts[e.kind]++;
       if (i >= mesh.instanceMatrix.count) continue;

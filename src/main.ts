@@ -7,7 +7,7 @@ import queenUrl from './assets/characters/queen.webp';
 import { queenAdvice } from './queen';
 import { BattleScene, CAPSULE_LOOK, type PlanPreview, QUALITIES, type Quality } from './render/scene';
 import { Sounds } from './render/sound';
-import { DEFENDER_KINDS, type DefenderKind, type Ground, type PlacedKind, SPECIAL_NAMES, type Track, USEFUL_TRACKS, groundAt } from './sim/defenders';
+import { DEFENDER_KINDS, type DefenderKind, type Ground, type PlacedKind, SPECIAL_NAMES, type Track, USEFUL_TRACKS, groundAt, stackAt } from './sim/defenders';
 import { Game, STEP } from './sim/game';
 import { META_GROUPS, META_UPGRADES, type MetaGroup, type Progress, applyMeta, buyMeta, metaCost, newProgress } from './sim/meta';
 import { ENEMY_KINDS, type EnemyKind } from './sim/waves';
@@ -98,6 +98,12 @@ const input = { x: 0, y: 30, shieldX: 0 };
 let placing: PlacedKind | null = null;
 let dragging: number | null = null;
 
+/** True while the player is choosing where to build a tower storey. */
+let building = false;
+
+/** The defender being aimed with the mouse, and its aim before, to put back on cancel. */
+let aiming: { id: number; before: number | null } | null = null;
+
 /** Where the last press on a defender started, to tell a click (open its card) from a drag (move it). */
 let pressAt = { x: 0, y: 0 };
 
@@ -152,15 +158,37 @@ const GROUND_NOTE: Record<Ground, string> = {
   courtyard: 'Courtyard: safe, but 20% less range',
 };
 
-canvas.addEventListener('pointermove', pointerToSim);
+// On the window, so the shield and an aim keep following the mouse over the HUD panels too.
+window.addEventListener('pointermove', pointerToSim);
 canvas.addEventListener('pointerdown', (e) => {
   pointerToSim(e);
   sounds.unlock();
   if (e.button === 2) {
     if (placing) cancelPlacing();
+    if (aiming) cancelAiming();
+    building = false;
     return;
   }
   if (e.button !== 0) return;
+  if (building) {
+    const plan = game.towerPlan(input.x, input.y);
+    if (game.buildTower(input.x, input.y)) {
+      building = false;
+      sounds.thunk();
+      toast(plan.ok && plan.stack ? `Tower raised to ${plan.stack.storeys} storeys` : 'Tower built');
+    } else {
+      toast(plan.ok ? 'Not enough gold' : plan.why);
+    }
+    trayKey = '';
+    return;
+  }
+  if (aiming) {
+    // The aim follows the mouse; a click sets it.
+    sounds.thunk();
+    selected = aiming.id;
+    aiming = null;
+    return;
+  }
   if (placing) {
     tryPlace(placing);
     return;
@@ -196,6 +224,15 @@ function cancelPlacing() {
   placing = null;
   trayKey = '';
 }
+
+function cancelAiming() {
+  if (!aiming) return;
+  const d = game.defenders.find((o) => o.id === aiming!.id);
+  const h = aiming.before;
+  if (d) game.aim(d.id, h === null ? null : { x: d.x + Math.sin(h) * 30, y: d.y + Math.cos(h) * 30 });
+  selected = aiming.id;
+  aiming = null;
+}
 canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 window.addEventListener('keydown', (e) => {
   if (e.code === 'Space') {
@@ -204,8 +241,11 @@ window.addEventListener('keydown', (e) => {
   }
   if (e.code === 'Escape') {
     if (placing) cancelPlacing();
+    if (aiming) cancelAiming();
+    building = false;
     selected = null;
   }
+  if (e.code === 'KeyQ' && running) game.callToArms();
   if (e.code === 'Enter' && running) {
     e.preventDefault();
     if (game.phase === 'setup') startBattle();
@@ -218,12 +258,49 @@ $('play').addEventListener('click', () => {
   $('intro').hidden = true;
   // A brand-new player goes straight to the first level; anyone with Renown or a run under way sees the town first.
   const fresh = progress.renown < 1 && progress.levelsBeaten === 0 && Object.keys(progress.meta).length === 0;
-  if (fresh) running = true;
-  else showTown();
+  if (fresh) {
+    running = true;
+    startTour();
+  } else showTown();
 });
 $('startNow').addEventListener('click', () => (game.phase === 'setup' ? startBattle() : game.callEarly()));
 $('callEarly').addEventListener('click', () => game.callEarly());
+$('arms').addEventListener('click', () => game.callToArms());
 $('again').addEventListener('click', () => showTown());
+
+// ---- looking up the field at the coming horde -------------------------------
+
+/**
+ * At the start of a level the camera glides up the field to the waiting horde, holds,
+ * and comes back. Any click or key cuts it short. In the setup and between waves the
+ * mouse wheel looks up the field and back.
+ */
+let tour = -1;
+const TOUR = { up: 0.4, back: 3.4 };
+function startTour() {
+  tour = calm ? -1 : 0;
+}
+function updateLook(dt: number) {
+  if (!running || !game.shopOpen) {
+    tour = -1;
+    peek = false;
+  }
+  if (tour >= 0) {
+    tour += dt;
+    if (tour > TOUR.back + 1.5) tour = -1;
+  }
+  const touring = tour >= TOUR.up && tour < TOUR.back;
+  view.lookAhead = touring || peek ? 1 : 0;
+}
+let peek = false;
+window.addEventListener('wheel', (e) => {
+  if (!running || !game.shopOpen) return;
+  peek = e.deltaY < 0;
+  tour = -1;
+}, { passive: true });
+window.addEventListener('pointerdown', () => {
+  if (tour >= 0) tour = -1;
+}, { capture: true });
 
 // ---- names -----------------------------------------------------------------
 
@@ -247,6 +324,24 @@ const DEFENDER_INFO: Record<DefenderKind, { name: string; blurb: string }> = {
 
 const TRACK_NAMES: Record<Track, string> = { damage: 'Damage', rate: 'Rate of fire', special: '' };
 const LANES = ['far left', 'left', 'gate', 'right', 'far right'];
+
+/** What each kind of orc does, for the horde preview: the special abilities to plan around. */
+const ENEMY_TRICKS: Partial<Record<EnemyKind, string>> = {
+  chucker: 'chuckers throw rocks, or fast bolts, as they march',
+  barrel: 'barrel orcs blow up their friends, or a hole in the wall',
+  runner: 'goblin runners sprint down the side lanes',
+  rider: 'boar riders zig-zag down the edges',
+  orcCatapult: 'catapults lob boulders: block them to get balls',
+  ogre: 'ogres take a beating and stun their row when they fall',
+  warlord: 'the Warlord bats balls back and hurries his orcs',
+};
+
+function trickText() {
+  const t = game.plan.totals;
+  const tricks = ENEMY_KINDS.filter((k) => t[k] > 0 && ENEMY_TRICKS[k]).map((k) => ENEMY_TRICKS[k]!);
+  if (game.plan.tower) tricks.unshift('the siege tower drops a storey for each row of planks knocked out');
+  return tricks.length ? `Watch out: ${tricks.join('; ')}.` : '';
+}
 
 function count(n: number, kind: EnemyKind) {
   return `${n} ${ENEMY_NAMES[kind][n === 1 ? 0 : 1]}`;
@@ -297,6 +392,9 @@ const hud = {
   bottom: $('bottom'),
   queen: $('queen'),
   queenText: $('queenText'),
+  armsRow: $('armsRow'),
+  arms: $<HTMLButtonElement>('arms'),
+  armsBar: $('armsBar'),
 };
 
 /** Lane markers over the spawn line while the next wave lines up: what is coming down each lane. */
@@ -338,7 +436,10 @@ function updatePlaceTag(kind: PlacedKind | undefined, ok: boolean, ignoreId: num
     return;
   }
   tag.hidden = false;
-  const text = ok ? GROUND_NOTE[groundAt(game.cfg, input.x, input.y)] : game.canPlace(kind, input.x, input.y, ignoreId) ? 'Not enough gold' : whyNot(kind, input.x, input.y);
+  const storeys = stackAt(game.cfg, game.stacks, input.x, input.y)?.storeys ?? 1;
+  const ground = groundAt(game.cfg, input.x, input.y, game.stacks);
+  const note = ground === 'tower' && storeys > 1 ? `Tower top, ${storeys} storeys: +${storeys * 25}% range` : GROUND_NOTE[ground];
+  const text = ok ? note : game.canPlace(kind, input.x, input.y, ignoreId) ? 'Not enough gold' : whyNot(kind, input.x, input.y);
   if (tag.textContent !== text) tag.textContent = text;
   tag.classList.toggle('bad', !ok);
   const p = view.project(input.x, input.y, view.standHeight(input.x, -input.y) + (kind === 'crossbow' ? 5 : 3.2));
@@ -456,15 +557,30 @@ function updateHud(dt: number) {
   });
 
   const previewing = (game.phase === 'preview' || game.phase === 'setup') && running;
-  hud.preview.hidden = !previewing;
+  // Out of the way while the camera looks up the field at the horde.
+  hud.preview.hidden = !previewing || view.lookAhead > 0;
   hud.queen.hidden = !previewing;
   if (previewing) {
     const setup = game.phase === 'setup';
     const wave = `${game.plan.boss ? 'Boss wave! ' : ''}Wave ${game.levelWave}`;
     hud.previewTitle.textContent = setup ? `Level ${game.level + 1}: ${c.levels.names[game.level]}` : `${wave} marches in ${Math.ceil(game.phaseTimer)}`;
-    hud.previewText.textContent = setup ? `${wave} brings ${planText()}, down ${laneText()}.` : `${planText()}, down ${laneText()}.`;
+    const tricks = trickText();
+    hud.previewText.textContent = `${setup ? `${wave} brings ` : ''}${planText()}, down ${laneText()}. ${tricks}${setup || game.levelWave === 1 ? ' Scroll up to look at them.' : ''}`;
     hud.queenText.textContent = queenAdvice(game);
     hud.startNow.innerHTML = setup ? 'To battle! <kbd>Enter</kbd>' : `${icon('call')}Start now, +${game.earlyCallGold()} gold <kbd>Enter</kbd>`;
+  }
+
+  // The call to arms: a button with a bar that refills while the horn rests.
+  hud.armsRow.hidden = game.phase !== 'battle';
+  if (game.phase === 'battle') {
+    const a = game.arms;
+    const live = game.armsActive;
+    const rest = Math.max(0, a.readyAt - game.time);
+    const html = live ? `To arms! ${Math.ceil(a.until - game.time)}s` : rest > 0 ? `Horn rests ${Math.ceil(rest)}s` : 'Call to arms <kbd>Q</kbd>';
+    if (hud.arms.innerHTML !== html) hud.arms.innerHTML = html;
+    hud.arms.disabled = !game.canCallToArms;
+    hud.arms.classList.toggle('live', live);
+    hud.armsBar.style.transform = `scaleX(${live ? (a.until - game.time) / c.callToArms.seconds : 1 - rest / c.callToArms.cooldown})`;
   }
 
   const tail = game.phase === 'battle' && game.canCallEarly();
@@ -514,17 +630,21 @@ function trayHtml(): string {
     const cost = game.defenderCost(k);
     return `<button type="button" data-action="place:${k}" class="${placing === k ? 'on' : ''}" ${cost > gold ? 'disabled' : ''}><b>${DEFENDER_INFO[k].name}</b><small>${cost} gold${game.count(k) ? ` · ${game.count(k)} placed` : ''}</small></button>`;
   }).join('');
+  const storey = game.storeyCost();
+  const tower = `<button type="button" data-action="tower" class="${building ? 'on' : ''}" ${storey > gold ? 'disabled' : ''}><b>Tower storey</b><small>${storey} gold · on the wall, or on top of a tower</small></button>`;
   const again = setup && progress.lastLoadout.length && !game.defenders.length
     ? `<button type="button" class="again" data-action="again">Put back last level's defenders</button>`
     : '';
-  const tip = placing
+  const tip = building
+    ? 'Click the wall walk to build a tower, or a tower to stack another storey on it (up to 3). Each storey adds 25% reach to whoever stands on top.'
+    : placing
     ? 'Click the castle to put it down: the wall, a tower top or the courtyard. Right click or Esc to cancel.'
     : setup
       ? 'Spend your war chest on defenders and put them anywhere on the castle. Click one to upgrade or sell it (full refund until the battle starts); drag it to move it.'
       : 'Between waves: click a defender to upgrade it, a wall\'s Repair tag to patch it, or buy more. The next wave won\'t wait.';
   return `
     <header><h3>${setup ? 'Load-out' : 'Between waves'}</h3><span class="purse">${icon('gold')}${gold} gold</span></header>
-    <div class="buy">${buy}</div>${again}
+    <div class="buy">${buy}${tower}</div>${again}
     <p class="tip">${tip}</p>
     ${setup ? '<button type="button" class="go" data-action="go">To battle! <kbd>Enter</kbd></button>' : ''}`;
 }
@@ -539,7 +659,11 @@ function popHtml(d: { id: number; kind: DefenderKind }): string {
     })
     .join('');
   const plural = { crossbow: 'crossbows', archers: 'archer squads', catapult: 'catapults', soldiers: 'companies' }[kind];
-  return `<h3>${DEFENDER_INFO[kind].name}</h3><small>Upgrades apply to all your ${plural}.</small>${tracks}
+  const def = game.defenders.find((o) => o.id === d.id)!;
+  const aim = game.aimable(def)
+    ? `<div class="track"><span>Aim<small>${def.heading === null ? 'straight ahead' : `${Math.round(Math.abs(def.heading) * 57.3)}° ${def.heading < 0 ? 'left' : 'right'}`}</small></span><span><button type="button" data-action="aim:${d.id}">Aim</button>${def.heading !== null ? ` <button type="button" data-action="unaim:${d.id}">Straight</button>` : ''}</span></div>`
+    : '';
+  return `<h3>${DEFENDER_INFO[kind].name}</h3><small>Upgrades apply to all your ${plural}.</small>${aim}${tracks}
     <footer><button type="button" data-action="sell:${d.id}">Sell for ${game.sellValue(d.id)}g</button><button type="button" data-action="close">Done</button></footer>`;
 }
 
@@ -550,7 +674,7 @@ function updateShop() {
   hud.tray.hidden = !open;
   if (open) {
     // Re-render only when something it shows has changed, so the buttons stay clickable.
-    const key = [game.phase, Math.floor(game.gold), placing, game.defenders.length, progress.lastLoadout.length].join('|');
+    const key = [game.phase, Math.floor(game.gold), placing, building, game.defenders.length, progress.lastLoadout.length].join('|');
     if (key !== trayKey) {
       trayKey = key;
       hud.tray.innerHTML = trayHtml();
@@ -562,7 +686,7 @@ function updateShop() {
   if (!d) selected = null;
   hud.defPop.hidden = !d;
   if (d) {
-    const key = `${d.id}|${Math.floor(game.gold)}|${Object.values(game.levels[d.kind]).join(',')}|${game.phase}`;
+    const key = `${d.id}|${Math.floor(game.gold)}|${Object.values(game.levels[d.kind]).join(',')}|${game.phase}|${d.heading}`;
     if (hud.defPop.dataset.key !== key) {
       hud.defPop.dataset.key = key;
       hud.defPop.innerHTML = popHtml(d);
@@ -577,6 +701,11 @@ function shopAction(action: string) {
   const [verb, a, b] = action.split(':');
   if (verb === 'place') {
     placing = placing === a ? null : (a as PlacedKind);
+    building = false;
+    selected = null;
+  } else if (verb === 'tower') {
+    building = !building;
+    placing = null;
     selected = null;
   } else if (verb === 'up') {
     if (game.upgrade(a as DefenderKind, b as Track)) sounds.thunk();
@@ -585,6 +714,12 @@ function shopAction(action: string) {
     selected = null;
   } else if (verb === 'close') {
     selected = null;
+  } else if (verb === 'aim') {
+    const d = game.defenders.find((o) => o.id === Number(a));
+    if (d) aiming = { id: d.id, before: d.heading };
+    selected = null;
+  } else if (verb === 'unaim') {
+    game.aim(Number(a), null);
   } else if (verb === 'repair') {
     const hp = game.repair(Number(a));
     if (hp > 0) {
@@ -648,6 +783,7 @@ function startLevel() {
   $('town').hidden = true;
   $('lost').hidden = true;
   running = true;
+  startTour();
 }
 
 const GROUP_NAMES: Record<MetaGroup, string> = { defence: 'Defence', wall: 'The wall', shield: 'The royal shield', town: 'The town' };
@@ -750,7 +886,36 @@ function updateGhost() {
   let preview: PlanPreview | null = null;
   const dragged = dragging !== null ? game.defenders.find((d) => d.id === dragging) : undefined;
   const kind = placing ?? dragged?.kind;
-  if (kind) {
+  if (aiming && !(game.shopOpen && game.defenders.some((d) => d.id === aiming!.id))) aiming = null;
+  if (building && !game.shopOpen) building = false;
+  if (building) {
+    view.hideGhost();
+    const plan = game.towerPlan(input.x, input.y);
+    const ok = plan.ok && game.gold >= game.storeyCost();
+    const tag = hud.placeTag;
+    tag.hidden = false;
+    tag.classList.toggle('bad', !ok);
+    const text = !plan.ok ? plan.why : !ok ? 'Not enough gold' : plan.stack ? `Raise to ${plan.stack.storeys + 1} storeys: +${(plan.stack.storeys + 1) * 25}% reach on top` : 'Build a tower here';
+    if (tag.textContent !== text) tag.textContent = text;
+    const p = view.project(input.x, input.y, view.standHeight(input.x, -input.y) + 1);
+    tag.style.left = `${p.x}px`;
+    tag.style.top = `${p.y}px`;
+    canvas.style.cursor = 'copy';
+  } else if (aiming) {
+    // Turn it to face the mouse as it moves; the coverage overlay follows.
+    game.aim(aiming.id, { x: input.x, y: input.y });
+    view.hideGhost();
+    const d = game.defenders.find((o) => o.id === aiming!.id)!;
+    const tag = hud.placeTag;
+    tag.hidden = false;
+    tag.classList.remove('bad');
+    const text = `Click to aim ${DEFENDER_INFO[d.kind].name.toLowerCase()} · right click to cancel`;
+    if (tag.textContent !== text) tag.textContent = text;
+    const p = view.project(input.x, input.y, 1);
+    tag.style.left = `${p.x}px`;
+    tag.style.top = `${p.y - 10}px`;
+    canvas.style.cursor = 'crosshair';
+  } else if (kind) {
     const ignore = dragged?.id ?? -1;
     const gold = placing ? game.defenderCost(kind) : game.moveCost();
     const ok = game.canPlace(kind, input.x, input.y, ignore) && game.gold >= gold;
@@ -765,6 +930,11 @@ function updateGhost() {
     canvas.style.cursor = hover ? 'grab' : '';
   }
   view.setPlanning(planning, preview, game.shopOpen);
+  // The gold aim shape: while aiming, and for the defender whose card is open.
+  const shown = aiming?.id ?? selected;
+  view.showAim(running && shown !== null ? game.defenders.find((d) => d.id === shown) ?? null : null);
+  // Clicks while aiming or building go through the wave banner to the field.
+  hud.preview.style.pointerEvents = aiming || building || placing ? 'none' : '';
 }
 
 // ---- loop ------------------------------------------------------------------
@@ -850,6 +1020,10 @@ function frame(now: number) {
         case 'waveCleared':
           toast(`Wave ${ev.wave} beaten back, +${ev.gold} gold`);
           break;
+        case 'callToArms':
+          sounds.horn();
+          toast('To arms!');
+          break;
         case 'calledEarly':
           toast(`Early call! +${ev.gold} gold`);
           break;
@@ -862,6 +1036,7 @@ function frame(now: number) {
     }
     game.events.length = 0;
   }
+  updateLook(dt);
   updateGhost();
   sounds.scrape(running && game.phase === 'battle' ? Math.abs(game.shield.vx) / game.cfg.shield.speed : 0);
   view.render(dt, now / 1000);

@@ -19,11 +19,32 @@ export function towerXs(cfg: Config): number[] {
   return Array.from({ length: cfg.wall.segments + 1 }, (_, i) => -hw + i * seg);
 }
 
+/** A tower on the wall: one stands on every joint, and more can be built and stacked up storey by storey. */
+export interface Stack {
+  x: number;
+  storeys: number;
+}
+
+/** The towers a castle starts with: one storey on each joint. */
+export function jointStacks(cfg: Config): Stack[] {
+  return towerXs(cfg).map((x) => ({ x, storeys: 1 }));
+}
+
+/** True if (x, y) is on the wall walk (towers included), not the courtyard behind. */
+export function onWall(cfg: Config, y: number): boolean {
+  return y >= -cfg.wall.depth - cfg.castle.wallSlack && y <= cfg.castle.maxY;
+}
+
+/** The tower whose top (x, y) is on, if any. */
+export function stackAt(cfg: Config, stacks: Stack[], x: number, y: number): Stack | undefined {
+  if (!onWall(cfg, y)) return undefined;
+  return stacks.find((s) => Math.abs(x - s.x) <= cfg.castle.towerHalf);
+}
+
 /** The ground at (x, y): a tower top, the wall walk, or the courtyard behind. */
-export function groundAt(cfg: Config, x: number, y: number): Ground {
-  const c = cfg.castle;
-  if (y < -cfg.wall.depth - c.wallSlack) return 'courtyard';
-  return towerXs(cfg).some((tx) => Math.abs(x - tx) <= c.towerHalf) ? 'tower' : 'wall';
+export function groundAt(cfg: Config, x: number, y: number, stacks: Stack[] = jointStacks(cfg)): Ground {
+  if (!onWall(cfg, y)) return 'courtyard';
+  return stackAt(cfg, stacks, x, y) ? 'tower' : 'wall';
 }
 
 export const TRACKS = ['damage', 'rate', 'special'] as const;
@@ -53,6 +74,11 @@ export interface Defender {
   y: number;
   /** Gold paid for it, for selling it back. */
   paid: number;
+  /**
+   * Where the player has aimed it, as an angle off straight up the field (radians, positive
+   * toward +x), or null to leave it on its default facing.
+   */
+  heading: number | null;
   /** Countdown to the next shot. */
   timer: number;
   /** Where it last aimed, for the renderer. */
