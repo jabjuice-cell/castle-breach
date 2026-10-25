@@ -23,6 +23,8 @@ export const defaultConfig = {
   /** A brick that shoots back: throws pebbles at the wall as its block marches, or (boltShare of them) fires fast bolts. */
   chucker: { hp: 10, speed: 1.8, radius: 0.5, mass: 1, wallDps: 1, meleeDps: 2, climbSeconds: 3, gold: 2, threat: 2, throwFromY: 44, throwInterval: 4, boltShare: 0.5 },
   /** Riders zig-zag across the field in a skirmish line. */
+  /** Goblin runners: small, quick and fragile, sprinting down the side lanes in loose packs. */
+  runner: { hp: 6, speed: 3.6, radius: 0.4, mass: 0.8, wallDps: 1, meleeDps: 2, climbSeconds: 2, gold: 1, threat: 1 },
   rider: { hp: 8, speed: 2.6, radius: 0.55, mass: 1.2, wallDps: 1, meleeDps: 3, climbSeconds: 2, gold: 2, threat: 2, zigSpeed: 4, zigRate: 1.6 },
   /** The ball source: marches at the back of a block, then parks and lobs boulders at the wall. */
   orcCatapult: {
@@ -65,11 +67,11 @@ export const defaultConfig = {
 
   /** Enemy projectiles: what reaches the wall does wallDamage. A blocked one becomes a ball. */
   /**
-   * The wave 10 boss: a tower 6 tiles wide of 5 floors, each a row of plank bricks.
+   * The wave 10 boss: a tower about 5 tiles wide of 4 floors, each a row of 6 plank bricks (as in its art).
    * Balls chip the bottom standing floor; each floor that falls tips out a block of orcs.
    */
   siegeTower: {
-    halfWidth: 5, depth: 3, floors: 5, planks: 6, plankHits: 2, speed: 0.33, floorOrcs: 8,
+    halfWidth: 4, depth: 3, floors: 4, planks: 6, plankHits: 2, speed: 0.33, floorOrcs: 8,
     throwInterval: 4, rampDps: 20, gold: 150,
   },
 
@@ -284,6 +286,8 @@ export const defaultConfig = {
     blocksMax: 6,
     chuckersFromWave: 3,
     chuckerShare: 0.12,
+    runnersFromWave: 2,
+    runnerShare: 0.12,
     ridersFromWave: 6,
     riderShare: 0.15,
     /** Orc catapults come every wave on top of the budget: base + perWave * (n - 1). */

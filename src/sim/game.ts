@@ -787,7 +787,7 @@ export class Game {
       const footCount = foot.reduce((s, m) => s + m.count, 0);
       const radius = Math.max(...g.members.map((m) => (m.kind === 'orcCatapult' ? 0 : this.cfg[m.kind].radius)));
       const spacing = Math.max(radius, 0.45) * 2 * this.cfg.march.spacing;
-      const speed = lead === 'rider' || lead === 'ogre' || lead === 'warlord' ? this.cfg[lead].speed : this.cfg.march.speed;
+      const speed = lead === 'runner' || lead === 'rider' || lead === 'ogre' || lead === 'warlord' ? this.cfg[lead].speed : this.cfg.march.speed;
       const block: Block = {
         id: this.nextBlockId++, x: g.x, y: this.cfg.field.spawnY, shape: g.shape, members: [], start: 0,
         spacing, speed, homeX: g.x, zig: lead === 'rider', phase: this.rng.next() * Math.PI * 2, dirty: false, regroupAt: 0,

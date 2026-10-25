@@ -4,7 +4,7 @@
   "enemy-rider": 0.9863,
   "enemy-monk": 0.9961,
   "defender-soldier": 1.0579,
-  "defender-archer": 1.0449,
+  "defender-archer": 1.0261,
   "enemy-ogre": 0.9974,
   "enemy-warlord": 0.9531,
   "enemy-catapult": 0.9935,
@@ -33,5 +33,9 @@
   "call-wave": 1.024,
   "forest": 0.6667,
   "crater": 1.1034,
-  "scorch": 1.0267
+  "scorch": 1.0267,
+  "enemy-runner": 0.7788,
+  "enemy-bolt": 0.2695,
+  "royal-shield-hit-overlay": 1.008,
+  "siege-tower-1": 0.667
 }

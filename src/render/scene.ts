@@ -12,7 +12,9 @@ import explosionUrl from '../assets/fx/explosion.webp';
 import impactUrl from '../assets/fx/impact.webp';
 import fireballUrl from '../assets/fx/fireball.webp';
 import rockUrl from '../assets/fx/rock.webp';
+import enemyBoltUrl from '../assets/fx/enemy-bolt.webp';
 import royalShieldUrl from '../assets/fx/royal-shield.webp';
+import shieldFlashUrl from '../assets/fx/royal-shield-hit-overlay.webp';
 import stoneUrl from '../assets/fx/stone.webp';
 import craterUrl from '../assets/maps/crater.webp';
 import forestUrl from '../assets/maps/forest.jpg';
@@ -25,6 +27,8 @@ import chuckerUrl from '../assets/sprites/enemy-chucker.webp';
 import gruntUrl from '../assets/sprites/enemy-grunt.webp';
 import ogreUrl from '../assets/sprites/enemy-ogre.webp';
 import riderUrl from '../assets/sprites/enemy-rider.webp';
+import runnerUrl from '../assets/sprites/enemy-runner.webp';
+import siegeTowerUrl from '../assets/sprites/siege-tower-1.webp';
 import warlordUrl from '../assets/sprites/enemy-warlord.webp';
 import { type BurstOptions, Fireworks } from './fireworks';
 import { Terrain } from './terrain';
@@ -84,9 +88,14 @@ export const CAPSULE_LOOK: Record<CapsuleKind, { color: string; emoji: string; n
   trick: { color: '#e2533f', emoji: '💀', name: 'Orc trick! Shield shrinks' },
 };
 
-/** The siege tower's look: storey height and colours. Placeholder voxels until boss-siege-tower art arrives. */
-const FLOOR_H = 1.8;
-const PLANK_COLORS = ['#3a2a1a', '#6e4a25', '#a8783f'];
+/**
+ * The siege tower art (sprites/siege-tower-1, on its whole canvas): where its plank
+ * grid sits, as fractions of the image (left and right across, top and bottom down),
+ * and how many floors it has. Later stages are drawn on the same canvas.
+ */
+const TOWER_ART = { aspect: 2 / 3, left: 0.181, right: 0.806, top: 0.33, bottom: 0.694, floors: 4 };
+/** About where the bottom floor's planks are, in world height, for hit effects. */
+const TOWER_PLANK_Y = 6.8;
 
 /** The planning overlay: one cell per half unit over the field in front of the wall. */
 const OVERLAY_CELL = 0.5;
@@ -106,17 +115,19 @@ const CAM_Z = 29;
 const CAM_LOOK = -22;
 /** A heave's shove: quick, so it feels like a punch. */
 const HEAVE_SECONDS = 0.15;
+/** How long the hit glint takes to fade off the shield. */
+const SHIELD_FLASH_SECONDS = 0.25;
 /** Balls fly at this height, and are drawn this much bigger than their hit size so they read from up here. */
 const BALL_Y = 0.9;
 const BALL_DRAW = 1.7;
 
 /** Sprite height relative to the orc grunt (and defenders), from the art guide. */
-const SIZE: Record<EnemyKind, number> = { grunt: 1, chucker: 1, barrel: 1, rider: 1.4, orcCatapult: 2, ogre: 2.5, warlord: 3 };
+const SIZE: Record<EnemyKind, number> = { grunt: 1, chucker: 1, barrel: 1, runner: 0.85, rider: 1.4, orcCatapult: 2, ogre: 2.5, warlord: 3 };
 const KILL_COLOR: Record<EnemyKind, string> = {
-  grunt: '#6f9a3c', chucker: '#8a9a42', barrel: '#8a5a2e', rider: '#6d4a32', orcCatapult: '#7a5530', ogre: '#8d9a6a', warlord: '#5d8a34',
+  grunt: '#6f9a3c', chucker: '#8a9a42', barrel: '#8a5a2e', runner: '#9ac040', rider: '#6d4a32', orcCatapult: '#7a5530', ogre: '#8d9a6a', warlord: '#5d8a34',
 };
 /** Kinds that climb the wall before hacking at it (the rest smash it from the ground). */
-const CLIMBERS = new Set<EnemyKind>(['grunt', 'chucker', 'barrel', 'rider']);
+const CLIMBERS = new Set<EnemyKind>(['grunt', 'chucker', 'barrel', 'runner', 'rider']);
 
 /** The castle's shape. Towers stand on the wall joints; defenders on them stand higher. */
 const WALL_H = 3;
@@ -235,6 +246,7 @@ export class BattleScene {
   private thrown: Record<'rock' | 'boulder' | 'stone', THREE.InstancedMesh>;
   /** Bolts and arrows, as flat sprites lying along their flight. */
   private bolts: THREE.InstancedMesh;
+  private enemyBolts: THREE.InstancedMesh;
   private arrows: THREE.InstancedMesh;
   private fxArt = {
     explosion: imageSprite(explosionUrl, aspects.explosion),
@@ -258,6 +270,8 @@ export class BattleScene {
   private shieldMesh: THREE.Mesh;
   private shieldShadow: THREE.Mesh;
   private shieldJolt = 0;
+  private shieldFlash: THREE.Mesh;
+  private shieldFlashT = 1;
   /** Time since the last heave, for the shove animation. */
   private heaveT = 9;
   private puffTex = puffTexture();
@@ -273,8 +287,10 @@ export class BattleScene {
   private capsuleSprites = new Map<Capsule, THREE.Sprite>();
   private bumperMeshes: THREE.Mesh[] = [];
   private bumperRings: THREE.Mesh[] = [];
-  private towerMesh: THREE.InstancedMesh;
-  private towerTop: THREE.Mesh;
+  private towerGroup: THREE.Group;
+  private towerFloorMeshes: THREE.Mesh[] = [];
+  private towerDeck: THREE.Mesh;
+  private towerHoles: THREE.InstancedMesh;
   private towerFloors = 0;
   /** The tower drops a storey when its bottom floor gives way; this eases the drop. */
   private towerDrop = 0;
@@ -350,6 +366,7 @@ export class BattleScene {
       // Placeholder: a grunt carrying a barrel, until sprites/enemy-barrel.webp arrives.
       barrel: imageSprite(gruntUrl, aspects['enemy-grunt']),
       chucker: imageSprite(chuckerUrl, aspects['enemy-chucker']),
+      runner: imageSprite(runnerUrl, aspects['enemy-runner']),
       rider: imageSprite(riderUrl, aspects['enemy-rider']),
       orcCatapult: imageSprite(catapultUrl, aspects['enemy-catapult']),
       ogre: imageSprite(ogreUrl, aspects['enemy-ogre']),
@@ -382,16 +399,18 @@ export class BattleScene {
       m.renderOrder = 7;
     }
     const arrowArt = imageSprite(arrowUrl, aspects.arrow);
-    const makeFlat = (length: number, max: number) => {
-      // Lies flat with the arrowhead pointing along -z (away from the castle).
-      const geo = new THREE.PlaneGeometry(length * arrowArt.aspect, length).rotateX(-Math.PI / 2);
-      const mesh = new THREE.InstancedMesh(geo, new THREE.MeshBasicMaterial({ map: arrowArt.texture, alphaTest: 0.5, side: THREE.DoubleSide }), max);
+    const makeFlat = (length: number, max: number, art = arrowArt, pointsDown = false) => {
+      // Lies flat with the head pointing along -z (away from the castle), whichever way the art points.
+      const geo = new THREE.PlaneGeometry(length * art.aspect, length).rotateX(-Math.PI / 2);
+      if (pointsDown) geo.rotateY(Math.PI);
+      const mesh = new THREE.InstancedMesh(geo, new THREE.MeshBasicMaterial({ map: art.texture, alphaTest: 0.5, side: THREE.DoubleSide }), max);
       mesh.frustumCulled = false;
       mesh.count = 0;
       this.scene.add(mesh);
       return mesh;
     };
     this.bolts = makeFlat(2.6, 300);
+    this.enemyBolts = makeFlat(2.4, 300, imageSprite(enemyBoltUrl, aspects['enemy-bolt']), true);
     this.arrows = makeFlat(1.5, MAX_PROJECTILES);
 
     // Rubble and sparks fly in front of the shield, so they draw after it.
@@ -416,6 +435,14 @@ export class BattleScene {
     this.shieldAspect = shieldArt.aspect;
     this.shieldMesh.renderOrder = 8.5;
     this.scene.add(this.shieldMesh);
+    // The hit flash: a glint painted to fit the shield exactly, laid over it and faded out after each hit.
+    this.shieldFlash = new THREE.Mesh(
+      this.shieldMesh.geometry,
+      new THREE.MeshBasicMaterial({ map: imageSprite(shieldFlashUrl, aspects['royal-shield-hit-overlay']).texture, transparent: true, opacity: 0, depthTest: false, depthWrite: false, side: THREE.DoubleSide }),
+    );
+    this.shieldFlash.renderOrder = 8.6;
+    this.shieldFlash.visible = false;
+    this.shieldMesh.add(this.shieldFlash);
     this.shieldShadow = new THREE.Mesh(
       new THREE.PlaneGeometry(1, 0.5).rotateX(-Math.PI / 2),
       new THREE.MeshBasicMaterial({ map: blobTexture(), transparent: true, depthWrite: false }),
@@ -466,17 +493,26 @@ export class BattleScene {
       this.scene.add(m, ring);
     }
 
-    // The siege tower: storeys of plank bricks with a catapult on top.
-    this.towerMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshLambertMaterial(), 96);
-    this.towerMesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(96 * 3).fill(1), 3);
-    this.towerMesh.frustumCulled = false;
-    this.towerMesh.count = 0;
-    this.scene.add(this.towerMesh);
-    const topArt = imageSprite(catapultUrl, aspects['enemy-catapult']);
-    const topGeo = new THREE.PlaneGeometry(3.6 * topArt.aspect, 3.6).translate(0, 1.8, 0);
-    this.towerTop = new THREE.Mesh(topGeo, new THREE.MeshBasicMaterial({ map: topArt.texture, alphaTest: 0.5, alphaToCoverage: true }));
-    this.towerTop.visible = false;
-    this.scene.add(this.towerTop);
+    // The siege tower: its painted art cut into bands (wheels, four plank floors, the catapult deck),
+    // so floors can fall out from under it, with dark holes where planks are knocked out.
+    const towerMat = new THREE.MeshBasicMaterial({ map: imageSprite(siegeTowerUrl, aspects['siege-tower-1']).texture, alphaTest: 0.5, alphaToCoverage: true });
+    this.towerGroup = new THREE.Group();
+    this.towerGroup.visible = false;
+    this.towerGroup.add(this.towerBand(TOWER_ART.bottom, 1, towerMat));
+    const rowH = (TOWER_ART.bottom - TOWER_ART.top) / TOWER_ART.floors;
+    for (let row = 0; row < TOWER_ART.floors; row++) {
+      const m = this.towerBand(TOWER_ART.bottom - (row + 1) * rowH, TOWER_ART.bottom - row * rowH, towerMat);
+      this.towerFloorMeshes.push(m);
+      this.towerGroup.add(m);
+    }
+    this.towerDeck = this.towerBand(0, TOWER_ART.top, towerMat);
+    this.towerGroup.add(this.towerDeck);
+    this.towerHoles = new THREE.InstancedMesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial(), 32);
+    this.towerHoles.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(32 * 3).fill(1), 3);
+    this.towerHoles.frustumCulled = false;
+    this.towerHoles.count = 0;
+    this.towerGroup.add(this.towerHoles);
+    this.scene.add(this.towerGroup);
 
     // The planning overlay: who covers which bit of the field, blind spots in red, the coming lanes.
     const hw = game.cfg.field.halfWidth;
@@ -706,6 +742,7 @@ export class BattleScene {
           if (ev.parry) fw.burst(ev.x, 0.4, -sy, { count: 40, colors: GOLD, speed: 14, life: 0.35, size: 0.4, ring: true, gravity: 0, drag: 6 });
           this.sparks(ev.x, BALL_Y + 0.4, -sy - 0.3, ev.parry ? 18 : 8);
           this.shieldJolt = ev.parry ? 1 : 0.7;
+          this.shieldFlashT = 0;
           this.shake = Math.max(this.shake, ev.parry ? 0.5 : 0.25);
           if (ev.parry) this.flash(0.18, '#fff6c8');
           break;
@@ -738,15 +775,15 @@ export class BattleScene {
           break;
         }
         case 'plank':
-          this.burst(ev.x, FLOOR_H * 0.5, -ev.y, 4, '#a8783f', 7);
-          fw.burst(ev.x, FLOOR_H * 0.5, -ev.y + 0.3, { count: 22, colors: WOOD, speed: 8, life: 0.5, size: 0.35, gravity: 14 });
+          this.burst(ev.x, TOWER_PLANK_Y, -ev.y, 4, '#a8783f', 7);
+          fw.burst(ev.x, TOWER_PLANK_Y, -ev.y + 0.3, { count: 22, colors: WOOD, speed: 8, life: 0.5, size: 0.35, gravity: 14 });
           this.shake = Math.max(this.shake, 0.15);
           break;
         case 'floorDown':
           // A storey gives way: planks everywhere, a ring of dust, and the tower drops.
-          this.burst(ev.x, FLOOR_H, -ev.y, 24, '#8a5a2e', 12);
+          this.burst(ev.x, TOWER_PLANK_Y, -ev.y, 24, '#8a5a2e', 12);
           fw.burst(ev.x, 0.4, -ev.y, { count: 90, colors: ['#c8b898', '#a89070', '#e8d8b0'], speed: 14, life: 0.8, size: 0.7, ring: true, gravity: 0, drag: 3 });
-          fw.burst(ev.x, FLOOR_H, -ev.y, { count: 80, colors: [...WOOD, ...GOLD], speed: 12, life: 0.9, size: 0.45, up: 0.5, twinkle: true });
+          fw.burst(ev.x, TOWER_PLANK_Y, -ev.y, { count: 80, colors: [...WOOD, ...GOLD], speed: 12, life: 0.9, size: 0.45, up: 0.5, twinkle: true });
           this.flash(0.3, '#ffd34a');
           this.shake = Math.max(this.shake, 0.8);
           break;
@@ -896,6 +933,10 @@ export class BattleScene {
     m.rotation.set(-Math.PI / 2 + SHIELD_TILT + shove * 0.35, 0, this.shieldJolt * 0.05 * Math.sin(this.time * 60));
     // Dimmed while it recovers from a heave.
     (m.material as THREE.MeshBasicMaterial).color.setScalar(g.canHeave ? 1 : 0.72);
+    this.shieldFlashT += dt;
+    const glint = Math.max(0, 1 - this.shieldFlashT / SHIELD_FLASH_SECONDS);
+    (this.shieldFlash.material as THREE.MeshBasicMaterial).opacity = glint * glint;
+    this.shieldFlash.visible = glint > 0;
     // Dragged hard along the battlements, its rim throws a spray of sparks behind it.
     const drag = g.phase === 'battle' ? g.shield.vx / g.cfg.shield.speed : 0;
     if (Math.abs(drag) > 0.2) {
@@ -1034,49 +1075,65 @@ export class BattleScene {
 
   private updateTower(dt: number) {
     const tw = this.game.tower;
-    const mesh = this.towerMesh;
+    const group = this.towerGroup;
     if (!tw) {
-      mesh.count = 0;
-      this.towerTop.visible = false;
+      group.visible = false;
       this.towerFloors = 0;
       return;
     }
     const t = this.game.cfg.siegeTower;
-    if (this.towerFloors && tw.floors.length < this.towerFloors) this.towerDrop += FLOOR_H * (this.towerFloors - tw.floors.length);
-    this.towerFloors = tw.floors.length;
+    const { width: w, base, floor } = this.towerSize();
+    const standing = tw.floors.length;
+    // A floor that gives way drops everything above it by one storey, which then falls into place.
+    if (this.towerFloors && standing < this.towerFloors) this.towerDrop += floor * (this.towerFloors - standing);
+    this.towerFloors = standing;
     this.towerDrop = Math.max(0, this.towerDrop - dt * 9);
-    const plankW = (t.halfWidth * 2) / t.planks;
-    const front = -tw.y;
-    const back = -(tw.y + t.depth);
     const rumble = tw.ramp ? Math.sin(this.time * 30) * 0.04 : 0;
+    group.visible = true;
+    group.position.set(tw.x + rumble, 0, -(tw.y + t.depth / 2));
+    group.quaternion.copy(this.camera.quaternion);
+    // The art's floors, bottom up: the ones still standing are the top ones of the four.
+    const lost = TOWER_ART.floors - standing;
+    this.towerFloorMeshes.forEach((m, row) => {
+      m.visible = row >= lost;
+      m.position.y = base + (row - lost) * floor + this.towerDrop;
+    });
+    this.towerDeck.position.y = base + standing * floor + this.towerDrop;
+    // Knocked-out planks leave a dark hole; cracked ones are shaded.
+    const holes = this.towerHoles;
     let n = 0;
-    const box = (x: number, y: number, z: number, sx: number, sy: number, sz: number, color: string) => {
-      if (n >= mesh.instanceMatrix.count) return;
-      mesh.setMatrixAt(n, tmpM.compose(tmpV.set(x + rumble, y, z), tmpQ.identity(), tmpS.set(sx, sy, sz)));
-      mesh.setColorAt(n++, tmpC.set(color));
-    };
+    const cellW = (w * (TOWER_ART.right - TOWER_ART.left)) / t.planks;
     tw.floors.forEach((planks, f) => {
-      const y0 = f * FLOOR_H + this.towerDrop;
-      // The storey's frame: dark timbers behind the planks, corner posts in front.
-      box(tw.x, y0 + FLOOR_H / 2, (front + back) / 2, t.halfWidth * 2 - 0.2, FLOOR_H - 0.05, t.depth - 0.4, '#3a2a1a');
-      for (const side of [-1, 1]) box(tw.x + side * t.halfWidth, y0 + FLOOR_H / 2, front - 0.1, 0.35, FLOOR_H, 0.45, '#4a3420');
-      box(tw.x, y0 + FLOOR_H - 0.08, front - 0.1, t.halfWidth * 2 + 0.3, 0.16, 0.5, '#4a3420');
       planks.forEach((hits, i) => {
-        if (hits <= 0) return;
-        const x = tw.x - t.halfWidth + (i + 0.5) * plankW;
-        // Cracked planks sag and darken.
-        const sag = hits < t.plankHits ? 0.12 : 0;
-        box(x, y0 + FLOOR_H / 2 - sag, front - 0.25, plankW * 0.9, FLOOR_H * 0.8, 0.3, PLANK_COLORS[Math.min(2, hits)] ?? PLANK_COLORS[2]);
+        if (hits >= t.plankHits || n >= holes.instanceMatrix.count) return;
+        const x = (TOWER_ART.left - 0.5) * w + (i + 0.5) * cellW;
+        const y = base + f * floor + floor / 2 + this.towerDrop;
+        const broken = hits <= 0;
+        holes.setMatrixAt(n, tmpM.compose(tmpV.set(x, y, 0.02), tmpQ.identity(), tmpS.set(cellW * (broken ? 0.82 : 0.9), floor * (broken ? 0.7 : 0.8), 1)));
+        holes.setColorAt(n++, tmpC.set(broken ? '#140c06' : '#3a2412'));
       });
     });
-    // The ramp drops onto the wall when it arrives.
-    if (tw.ramp) box(tw.x, 1.2, front + 0.6, 3, 0.2, 1.6, '#6e4a25');
-    mesh.count = n;
-    mesh.instanceMatrix.needsUpdate = true;
-    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
-    this.towerTop.visible = tw.floors.length >= 2;
-    this.towerTop.position.set(tw.x + rumble, tw.floors.length * FLOOR_H + this.towerDrop, (front + back) / 2);
-    this.towerTop.quaternion.copy(this.camera.quaternion);
+    holes.count = n;
+    holes.instanceMatrix.needsUpdate = true;
+    if (holes.instanceColor) holes.instanceColor.needsUpdate = true;
+  }
+
+  /** The siege tower art's size on screen: its width matches the sim's plank row; base and floor heights follow the art. */
+  private towerSize() {
+    const t = this.game.cfg.siegeTower;
+    const width = (t.halfWidth * 2) / (TOWER_ART.right - TOWER_ART.left);
+    const height = width / TOWER_ART.aspect;
+    const floor = height * ((TOWER_ART.bottom - TOWER_ART.top) / TOWER_ART.floors);
+    return { width, height, base: height * (1 - TOWER_ART.bottom), floor };
+  }
+
+  /** One horizontal band of the siege tower art (top and bottom as fractions down the image), standing on y = 0. */
+  private towerBand(top: number, bottom: number, mat: THREE.Material): THREE.Mesh {
+    const { width, height } = this.towerSize();
+    const geo = new THREE.PlaneGeometry(width, height * (bottom - top)).translate(0, (height * (bottom - top)) / 2, 0);
+    const uv = geo.attributes.uv as THREE.BufferAttribute;
+    for (let i = 0; i < uv.count; i++) uv.setY(i, uv.getY(i) > 0.5 ? 1 - top : 1 - bottom);
+    return new THREE.Mesh(geo, mat);
   }
 
   // ---- planning view --------------------------------------------------------
@@ -1477,7 +1534,7 @@ export class BattleScene {
       const moving = e.state === 'march';
       // Walk cycle in code: a hop on each step, a side-to-side waddle and a squash on landing.
       // Heavier units step slower; riders gallop with less sway; catapults just trundle.
-      const pace = e.kind === 'rider' ? 14 : e.kind === 'orcCatapult' ? 5 : 9 / Math.sqrt(size);
+      const pace = e.kind === 'rider' || e.kind === 'runner' ? 14 : e.kind === 'orcCatapult' ? 5 : 9 / Math.sqrt(size);
       const step = time * pace + e.phase * 20;
       const hop = moving ? Math.abs(Math.sin(step)) : 0;
       const bob = hop * 0.18 * size * (e.kind === 'orcCatapult' ? 0.3 : 1);
@@ -1530,6 +1587,7 @@ export class BattleScene {
     const camQ = this.camera.quaternion;
     const counts = { rock: 0, boulder: 0, stone: 0 };
     let b = 0;
+    let eb = 0;
     let a = 0;
     for (const p of this.game.projectiles) {
       if (p.kind === 'rock' || p.kind === 'boulder' || p.kind === 'stone') {
@@ -1556,10 +1614,12 @@ export class BattleScene {
         tmpQ.setFromUnitVectors(AHEAD, tmpD);
         this.arrows.setMatrixAt(a++, tmpM.compose(tmpV.set(p.x, h, -p.y), tmpQ, tmpS.set(1, 1, 1)));
       } else {
-        if (b >= this.bolts.instanceMatrix.count) continue;
+        const orc = p.kind === 'enemyBolt';
+        const mesh = orc ? this.enemyBolts : this.bolts;
+        if ((orc ? eb : b) >= mesh.instanceMatrix.count) continue;
         const sp = Math.hypot(p.vx, p.vy) || 1;
         tmpQ.setFromUnitVectors(AHEAD, tmpD.set(p.vx / sp, 0, -p.vy / sp));
-        this.bolts.setMatrixAt(b++, tmpM.compose(tmpV.set(p.x, 1.8, -p.y), tmpQ, tmpS.set(1, 1, 1)));
+        mesh.setMatrixAt(orc ? eb++ : b++, tmpM.compose(tmpV.set(p.x, 1.8, -p.y), tmpQ, tmpS.set(1, 1, 1)));
         // Orc bolts streak red, so they read as a threat at a glance.
         if (p.kind === 'enemyBolt') this.fireworks.burst(p.x, 1.8, -p.y, { count: 2, colors: ['#ff5a3c', '#ffb43a'], speed: 0.4, life: 0.22, size: 0.4, gravity: 0, drag: 6 });
       }
@@ -1572,6 +1632,8 @@ export class BattleScene {
     }
     this.bolts.count = b;
     this.bolts.instanceMatrix.needsUpdate = true;
+    this.enemyBolts.count = eb;
+    this.enemyBolts.instanceMatrix.needsUpdate = true;
     this.arrows.count = a;
     this.arrows.instanceMatrix.needsUpdate = true;
   }

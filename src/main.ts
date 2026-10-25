@@ -216,6 +216,7 @@ const ENEMY_NAMES: Record<EnemyKind, [string, string]> = {
   grunt: ['grunt', 'grunts'],
   chucker: ['chucker', 'chuckers'],
   barrel: ['barrel orc', 'barrel orcs'],
+  runner: ['goblin runner', 'goblin runners'],
   rider: ['boar rider', 'boar riders'],
   orcCatapult: ['orc catapult', 'orc catapults'],
   ogre: ['ogre', 'ogres'],

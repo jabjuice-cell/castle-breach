@@ -1,7 +1,7 @@
 import type { Config } from './config';
 import { Rng } from './rng';
 
-export const ENEMY_KINDS = ['grunt', 'chucker', 'barrel', 'rider', 'orcCatapult', 'ogre', 'warlord'] as const;
+export const ENEMY_KINDS = ['grunt', 'chucker', 'barrel', 'runner', 'rider', 'orcCatapult', 'ogre', 'warlord'] as const;
 export type EnemyKind = (typeof ENEMY_KINDS)[number];
 
 /** The outline a block of orcs keeps as it marches: the bricks of the Breakout wall. */
@@ -72,11 +72,12 @@ export function planWave(n: number, seed: number, cfg: Config): WavePlan {
   const rng = new Rng(seed * 7919 + n * 104729);
   const w = cfg.waves;
   const budget = Math.round(waveBudget(n, cfg));
-  const totals: Record<EnemyKind, number> = { grunt: 0, chucker: 0, barrel: 0, rider: 0, orcCatapult: 0, ogre: 0, warlord: 0 };
+  const totals: Record<EnemyKind, number> = { grunt: 0, chucker: 0, barrel: 0, runner: 0, rider: 0, orcCatapult: 0, ogre: 0, warlord: 0 };
 
   // Specialists take a share of the budget each (at least one once unlocked); grunts fill the rest.
   const shares: [EnemyKind, number, number][] = [
     ['chucker', w.chuckersFromWave, w.chuckerShare],
+    ['runner', w.runnersFromWave, w.runnerShare],
     ['rider', w.ridersFromWave, w.riderShare],
     ['ogre', w.ogresFromWave, w.ogreShare],
   ];
@@ -125,6 +126,14 @@ export function planWave(n: number, seed: number, cfg: Config): WavePlan {
     const shape = (['rect', 'wedge', 'column'] as const)[rng.int(0, 2)];
     const time = i === 0 ? 0 : rng.range(0, duration);
     groups.push({ time, lane: lanes[i], x: laneX(lanes[i]) + rng.range(-1.5, 1.5), shape, members });
+  }
+  // Goblin runners sprint down the side lanes in small loose packs.
+  let runners = totals.runner;
+  while (runners > 0) {
+    const count = Math.min(runners, rng.int(3, 6));
+    const lane = rng.next() < 0.5 ? 0 : segs - 1;
+    groups.push({ time: rng.range(1, duration), lane, x: laneX(lane) + rng.range(-1, 1), shape: 'wedge', members: [{ kind: 'runner', count }] });
+    runners -= count;
   }
   // Riders come as a skirmish line that zig-zags across the field.
   let riders = totals.rider;

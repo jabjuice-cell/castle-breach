@@ -72,7 +72,7 @@ describe('waves', () => {
     expect(blocks(25)).toBe(6);
     for (const n of [5, 12, 19]) {
       const t = planWave(n, 2, cfg).totals;
-      const threat = (t.grunt + t.barrel) * 1 + t.chucker * 2 + t.rider * 2 + t.ogre * 12;
+      const threat = (t.grunt + t.barrel + t.runner) * 1 + t.chucker * 2 + t.rider * 2 + t.ogre * 12;
       expect(threat).toBeCloseTo(Math.round(waveBudget(n, cfg)), 0);
     }
   });
@@ -374,10 +374,11 @@ describe('the shield and the balls', () => {
     game.balls = [];
     game.royalDue = Infinity;
     const tw = game.tower!;
-    expect(tw.floors).toHaveLength(5);
-    for (let i = 0; i < 12; i++) ball(game, { id: 100 + i, x: -4.5 + (i % 6) * 1.67, y: tw.y - 1.5, vy: 20 });
+    expect(tw.floors).toHaveLength(4);
+    const plank = (game.cfg.siegeTower.halfWidth * 2) / game.cfg.siegeTower.planks;
+    for (let i = 0; i < 12; i++) ball(game, { id: 100 + i, x: tw.x - game.cfg.siegeTower.halfWidth + ((i % 6) + 0.5) * plank, y: tw.y - 1.5, vy: 20 });
     run(game, 0.1);
-    expect(game.tower!.floors).toHaveLength(4);
+    expect(game.tower!.floors).toHaveLength(3);
     // Its orcs tumble out (and the balls coming back down may already be into them).
     expect(game.enemies.length + game.kills).toBe(game.cfg.siegeTower.floorOrcs);
   });
