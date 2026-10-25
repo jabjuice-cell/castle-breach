@@ -33,14 +33,16 @@
       .bar { height: 12px; background: rgba(0, 0, 0, 0.45); border-radius: 3px; overflow: hidden; margin-top: 5px; }
       .bar > i { display: block; height: 100%; width: 100%; transform-origin: left; transition: transform 0.15s linear; }
       /* Wall bars in the fighting-game style: yellow health, with a red chunk that drains away behind it after a hit. */
-      .seg { position: absolute; width: 84px; transform: translate(-50%, -100%) skewX(-18deg); }
-      .seg .bar { position: relative; height: 12px; margin: 0; border: 2px solid #14100c; border-radius: 1px; background: #2a1712; box-shadow: 0 2px 0 rgba(0, 0, 0, 0.35), inset 0 0 0 1px rgba(255, 255, 255, 0.18); }
+      .seg { position: absolute; width: 52px; transform: translate(-50%, -100%) skewX(-18deg); }
+      .seg .bar { position: relative; height: 7px; margin: 0; border: 1.5px solid #14100c; border-radius: 1px; background: #2a1712; box-shadow: 0 2px 0 rgba(0, 0, 0, 0.35), inset 0 0 0 1px rgba(255, 255, 255, 0.18); }
       .seg .bar > b, .seg .bar > i { position: absolute; inset: 0; display: block; transform-origin: left; }
       .seg .bar > b { background: linear-gradient(#ff5a3c, #b8160c); }
       .seg .bar > i { background: linear-gradient(#fff6a0 0%, #ffd21f 45%, #e89a00 100%); transition: none; }
       .seg.warn .bar > i { background: linear-gradient(#fff0a0, #ff9a1f 45%, #e8590c); }
       .seg.warn .bar { animation: warn 0.5s steps(2, jump-none) infinite; }
       .seg.hit .bar { transform: translateY(-2px); }
+      /* Wall bars are a setting, off by default; the repair tags still show between waves. */
+      .nobars .seg .bar { display: none; }
       @keyframes warn { 50% { border-color: #ff3a2a; box-shadow: 0 0 12px #ff3a2a; } }
       #heaveBar { background: linear-gradient(#ffe38a, #e8a920); }
       /* Over each of the town's buildings: its power, its key and a bar that refills while it rests. Click it (or the building). */
@@ -162,7 +164,7 @@
       .scroll .stats b { display: block; font-family: var(--display); font-size: 32px; }
       .tag { font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; opacity: 0.7; margin-top: 14px; }
       .topright { display: flex; gap: 8px; align-items: flex-start; flex-wrap: wrap; justify-content: flex-end; }
-      #quality, #sound { pointer-events: auto; font-size: 12px; padding: 4px 10px; box-shadow: 0 2px 0 var(--ink); }
+      #quality, #sound, #bars, #orcStyle { pointer-events: auto; font-size: 12px; padding: 4px 10px; box-shadow: 0 2px 0 var(--ink); }
       .queen { display: flex; gap: 10px; align-items: flex-start; }
       .queen img { width: 64px; height: 64px; object-fit: cover; object-position: top; border-radius: 50%; border: 3px solid var(--gold); background: #2a4fb0; flex: none; }
       .queen p { margin: 0; font-size: 14px; line-height: 1.35; font-style: italic; }
@@ -187,6 +189,8 @@
           <div class="panel purse"><span class="g"><img class="ico" data-icon="gold" alt="" /><span id="gold">0 gold</span></span><span><img class="ico" data-icon="renown" alt="" /><span id="renown">0 Renown</span></span><span id="kills">0 slain</span></div>
           <button id="sound" type="button">Sound: On</button>
           <button id="quality" type="button" title="Graphics detail: lower it if the game stutters">Detail: Medium</button>
+          <button id="bars" type="button" title="Health bars over the wall sections">Wall bars: Off</button>
+          <button id="orcStyle" type="button" title="Draw the orcs as voxel models or as painted sprites">Orcs: Voxel</button>
         </div>
       </div>
       <div class="panel" id="boss" hidden>

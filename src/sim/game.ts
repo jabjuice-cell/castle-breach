@@ -3,7 +3,7 @@ import {
   type Defender, type DefenderKind, type Levels, type PlacedKind, type Track,
   type Stack, emptyLevels, groundAt, jointStacks, onWall, stackAt, trackMult, upgradeCost,
 } from './defenders';
-import { type Obstacle, contact } from './obstacles';
+import { type Obstacle, contact, plantTrees } from './obstacles';
 import { Rng } from './rng';
 import { type EnemyKind, type Shape, type WavePlan, formation, planSize, planWave } from './waves';
 
@@ -203,6 +203,12 @@ export type GameEvent =
   /** A ball bounced off a tree line (side: -1 left, 1 right), or off one of the field's structures. */
   | { type: 'edge'; x: number; y: number; side: number }
   | { type: 'obstacle'; x: number; y: number; index: number }
+  /** A ball smashed one of the trees on the field (obstacle index). */
+  | { type: 'treeDown'; x: number; y: number; index: number }
+  /** A heave slammed the shield into the orcs at the wall: hits orcs struck. */
+  | { type: 'slam'; x: number; hits: number }
+  /** A light orc the slam killed, sent flying (velocity in field units per second, up the field). */
+  | { type: 'flung'; x: number; y: number; kind: EnemyKind; vx: number; vy: number }
   | { type: 'boltFired'; x: number; y: number }
   | { type: 'volley'; x: number; y: number; arrows: number }
   /** combo: the ball's combo after this hit (only for ball hits). */
@@ -317,7 +323,9 @@ export class Game {
     this.gold = cfg.economy.warChest;
     this.shieldLevels = { ...cfg.bonuses.shield };
     this.stacks = jointStacks(cfg);
-    this.obstacles = cfg.obstacles.levels[Math.min(level, cfg.obstacles.levels.length - 1)] ?? [];
+    // Copies: trees come down during the level, and the next level starts with its own.
+    const fixed = (cfg.obstacles.levels[Math.min(level, cfg.obstacles.levels.length - 1)] ?? []).map((o) => ({ ...o }));
+    this.obstacles = [...fixed, ...plantTrees(cfg.fieldTrees, level, cfg.field.halfWidth, seed, fixed)];
     this.wave = this.cleared = this.firstWave - 1;
     this.plan = planWave(this.firstWave, seed, cfg);
   }
@@ -381,6 +389,7 @@ export class Game {
   bumpers(): Bumper[] {
     const c = this.cfg.bumpers;
     const out: Bumper[] = [];
+    if (!c.enabled) return out;
     const w = this.segmentWidth();
     for (let i = 0; i <= this.cfg.wall.segments; i++) {
       const x = -this.cfg.field.halfWidth + i * w;
@@ -408,11 +417,42 @@ export class Game {
     s.heaveAt = this.time;
     s.readyAt = this.time + this.heaveCooldown();
     this.events.push({ type: 'heave', x: s.x });
+    if (this.phase === 'battle') this.slam();
     // A click just after an impact still counts.
     for (const b of this.balls) {
       if (!b.stuck && !b.heaved && b.vy > 0 && this.time - b.hitShieldAt <= this.heaveWindow()) this.powerUp(b);
     }
     return true;
+  }
+
+  /**
+   * The heave's shield bash: every orc across the shield's width, from the wall to just in
+   * front of it. Light ones die and go flying up the field; heavy ones are hurt and shoved back.
+   */
+  private slam(): void {
+    const c = this.cfg.shield;
+    const s = this.shield;
+    const half = this.shieldHalfWidth();
+    let hits = 0;
+    for (const e of this.enemies) {
+      const stats = this.cfg[e.kind];
+      if (e.hp <= 0 || e.y > c.y + c.slamReach + stats.radius || Math.abs(e.x - s.x) > half + stats.radius) continue;
+      hits++;
+      const side = (e.x - s.x) / half;
+      this.leaveBlock(e);
+      e.foe = null;
+      if (stats.mass <= c.slamKillMass) {
+        e.hp = 0;
+        this.events.push({ type: 'flung', x: e.x, y: e.y, kind: e.kind, vx: side * 6 + this.rng.range(-3, 3), vy: this.rng.range(14, 22) });
+      } else {
+        e.hp -= c.slamDamage * this.cfg.bonuses.damage;
+        e.vy += c.slamKnock / stats.mass;
+        e.vx += side * 4 / stats.mass;
+        // Off the wall (or out of a brawl): it has to march back in.
+        if (e.state !== 'march' && e.state !== 'stand') e.state = 'march';
+      }
+    }
+    this.events.push({ type: 'slam', x: s.x, hits });
   }
 
   /** Each building's power: when it can be used again, and until when it lasts. */
@@ -1202,8 +1242,13 @@ export class Game {
             // Hold the slot in the block: chase it, and keep up with the march.
             const b = e.block;
             const cap = b.speed * 3 + 3;
-            mx = (b.x + e.slotX - e.x) * pull;
-            my = (b.y + e.slotY - e.y) * pull;
+            // A rabble, not a parade: each stands a little off its slot and sways about.
+            const off = this.cfg.march.jitter * b.spacing;
+            const sway = this.cfg.march.sway;
+            const jx = Math.sin(e.phase * 91.7) * off + Math.sin(this.time * 1.3 + e.phase * 40) * sway;
+            const jy = Math.cos(e.phase * 53.3) * off + Math.cos(this.time * 1.1 + e.phase * 23) * sway;
+            mx = (b.x + e.slotX + jx - e.x) * pull;
+            my = (b.y + e.slotY + jy - e.y) * pull;
             const len = Math.hypot(mx, my);
             if (len > cap) {
               mx *= cap / len;
@@ -1234,7 +1279,8 @@ export class Game {
             e.hp = 0;
             this.damageSegment(this.segmentAt(e.x), this.cfg.barrel.wallDamage, e.x, 'barrel');
             this.events.push({ type: 'blast', x: e.x, y: e.y, radius: this.cfg.barrel.blastRadius * 0.6 });
-          } else if (e.y <= front) {
+          } else if (e.y <= front && e.vy < 1) {
+            // (Not while it is being knocked back off the wall.)
             e.state = stats.climbSeconds > 0 ? 'climb' : 'wall';
             e.timer = stats.climbSeconds;
             this.leaveBlock(e);
@@ -1285,6 +1331,7 @@ export class Game {
       e.vy *= decay;
       // Round the field's structures, not through them.
       for (const o of this.obstacles) {
+        if (o.down) continue;
         const hit = contact(o, e.x, e.y, stats.radius);
         if (hit) {
           e.x += hit.nx * hit.depth;
@@ -1858,7 +1905,7 @@ export class Game {
           alive = false;
           break;
         }
-        if (b.y < this.cfg.bumpers.y + 2) this.ballVsBumpers(b, bumpers);
+        if (bumpers.length && b.y < this.cfg.bumpers.y + 2) this.ballVsBumpers(b, bumpers);
         if (this.tower) this.ballVsTower(b);
         if (this.obstacles.length) this.ballVsObstacles(b);
         this.ballVsOrcs(b);
@@ -1937,6 +1984,7 @@ export class Game {
   private ballVsObstacles(b: Ball): void {
     const r = this.cfg.balls.radius;
     this.obstacles.forEach((o, index) => {
+      if (o.down) return;
       const hit = contact(o, b.x, b.y, r);
       if (!hit || b.vx * hit.nx + b.vy * hit.ny >= 0) return;
       this.reflect(b, hit.nx, hit.ny);
@@ -1944,6 +1992,12 @@ export class Game {
       b.y += hit.ny * (hit.depth + 0.01);
       b.banked = true;
       this.addCombo(b, this.cfg.bumpers.bankCombo);
+      if (o.breakable) {
+        // A tree takes one hit: it comes crashing down and is gone.
+        o.down = true;
+        this.events.push({ type: 'treeDown', x: o.x, y: o.y, index });
+        return;
+      }
       this.events.push({ type: 'obstacle', x: b.x - hit.nx * r, y: b.y - hit.ny * r, index });
     });
   }

@@ -672,3 +672,49 @@ export function palisadeModel(len: number, seed: number): Vox {
   v.box(0, 3, 1, len - 1, 3, 1, PAL.woodDark);
   return v;
 }
+
+/**
+ * The giant crossbow: a ballista on a turntable, built to sit on the wall walk or a tower top.
+ * Steel bow arms swept back, a bolt in the groove, a winch at the back, a bucket of spare bolts
+ * and a little royal pennant. It points along -z (at the orcs); the scene turns it to its aim.
+ */
+export function ballistaModel(): Vox {
+  const v = new Vox();
+  // The turntable: oak planks in an iron ring, on a stone footing.
+  v.cyl(0, 0, 6.5, 0, 0, PAL.stoneDark, false);
+  v.cyl(0, 0, 6, 1, 1, (x, _y, z) => (Math.hypot(x, z) > 5 ? PAL.iron : (x + 20) % 3 === 0 ? '#5a3a1c' : '#7a5230'), false);
+  // The post and the stock along it, with a dark groove for the bolt.
+  v.box(-1, 2, -1, 1, 5, 1, PAL.woodDark);
+  v.box(-2, 6, -9, 2, 6, 6, '#8a5a30');
+  v.box(0, 6, -9, 0, 6, 4, '#3a2412');
+  // Steel bow arms, swept back toward their tips.
+  for (let x = -11; x <= 11; x++) {
+    const z = -8 + Math.round((x * x) / 30);
+    const tip = Math.abs(x) >= 10;
+    v.set(x, 7, z, tip ? '#2a2c30' : Math.abs(x) < 2 ? PAL.iron : '#b8bec4');
+    if (!tip && Math.abs(x) > 1) v.set(x, 7, z - 1, '#8f969d');
+  }
+  // The string, drawn back to the trigger.
+  for (let i = 0; i <= 10; i++) {
+    const t = i / 10;
+    for (const side of [-1, 1]) v.set(side * Math.round(11 * (1 - t)), 8, Math.round(-4 + t * 7), '#e8e0c8');
+  }
+  // The bolt: a dark shaft with a steel head out front and red fletching behind.
+  v.box(0, 7, -14, 0, 7, 2, '#5a3418');
+  v.box(0, 7, -16, 0, 7, -15, '#e4e4e4');
+  v.set(-1, 7, -15, '#c8c8c8');
+  v.set(1, 7, -15, '#c8c8c8');
+  v.box(-1, 7, 1, 1, 7, 2, '#c8322a');
+  // The winch at the back: two spoked wheels and their crank.
+  for (const side of [-3, 3]) {
+    for (let dy = -2; dy <= 2; dy++) for (let dz = -2; dz <= 2; dz++) if (Math.abs(Math.hypot(dy, dz) - 1.8) < 0.6 || dy === 0 || dz === 0) v.set(side, 6 + dy, 5 + dz, '#4a2e18');
+  }
+  v.box(-3, 6, 5, 3, 6, 5, PAL.iron);
+  // A bucket of spare bolts, and the royal pennant on a pole.
+  v.cyl(5, 3, 1.6, 2, 4, '#6b4424', true);
+  for (const [bx, bz] of [[5, 3], [4, 3], [5, 2]]) v.box(bx, 5, bz, bx, 7, bz, '#5a3418');
+  v.box(-5, 2, 4, -5, 13, 4, PAL.woodDark);
+  v.box(-5, 11, 0, -5, 13, 3, PAL.blue);
+  v.box(-5, 12, 1, -5, 12, 2, PAL.gold);
+  return v;
+}

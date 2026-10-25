@@ -97,6 +97,10 @@ export function applyMeta(meta: MetaLevels, level: number, base: Config = makeCo
   cfg.economy.repairGoldPerHp *= 1 - 0.25 * lv('mortar');
   cfg.bonuses.killGold *= 1 + 0.15 * lv('market');
   cfg.economy.warChest = cfg.levels.warChest[Math.min(level, cfg.levels.warChest.length - 1)] + 60 * lv('treasury');
+  // Each level's own field: the first is narrow, later ones wider behind a longer wall.
+  const at = <T>(list: T[]) => list[Math.min(level, list.length - 1)];
+  cfg.field.halfWidth = at(cfg.levels.halfWidth);
+  cfg.wall.segments = at(cfg.levels.segments);
   for (const t of SHIELD_META) cfg.bonuses.shield[t] = lv(t);
   return cfg;
 }

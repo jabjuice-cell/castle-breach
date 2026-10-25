@@ -12,7 +12,12 @@ export interface GroundArea {
   minZ: number;
   /** The field's half width: the tree lines stand just outside it. */
   halfWidth: number;
+  /** The painted courtyard tile (maps/courtyard), if it has loaded: cobbles and packed earth. */
+  courtyard?: HTMLImageElement;
 }
+
+/** World size of one courtyard tile. */
+const COURTYARD_TILE = 10;
 
 /** The road's centre line at world z (it wanders a little), and its half width. */
 export function roadAt(z: number): { x: number; half: number } {
@@ -119,11 +124,30 @@ export function paintGround(ctx: CanvasRenderingContext2D, w: number, h: number,
       }
     }
   };
-  ctx.fillStyle = '#6e665a';
-  ctx.fillRect(px(-12), pz(7.6), 24 * ppu, (a.minZ + a.worldH - 7.6) * ppu);
-  ctx.fillRect(0, pz(21.5), w, 3.5 * ppu);
-  cobble(-12, 7.6, 12, a.minZ + a.worldH);
-  cobble(-a.worldW / 2, 21.5, a.worldW / 2, 25);
+  const yard = a.courtyard;
+  if (yard?.complete && yard.naturalWidth) {
+    // The painted courtyard, mirror-tiled so its edges meet without a seam.
+    const n = yard.naturalWidth;
+    const tile = document.createElement('canvas');
+    tile.width = tile.height = n * 2;
+    const tctx = tile.getContext('2d')!;
+    for (const [fx, fy] of [[1, 1], [-1, 1], [1, -1], [-1, -1]]) {
+      tctx.setTransform(fx, 0, 0, fy, fx < 0 ? n * 2 : 0, fy < 0 ? n * 2 : 0);
+      tctx.drawImage(yard, 0, 0);
+    }
+    const pattern = ctx.createPattern(tile, 'repeat')!;
+    const k = (COURTYARD_TILE * ppu) / n;
+    pattern.setTransform(new DOMMatrix([k, 0, 0, k, px(0), pz(7.6)]));
+    ctx.fillStyle = pattern;
+    ctx.fillRect(px(-12), pz(7.6), 24 * ppu, (a.minZ + a.worldH - 7.6) * ppu);
+    ctx.fillRect(0, pz(21.5), w, 3.5 * ppu);
+  } else {
+    ctx.fillStyle = '#6e665a';
+    ctx.fillRect(px(-12), pz(7.6), 24 * ppu, (a.minZ + a.worldH - 7.6) * ppu);
+    ctx.fillRect(0, pz(21.5), w, 3.5 * ppu);
+    cobble(-12, 7.6, 12, a.minZ + a.worldH);
+    cobble(-a.worldW / 2, 21.5, a.worldW / 2, 25);
+  }
   // Grass verges and flower beds in the corners of the base.
   for (let i = 0; i < 220; i++) {
     const side = rnd() < 0.5 ? -1 : 1;

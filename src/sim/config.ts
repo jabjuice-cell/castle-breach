@@ -17,6 +17,11 @@ export const defaultConfig = {
   field: { halfWidth: 20, topY: 68, spawnY: 70 },
   /** Real structures on each level's field (see obstacles.ts): balls bank off them, orcs go round. */
   obstacles: { levels: LEVEL_OBSTACLES as Obstacle[][] },
+  /**
+   * Trees dotted over the middle of the field, count per level. A ball smashes one in a single
+   * hit (it still bounces off); orcs go round them. They keep off the road down the middle.
+   */
+  fieldTrees: { counts: [7, 9, 10], radius: 0.75, minY: 14, maxY: 56, roadHalf: 6, apart: 4 },
   /** The run is lost when any one segment reaches 0 HP. */
   wall: { segments: 5, segmentHp: 400, depth: 2, warnBelow: 0.25 },
 
@@ -64,9 +69,12 @@ export const defaultConfig = {
     shrinkAt: 0.25,
     /** How hard orcs are pulled back into their slot in the block. */
     pull: 3,
+    /** Each orc stands this share of the spacing off its slot, and sways about by sway units: a rabble, not a parade. */
+    jitter: 0.3,
+    sway: 0.35,
     /** Seconds between re-packing a block that has lost orcs (closing ranks). */
     regroupSeconds: 0.5,
-    spacing: 1.35,
+    spacing: 1.7,
   },
 
   /** Enemy projectiles: what reaches the wall does wallDamage. A blocked one becomes a ball. */
@@ -116,13 +124,22 @@ export const defaultConfig = {
     heaveLines: 3,
     heaveDamage: 20,
     lineMax: 12,
+    /**
+     * A heave also slams the shield into the orcs at the wall: everyone across its width from
+     * the wall to slamReach in front of it. Light orcs (mass up to slamKillMass) die and go
+     * flying; heavier ones take slamDamage and are knocked back slamKnock / mass.
+     */
+    slamReach: 2,
+    slamKillMass: 1.5,
+    slamDamage: 25,
+    slamKnock: 40,
   },
   balls: {
     radius: 0.45,
     /** 12 tiles/s off the shield, +2% a bounce, up to 20 tiles/s. */
     speed: 20,
-    /** The Royal Ball is quicker: about 16 tiles/s. */
-    royalSpeed: 26,
+    /** The Royal Ball is quicker: about 18 tiles/s. */
+    royalSpeed: 30,
     maxSpeed: 33,
     speedUp: 1.02,
     damage: 10,
@@ -153,6 +170,8 @@ export const defaultConfig = {
    * shield's lane, a round bumper. A defender on the tower makes it bigger.
    */
   bumpers: {
+    /** Jonny took the bumpers out (25 Oct); kept switchable for tests and sims. */
+    enabled: false,
     y: 5.67,
     radius: 0.67,
     mannedRadius: 1,
@@ -293,7 +312,10 @@ export const defaultConfig = {
   levels: {
     waves: 5,
     names: ['The Old Road', 'Mill Ford', 'The Black Gate'],
-    warChest: [200, 350, 500],
+    warChest: [400, 550, 750],
+    /** Level 1 is a narrow road; later fields are wider, behind a longer wall of more sections. */
+    halfWidth: [20, 28, 28],
+    segments: [5, 7, 7],
   },
   /** Bonuses from the town's permanent upgrades (meta.ts sets them; 1 and 0 mean none). */
   bonuses: {
@@ -309,7 +331,7 @@ export const defaultConfig = {
     /** The lull between waves: time to repair, upgrade and buy before the next one marches. */
     previewSeconds: 12,
     /** Threat budget in grunt-equivalents: base * growth^(wave - 1). */
-    budgetBase: 30,
+    budgetBase: 55,
     budgetGrowth: 1.3,
     /**
      * Enemy HP grows this much per wave (bosses excluded). Grunts stay one-hit bricks,
@@ -321,7 +343,7 @@ export const defaultConfig = {
     spawnPerWave: 1,
     spawnMax: 30,
     /** Blocks of foot orcs per wave: base, +1 every N waves, up to max. */
-    blocksBase: 2,
+    blocksBase: 3,
     blocksEvery: 5,
     blocksMax: 6,
     chuckersFromWave: 3,
@@ -358,7 +380,7 @@ export const defaultConfig = {
   },
   economy: {
     /** Gold to buy the level's load-out with (applyMeta sets it from levels.warChest and the Treasury). */
-    warChest: 200,
+    warChest: 400,
     /** Kill gold grows this much per wave. */
     killGoldGrowth: 1.04,
     clearBase: 10,

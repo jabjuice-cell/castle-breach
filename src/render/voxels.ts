@@ -232,6 +232,14 @@ export class VoxBatch {
     return g;
   }
 
+  /** The lit and glowing geometry, for drawing many copies of one model as instances. */
+  geometries(): { solid: THREE.BufferGeometry | null; glow: THREE.BufferGeometry | null } {
+    return {
+      solid: this.solid.idx.length ? VoxBatch.geometry(this.solid) : null,
+      glow: this.glow.idx.length ? VoxBatch.geometry(this.glow) : null,
+    };
+  }
+
   build(): THREE.Group {
     const group = new THREE.Group();
     if (this.solid.idx.length) group.add(new THREE.Mesh(VoxBatch.geometry(this.solid), new THREE.MeshLambertMaterial({ vertexColors: true })));

@@ -148,7 +148,7 @@ export function planWave(n: number, seed: number, cfg: Config): WavePlan {
     const lane = rng.int(0, segs - 1);
     groups.push({ time: rng.range(2, duration), lane, x: laneX(lane), shape: 'rect', members: [{ kind: 'ogre', count: 1 }] });
   }
-  if (totals.warlord && !tower) groups.push({ time: duration * 0.4, lane: 2, x: 0, shape: 'rect', members: [{ kind: 'warlord', count: 1 }] });
+  if (totals.warlord && !tower) groups.push({ time: duration * 0.4, lane: Math.floor(segs / 2), x: 0, shape: 'rect', members: [{ kind: 'warlord', count: 1 }] });
   groups.sort((a, b) => a.time - b.time);
   return { number: n, groups, totals, boss, tower };
 }

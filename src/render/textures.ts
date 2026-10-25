@@ -50,19 +50,48 @@ function outline(ctx: CanvasRenderingContext2D, fill: string) {
 export interface SpriteArt {
   texture: THREE.Texture;
   aspect: number;
+  /** How much taller the picture is than the art inside it (an outline adds a margin). */
+  scale?: number;
 }
 
 const loader = new THREE.TextureLoader();
 
 /** A finished sprite image, cropped to the unit (see tools/import-sprites.py). */
-export function imageSprite(url: string, aspect: number): SpriteArt {
+export function imageSprite(url: string, aspect: number, outline = 0): SpriteArt {
   const t = loader.load(url, () => {
     const img = t.image as HTMLImageElement;
     if (img.width * img.height > 1024 * 1024) return;
-    t.image = cleanEdges(img);
+    t.image = cleanEdges(outline > 0 ? outlined(img, outline) : img);
     t.needsUpdate = true;
   });
-  return { texture: sharpen(t), aspect };
+  if (outline <= 0) return { texture: sharpen(t), aspect };
+  // The outline adds a margin of outline x the longest side all round.
+  const m = 2 * outline;
+  return aspect <= 1
+    ? { texture: sharpen(t), aspect: (aspect + m) / (1 + m), scale: 1 + m }
+    : { texture: sharpen(t), aspect: (aspect * (1 + m)) / (1 + m * aspect), scale: 1 + m * aspect };
+}
+
+/**
+ * The sprite with a thick dark outline round its silhouette (width: share of its longest side),
+ * so a unit reads against the grass from high up. The canvas grows by the outline all round.
+ */
+function outlined(img: HTMLImageElement, width: number): HTMLCanvasElement {
+  const pad = Math.round(Math.max(img.width, img.height) * width);
+  const [sil, sctx] = canvas(img.width, img.height);
+  sctx.drawImage(img, 0, 0);
+  sctx.globalCompositeOperation = 'source-in';
+  sctx.fillStyle = '#1a120c';
+  sctx.fillRect(0, 0, img.width, img.height);
+  const [c, ctx] = canvas(img.width + pad * 2, img.height + pad * 2);
+  for (const r of [pad, pad * 0.5]) {
+    for (let a = 0; a < 16; a++) {
+      const ang = (a / 16) * Math.PI * 2;
+      ctx.drawImage(sil, pad + Math.cos(ang) * r, pad + Math.sin(ang) * r);
+    }
+  }
+  ctx.drawImage(img, pad, pad);
+  return c;
 }
 
 /**
@@ -72,7 +101,7 @@ export function imageSprite(url: string, aspect: number): SpriteArt {
  * - the edge colour is bled out into the clear pixels round it, so the mipmaps
  *   that draw far-off sprites blend into the outline's colour, not a halo.
  */
-function cleanEdges(img: HTMLImageElement): HTMLCanvasElement {
+function cleanEdges(img: HTMLImageElement | HTMLCanvasElement): HTMLCanvasElement {
   const [c, ctx] = canvas(img.width, img.height);
   ctx.drawImage(img, 0, 0);
   const data = ctx.getImageData(0, 0, c.width, c.height);

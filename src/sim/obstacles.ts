@@ -7,7 +7,7 @@
  * (radians, turning x toward y).
  */
 
-export type ObstacleLook = 'boulder' | 'milestone' | 'mill' | 'well' | 'fence' | 'stone' | 'ruin' | 'spikes';
+export type ObstacleLook = 'boulder' | 'milestone' | 'mill' | 'well' | 'fence' | 'stone' | 'ruin' | 'spikes' | 'tree';
 
 export interface Obstacle {
   look: ObstacleLook;
@@ -17,6 +17,9 @@ export interface Obstacle {
   hw?: number;
   hh?: number;
   angle?: number;
+  /** Goes down to one hit from a ball (a tree), and is then gone for the rest of the level. */
+  breakable?: boolean;
+  down?: boolean;
 }
 
 /** The point of o's outline nearest (px, py), and whether (px, py) is inside it. */
@@ -76,23 +79,46 @@ export const LEVEL_OBSTACLES: Obstacle[][] = [
     { look: 'boulder', x: 12, y: 25, r: 1.3 },
     { look: 'milestone', x: 4.5, y: 46, r: 0.6 },
   ],
-  // Mill Ford: a ruined mill, a well and a broken fence, set at angles.
+  // Mill Ford (a wider field): a ruined mill, a well and a broken fence, set at angles.
   [
-    { look: 'mill', x: -11.5, y: 40, hw: 2.6, hh: 1.6, angle: 0.3 },
-    { look: 'well', x: 4.5, y: 30, r: 1.1 },
-    { look: 'fence', x: 13, y: 20, hw: 2.4, hh: 0.3, angle: -0.5 },
-    { look: 'boulder', x: -4.5, y: 51, r: 1.2 },
-    { look: 'boulder', x: 14.5, y: 47, r: 1 },
+    { look: 'mill', x: -16, y: 40, hw: 2.6, hh: 1.6, angle: 0.3 },
+    { look: 'well', x: 6.5, y: 30, r: 1.1 },
+    { look: 'fence', x: 18, y: 20, hw: 2.4, hh: 0.3, angle: -0.5 },
+    { look: 'boulder', x: -6.5, y: 51, r: 1.2 },
+    { look: 'boulder', x: 20, y: 47, r: 1 },
   ],
-  // The Black Gate: standing stones and slanted ruined walls that throw the ball about.
+  // The Black Gate (a wider field): standing stones and slanted ruined walls that throw the ball about.
   [
-    { look: 'stone', x: -4.2, y: 22, r: 0.8 },
-    { look: 'stone', x: 4.2, y: 22, r: 0.8 },
-    { look: 'ruin', x: -12.5, y: 33, hw: 3, hh: 0.6, angle: 0.6 },
-    { look: 'ruin', x: 12.5, y: 33, hw: 3, hh: 0.6, angle: -0.6 },
-    { look: 'spikes', x: -6, y: 45, hw: 1.8, hh: 0.5, angle: -0.35 },
-    { look: 'spikes', x: 6, y: 45, hw: 1.8, hh: 0.5, angle: 0.35 },
-    { look: 'stone', x: -15, y: 52, r: 1.1 },
-    { look: 'stone', x: 15, y: 54, r: 1.1 },
+    { look: 'stone', x: -5, y: 22, r: 0.8 },
+    { look: 'stone', x: 5, y: 22, r: 0.8 },
+    { look: 'ruin', x: -17, y: 33, hw: 3, hh: 0.6, angle: 0.6 },
+    { look: 'ruin', x: 17, y: 33, hw: 3, hh: 0.6, angle: -0.6 },
+    { look: 'spikes', x: -8, y: 45, hw: 1.8, hh: 0.5, angle: -0.35 },
+    { look: 'spikes', x: 8, y: 45, hw: 1.8, hh: 0.5, angle: 0.35 },
+    { look: 'stone', x: -21, y: 52, r: 1.1 },
+    { look: 'stone', x: 21, y: 54, r: 1.1 },
   ],
 ];
+
+/**
+ * The trees dotted over a level's field, placed by the seed: off the road, clear of the
+ * level's structures and of each other. Each comes down to a single hit.
+ */
+export function plantTrees(
+  t: { counts: number[]; radius: number; minY: number; maxY: number; roadHalf: number; apart: number },
+  level: number, halfWidth: number, seed: number, around: Obstacle[],
+): Obstacle[] {
+  let s = Math.max(1, Math.floor(seed * 7907 + level * 104723) % 2147483646);
+  const rnd = () => (s = (s * 16807) % 2147483647) / 2147483647;
+  const n = t.counts[Math.min(level, t.counts.length - 1)] ?? 0;
+  const out: Obstacle[] = [];
+  for (let tries = 0; out.length < n && tries < 400; tries++) {
+    const x = (rnd() * 2 - 1) * (halfWidth - 3);
+    const y = t.minY + rnd() * (t.maxY - t.minY);
+    if (Math.abs(x) < t.roadHalf) continue;
+    if (around.some((o) => Math.hypot(o.x - x, o.y - y) < (o.r ?? Math.hypot(o.hw ?? 1, o.hh ?? 1)) + t.apart * 0.6)) continue;
+    if (out.some((o) => Math.hypot(o.x - x, o.y - y) < t.apart)) continue;
+    out.push({ look: 'tree', x, y, r: t.radius, breakable: true });
+  }
+  return out;
+}

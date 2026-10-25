@@ -27,6 +27,7 @@ const quiet = () => makeConfig({
   crossbow: { range: -100 }, archers: { range: -100 },
   waves: { orcCatapultsBase: 0, orcCatapultsPerWave: 0, towerWaves: [], warlordWaves: [] },
   capsules: { chance: 0 },
+  fieldTrees: { counts: [0] },
 });
 
 /** Every defender for sale, as once the town has unlocked them. */
@@ -67,9 +68,9 @@ describe('waves', () => {
   it('follows the threat budget, in 2 to 6 marching blocks', () => {
     const cfg = makeConfig();
     const w1 = planWave(1, 1, cfg);
-    expect(w1.totals).toMatchObject({ grunt: 30, chucker: 0, rider: 0, orcCatapult: 3 });
-    expect(w1.groups).toHaveLength(2);
-    expect(Math.round(waveBudget(10, cfg))).toBe(318);
+    expect(w1.totals).toMatchObject({ grunt: 55, chucker: 0, rider: 0, orcCatapult: 3 });
+    expect(w1.groups).toHaveLength(3);
+    expect(Math.round(waveBudget(10, cfg))).toBe(583);
     const blocks = (n: number) => planWave(n, 1, cfg).groups.filter((g) => g.members.some((m) => m.kind === 'grunt')).length;
     expect(blocks(25)).toBe(6);
     for (const n of [5, 12, 19]) {
@@ -84,7 +85,7 @@ describe('waves', () => {
     expect(planWave(1, 1, cfg).totals.orcCatapult).toBe(3);
     expect(planWave(15, 1, cfg).totals.orcCatapult).toBe(9);
     expect(planWave(4, 1, cfg).totals.barrel).toBe(0);
-    expect(planWave(5, 1, cfg).totals.barrel).toBe(2);
+    expect(planWave(5, 1, cfg).totals.barrel).toBe(3);
     expect(planWave(10, 1, cfg)).toMatchObject({ tower: true, totals: { warlord: 0 } });
     expect(planWave(14, 1, cfg).boss).toBe(false);
     expect(planWave(15, 1, cfg)).toMatchObject({ tower: true, totals: { warlord: 1 } });
@@ -300,8 +301,14 @@ describe('the shield and the balls', () => {
     expect(game.canHeave).toBe(true);
   });
 
-  it('bank shots: tower turrets bounce balls back up for +2 combo', () => {
-    const game = battle();
+  it('bank shots: tower turrets (when switched on) bounce balls back up for +2 combo', () => {
+    expect(battle().bumpers()).toHaveLength(0);
+    const on = () => {
+      const cfg = quiet();
+      cfg.bumpers.enabled = true;
+      return cfg;
+    };
+    const game = battle(1, on());
     const bumpers = game.bumpers();
     expect(bumpers).toHaveLength(6);
     const t = bumpers[2];
@@ -313,7 +320,7 @@ describe('the shield and the balls', () => {
     expect(b.combo).toBe(2);
     expect(b.banked).toBe(true);
     // A defender on the tower makes the bumper bigger.
-    const g = new Game(1, veteran());
+    const g = new Game(1, veteran(on()));
     g.gold = 1000;
     expect(g.place('archers', t.x, -1)).toBe(true);
     expect(g.bumpers()[2].r).toBeGreaterThan(t.r);
@@ -435,8 +442,9 @@ describe('game', () => {
     for (const e of rank.slice(0, killed)) e.hp = 0;
     run(game, 1);
     expect(block.members).toHaveLength(n - killed);
-    // Orcs from behind step up into the gaps in the front rank.
-    expect(block.members.filter((e) => e.slotY === front)).toHaveLength(rank.length);
+    // Orcs from behind step up into the gaps: the front rank is full again for the smaller block.
+    const full = formation(block.shape, n - killed, block.spacing).filter((s) => s.dy === 0).length;
+    expect(block.members.filter((e) => e.slotY === front)).toHaveLength(full);
   });
 
   it('wins the level after its last wave, for the level-clear Renown', () => {
@@ -504,7 +512,7 @@ describe('run loop', () => {
     expect(game.segmentHp[0]).toBe(plain.segmentHp[0] * 1.2);
     expect(game.mult('crossbow', 'damage')).toBeCloseTo(1.15);
     expect(game.gold).toBe(plain.gold + 60);
-    expect(plain.gold).toBe(500);
+    expect(plain.gold).toBe(750);
   });
 
   it('sells defenders back: in full during the setup, at half price once the level is under way', () => {
@@ -520,7 +528,7 @@ describe('run loop', () => {
     expect(game.sellValue(b.id)).toBe(Math.floor(b.paid / 2));
     // A saved load-out goes back down as far as the gold allows.
     const next = new Game(2, quiet());
-    expect(next.restoreLoadout([{ kind: 'crossbow', x: -4, y: -1 }, { kind: 'crossbow', x: 4, y: -1 }, { kind: 'archers', x: 0, y: -1 }])).toBe(1);
+    expect(next.restoreLoadout([{ kind: 'crossbow', x: -4, y: -1 }, { kind: 'crossbow', x: 4, y: -1 }, { kind: 'crossbow', x: 0, y: -1 }, { kind: 'crossbow', x: 8, y: -1 }, { kind: 'archers', x: 12, y: -1 }])).toBe(3);
   });
 
   it('defenders go exactly where they are put on the castle, clear of each other', () => {
@@ -858,7 +866,7 @@ describe('run loop', () => {
       game.step();
     }
     expect(game.cleared).toBeGreaterThanOrEqual(2);
-    expect(game.blocked).toBeGreaterThan(0);
+    expect(game.kills).toBeGreaterThan(50);
   });
 });
 
@@ -903,5 +911,61 @@ describe('the field\'s structures', () => {
     game.events = [];
     run(game, 0.2);
     expect(game.events.some((e) => e.type === 'edge' && e.side === 1)).toBe(true);
+  });
+});
+
+describe('batch D', () => {
+  it('a heave slams the orcs at the wall: light ones fly off dead, heavy ones are shoved back and hurt', () => {
+    const game = battle();
+    game.setShield(0);
+    run(game, 0.3);
+    const grunt = enemy({ x: 0.5, y: 0.45, state: 'wall' });
+    const ogre = enemy({ kind: 'ogre', x: -1.5, y: 1.2, hp: 50, maxHp: 50, state: 'wall' });
+    const far = enemy({ x: 0, y: 20 });
+    game.enemies.push(grunt, ogre, far);
+    game.events = [];
+    expect(game.heave()).toBe(true);
+    expect(grunt.hp).toBeLessThanOrEqual(0);
+    expect(game.events.some((e) => e.type === 'flung' && e.kind === 'grunt')).toBe(true);
+    expect(ogre.hp).toBe(50 - game.cfg.shield.slamDamage);
+    expect(ogre.vy).toBeGreaterThan(5);
+    expect(far.hp).toBe(10);
+    run(game, 0.5);
+    expect(ogre.y).toBeGreaterThan(1.5);
+  });
+
+  it('trees on the field come down to one hit, and the ball still bounces off', () => {
+    const cfg = quiet();
+    cfg.obstacles.levels = [[{ look: 'tree', x: 0, y: 30, r: 0.75, breakable: true }]];
+    const game = battle(1, cfg);
+    const b = ball(game, { x: 0, y: 26, vx: 0, vy: 20 });
+    game.events = [];
+    run(game, 0.3);
+    expect(b.vy).toBeLessThan(0);
+    expect(game.obstacles[0].down).toBe(true);
+    expect(game.events.some((e) => e.type === 'treeDown')).toBe(true);
+    // Gone: the next ball goes straight through.
+    const c = ball(game, { id: 1000, x: 0, y: 26, vx: 0, vy: 20 });
+    run(game, 0.3);
+    expect(c.vy).toBeGreaterThan(0);
+  });
+
+  it('plants trees off the road on every level', () => {
+    for (const level of [0, 1, 2]) {
+      const game = new Game(3, applyMeta({}, level), level);
+      const trees = game.obstacles.filter((o) => o.look === 'tree');
+      expect(trees.length).toBe(game.cfg.fieldTrees.counts[level]);
+      expect(trees.every((t) => Math.abs(t.x) >= game.cfg.fieldTrees.roadHalf && Math.abs(t.x) < game.cfg.field.halfWidth)).toBe(true);
+    }
+  });
+
+  it('keeps level 1 narrow; later levels are wider behind a longer wall', () => {
+    const one = new Game(1, applyMeta({}, 0), 0);
+    const two = new Game(1, applyMeta({}, 1), 1);
+    expect(one.segmentHp).toHaveLength(5);
+    expect(two.segmentHp).toHaveLength(7);
+    expect(two.cfg.field.halfWidth).toBeGreaterThan(one.cfg.field.halfWidth);
+    // Sections stay about the same width.
+    expect(two.segmentWidth()).toBeCloseTo(one.segmentWidth(), 0);
   });
 });

@@ -31,6 +31,8 @@ const KEEP_VOX = 0.34;
 const TREE_VOX = 0.4;
 const FAR_VOX = 0.75;
 const PROP_VOX = 0.3;
+/** The trees standing out on the field. */
+const FIELD_TREE_VOX = 0.42;
 
 /** Where each building with a power stands (world x, z), and how high its top is, for the tag over it. */
 export const BUILDINGS: Record<BuildingKind, { x: number; z: number; top: number; name: string; power: string }> = {
@@ -107,6 +109,10 @@ export class World {
   private spots: Spot[] = [];
   private base = new THREE.Group();
   private props = new THREE.Group();
+  /** Everything that depends on the field's width: the tree lines, the deep forest, the camp, the scatter. */
+  private field = new THREE.Group();
+  /** The trees standing on the field, by obstacle index, each its own model so it can come down. */
+  private fieldTrees = new Map<number, THREE.Object3D>();
   private treeMesh!: THREE.InstancedMesh;
   private treeVoxels: LeafVoxel[] = [];
   /** Leaf voxel ids by side and 2-unit slice of z, for finding the ones a ball hits. */
@@ -131,11 +137,8 @@ export class World {
       this.adj[b].push(a);
     }
     this.folkArt = FOLK.map((url, i) => imageSprite(url, (aspects as Record<string, number>)[`townsfolk-${i + 1}`] ?? 1));
-    this.root.add(this.base, this.props);
-    this.buildTreeLines();
-    this.buildFarForest();
-    this.buildCamp();
-    this.buildScatter();
+    this.root.add(this.base, this.props, this.field);
+    this.buildField();
     this.buildTown();
     this.buildProps();
     this.spawnWalkers();
@@ -146,6 +149,12 @@ export class World {
     this.game = game;
     this.buildTown();
     this.buildProps();
+    if (game.cfg.field.halfWidth !== this.hw) {
+      // A wider (or narrower) field: the tree lines, forest and camp move out to its edges.
+      this.hw = game.cfg.field.halfWidth;
+      this.buildField();
+      return;
+    }
     for (let i = 0; i < this.treeVoxels.length; i++) {
       const v = this.treeVoxels[i];
       if (v.alive) continue;
@@ -239,6 +248,24 @@ export class World {
 
   // ---- tree lines -----------------------------------------------------------
 
+  private buildField(): void {
+    for (const c of [...this.field.children]) {
+      this.field.remove(c);
+      c.traverse((o) => {
+        if (o instanceof THREE.Mesh) {
+          o.geometry.dispose();
+          (o.material as THREE.Material).dispose();
+        }
+      });
+    }
+    this.treeBuckets.clear();
+    this.campfires = [];
+    this.buildTreeLines();
+    this.buildFarForest();
+    this.buildCamp();
+    this.buildScatter();
+  }
+
   /** Three staggered rows of voxel trees down each side of the field, their crowns just over its edge. */
   private buildTreeLines(): void {
     const r = seeded(31);
@@ -275,7 +302,7 @@ export class World {
     mesh.frustumCulled = false;
     this.treeMesh = mesh;
     this.treeVoxels = voxels;
-    this.root.add(mesh);
+    this.field.add(mesh);
   }
 
   private bucket(side: number, z: number): number {
@@ -324,7 +351,7 @@ export class World {
     // A screen of trees across the far end, behind the camp.
     for (let x = -34; x < 34; x += 4.5) batch.add(treeModel(r() < 0.6 ? 'pine' : 'oak', Math.floor(r() * 1e6), false), FAR_VOX, new THREE.Vector3(x + r() * 2, 0, far - 52 - r() * 8));
     const g = batch.build();
-    this.root.add(g);
+    this.field.add(g);
     // The land under it all, out to the horizon.
     const size = 512;
     const c = document.createElement('canvas');
@@ -342,7 +369,7 @@ export class World {
     tex.colorSpace = THREE.SRGBColorSpace;
     const plane = new THREE.Mesh(new THREE.PlaneGeometry(400, 400).rotateX(-Math.PI / 2), new THREE.MeshLambertMaterial({ map: tex }));
     plane.position.set(0, -0.05, -60);
-    this.root.add(plane);
+    this.field.add(plane);
   }
 
   /** The orc camp past the far end of the field: tents, a palisade, campfires and a skull totem. */
@@ -367,7 +394,7 @@ export class World {
     for (const side of [-1, 1]) {
       for (let x = 10; x < 34; x += 6) batch.add(palisadeModel(18, 600 + x), PROP_VOX * 1.2, new THREE.Vector3(side * x, 0, far - 4 - r() * 2), side * 0.1);
     }
-    this.root.add(batch.build());
+    this.field.add(batch.build());
   }
 
   /** Tufts, flowers, pebbles and toadstools over the field and the land beyond it. */
@@ -386,7 +413,7 @@ export class World {
       if (onRoad && r() < 0.85) continue;
       batch.add(scatterModel(seed), 0.16 + r() * 0.06, new THREE.Vector3(x, 0, z), r() * 6);
     }
-    this.root.add(batch.build());
+    this.field.add(batch.build());
   }
 
   // ---- the field's structures -----------------------------------------------
@@ -401,12 +428,43 @@ export class World {
         }
       });
     }
+    this.fieldTrees.clear();
     const batch = new VoxBatch();
+    const r = seeded(4100 + this.game.level * 17 + this.game.seed % 1000);
+    const kinds: TreeKind[] = ['oak', 'oak', 'pine', 'birch', 'oak', 'pine'];
     this.game.obstacles.forEach((o, i) => {
+      if (o.look === 'tree') {
+        // Each tree on the field is its own model, so a ball can bring it down.
+        const tree = new VoxBatch().add(treeModel(kinds[Math.floor(r() * kinds.length)], Math.floor(r() * 1e6)), FIELD_TREE_VOX, new THREE.Vector3(o.x, 0, -o.y), r() * 6).build();
+        this.fieldTrees.set(i, tree);
+        this.props.add(tree);
+        return;
+      }
       const v = obstacleModel(o.look, PROP_VOX, o.r ?? 1, o.hw ?? 1, o.hh ?? 1, 700 + i + this.game.level * 31);
       batch.add(v, PROP_VOX, new THREE.Vector3(o.x, 0, -o.y), o.angle ?? 0);
     });
     this.props.add(batch.build());
+  }
+
+  /** A ball smashed a tree on the field: it bursts into leaves and splinters and is gone. */
+  fellTree(index: number): void {
+    const tree = this.fieldTrees.get(index);
+    const o = this.game.obstacles[index];
+    if (!tree || !o) return;
+    this.fieldTrees.delete(index);
+    this.props.remove(tree);
+    tree.traverse((m) => {
+      if (m instanceof THREE.Mesh) {
+        m.geometry.dispose();
+        (m.material as THREE.Material).dispose();
+      }
+    });
+    const x = o.x;
+    const z = -o.y;
+    for (let i = 0; i < 6; i++) this.fx.burst(x + (Math.random() - 0.5) * 2, 2 + Math.random() * 3, z + (Math.random() - 0.5) * 2, 2, i % 3 ? '#5a9a32' : '#7ab83e', 9);
+    this.fx.burst(x, 0.8, z, 6, '#6b4424', 8);
+    this.fx.puff(x, 1.5, z, 3, '#8a7a5a', 1.4);
+    this.fx.puff(x, 3, z, 3.5, '#7aa848', 1.2);
   }
 
   /** A ball glanced off one of the field's structures: chips of stone (or wood) fly. */

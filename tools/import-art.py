@@ -104,6 +104,67 @@ for cell in range(8):
     x, y = (cell % 4) * w, (cell // 4) * h
     save(TOWNSFOLK.crop((x, y, x + w, y + h)), f'sprites/townsfolk-{cell + 1}.webp', 256)
 
+
+# ---- Batch 7 (25 Oct): the bosses' break states, capsules, the powder barrel, the angry Queen, the courtyard.
+for kind in ['grog', 'banner', 'flask', 'gauntlet', 'tea', 'trick']:
+    save(Image.open(ART / f'sprites/capsule-{kind}.png').convert('RGBA'), f'fx/capsule-{kind}.webp', 256)
+save(Image.open(ART / 'sprites/prop-powder-barrel.png').convert('RGBA'), 'sprites/powder-barrel.webp', 256)
+save(Image.open(ART / 'fx/fx-barrel-explosion.png').convert('RGBA'), 'fx/barrel-explosion.webp', 512)
+save(Image.open(ART / 'fx/fx-scorch.png').convert('RGBA'), 'maps/scorch-blast.webp', 512)
+save(Image.open(ART / 'characters/queen-angry.png').convert('RGBA'), 'characters/queen-angry.webp', 512)
+# Siege tower stages keep their whole canvas (the renderer bottom-aligns each on its wheels).
+for n in range(1, 7):
+    save(Image.open(ART / f'sprites/boss/siege-tower-stage{n}.png').convert('RGBA'), f'sprites/siege-tower-stage{n}.webp', 768, (0, 0, 1024, 1536))
+# The goblin who was pushing it all along: two poses side by side.
+reveal = Image.open(ART / 'sprites/boss/siege-tower-reveal.png').convert('RGBA')
+for i in range(2):
+    save(reveal.crop((i * reveal.width // 2, 0, (i + 1) * reveal.width // 2, reveal.height)), f'sprites/goblin-push-{i + 1}.webp', 384)
+# The warlord's stages share one canvas too, so his feet stay put as his armour comes off.
+for n in range(1, 5):
+    save(Image.open(ART / f'sprites/boss/warlord-stage{n}.png').convert('RGBA'), f'sprites/warlord-stage{n}.webp', 768, (0, 0, 1024, 1024))
+save(Image.open(ART / 'sprites/boss/warlord-reveal.png').convert('RGBA'), 'sprites/warlord-reveal.webp', 512)
+
+
+def cells(src, cols, rows):
+    sheet = Image.open(ART / src).convert('RGBA')
+    w, h = sheet.width // cols, sheet.height // rows
+    return [sheet.crop(((i % cols) * w, (i // cols) * h, (i % cols + 1) * w, (i // cols + 1) * h)) for i in range(cols * rows)]
+
+
+# Physics pieces: the siege tower's debris (4 x 2) and its planks (3 x 2: plank and iron brick, intact to splintered).
+for i, im in enumerate(cells('fx/fx-siege-debris.png', 4, 2)):
+    save(im, f'fx/siege-debris-{i}.webp', 192)
+for i, im in enumerate(cells('sprites/boss/siege-tower-planks.png', 3, 2)):
+    save(im, f'fx/plank-{i}.webp', 160)
+# The warlord's 14 plates are laid out loosely: each is cut out as its own blob of pixels.
+plates = Image.open(ART / 'sprites/boss/warlord-plates.png').convert('RGBA')
+small = plates.resize((plates.width // 8, plates.height // 8))
+mask = [[small.getpixel((x, y))[3] > 40 for x in range(small.width)] for y in range(small.height)]
+seen = set()
+blobs = []
+for y0 in range(small.height):
+    for x0 in range(small.width):
+        if not mask[y0][x0] or (x0, y0) in seen:
+            continue
+        stack, pts = [(x0, y0)], []
+        seen.add((x0, y0))
+        while stack:
+            x, y = stack.pop()
+            pts.append((x, y))
+            for nx, ny in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)):
+                if 0 <= nx < small.width and 0 <= ny < small.height and mask[ny][nx] and (nx, ny) not in seen:
+                    seen.add((nx, ny))
+                    stack.append((nx, ny))
+        if len(pts) > 20:
+            xs = [p[0] for p in pts]
+            ys = [p[1] for p in pts]
+            blobs.append((min(xs) * 8, min(ys) * 8, (max(xs) + 1) * 8, (max(ys) + 1) * 8))
+blobs.sort(key=lambda b: (b[1] // 300, b[0]))
+for i, box in enumerate(blobs):
+    save(plates.crop(box), f'fx/plate-{i}.webp', 160)
+print('warlord plates:', len(blobs))
+save(Image.open(ART / 'maps/courtyard-ground.png').convert('RGB'), 'maps/courtyard.jpg', 1024)
+
 if ONLY is not None:
     aspects = {**json.loads((OUT / 'aspects.json').read_text()), **aspects}
 (OUT / 'aspects.json').write_text(json.dumps(aspects, indent=2) + '\n')

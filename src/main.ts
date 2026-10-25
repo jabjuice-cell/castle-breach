@@ -4,7 +4,8 @@ import goldUrl from './assets/icons/gold.png';
 import renownUrl from './assets/icons/renown.png';
 import shieldUrl from './assets/icons/shield.png';
 import queenUrl from './assets/characters/queen.webp';
-import { queenAdvice } from './queen';
+import queenAngryUrl from './assets/characters/queen-angry.webp';
+import { queenAdvice, queenCross } from './queen';
 import { BattleScene, CAPSULE_LOOK, type PlanPreview, QUALITIES, type Quality } from './render/scene';
 import { Sounds } from './render/sound';
 import { BUILDINGS } from './render/world';
@@ -69,6 +70,30 @@ $('quality').addEventListener('click', () => {
   showQuality();
 });
 showQuality();
+
+// Wall health bars: off unless the player turns them on.
+let wallBars = loadSetting('wallBars') === '1';
+function showBars() {
+  $('bars').textContent = wallBars ? 'Wall bars: On' : 'Wall bars: Off';
+  hud.wallBars.classList.toggle('nobars', !wallBars);
+}
+$('bars').addEventListener('click', () => {
+  wallBars = !wallBars;
+  saveSetting('wallBars', wallBars ? '1' : '0');
+  showBars();
+});
+
+// Voxel orcs or painted sprites (Jonny is comparing the two).
+function showOrcStyle() {
+  $('orcStyle').textContent = view.orcStyle === 'voxel' ? 'Orcs: Voxel' : 'Orcs: Sprite';
+}
+view.orcStyle = loadSetting('orcStyle') === 'sprite' ? 'sprite' : 'voxel';
+$('orcStyle').addEventListener('click', () => {
+  view.orcStyle = view.orcStyle === 'voxel' ? 'sprite' : 'voxel';
+  saveSetting('orcStyle', view.orcStyle);
+  showOrcStyle();
+});
+showOrcStyle();
 
 let running = false;
 
@@ -593,6 +618,9 @@ function updateHud(dt: number) {
     const tricks = trickText();
     hud.previewText.textContent = `${setup ? `${wave} brings ` : ''}${planText()}, down ${laneText()}. ${tricks}${setup || game.levelWave === 1 ? ' Scroll up to look at them.' : ''}`;
     hud.queenText.textContent = queenAdvice(game);
+    const face = queenCross(game) ? queenAngryUrl : queenUrl;
+    const portrait = hud.queen.querySelector('img')!;
+    if (!portrait.src.endsWith(face)) portrait.src = face;
     hud.startNow.innerHTML = setup ? 'To battle! <kbd>Enter</kbd>' : `${icon('call')}Start now, +${game.earlyCallGold()} gold <kbd>Enter</kbd>`;
   }
 
@@ -939,6 +967,7 @@ function buildHud() {
   trayKey = '';
 }
 buildHud();
+showBars();
 
 /** The see-through defender under the mouse while placing or dragging one, and the planning overlay with its coverage preview. */
 function updateGhost() {
@@ -1054,6 +1083,17 @@ function frame(now: number) {
         case 'segmentDestroyed':
           floater('BREACH!', -game.cfg.field.halfWidth + (ev.segment + 0.5) * game.segmentWidth(), 2, 'breach', 1.6);
           sounds.boom();
+          break;
+        case 'slam':
+          // The shield bash: a heavy clang, and a callout when it flattens a crowd at the wall.
+          if (ev.hits > 0) {
+            sounds.clang(false);
+            hitStop = Math.max(hitStop, 0.05);
+            if (ev.hits >= 3) floater(`SLAM! ×${ev.hits}`, ev.x, game.cfg.shield.y + 1, 'smash', 0.9);
+          }
+          break;
+        case 'treeDown':
+          sounds.crunch(12);
           break;
         case 'line':
           hitStop = Math.max(hitStop, 0.06);

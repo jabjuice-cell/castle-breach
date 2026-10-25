@@ -81,3 +81,8 @@ export function queenAdvice(game: Game): string {
   const lines = hit >= 0 && (hit < 3 || key % 4 !== 0) ? RULES[hit](game)! : IDLE;
   return lines[key % lines.length];
 }
+
+/** She's cross when the wall is crumbling or a boss is at the gates. */
+export function queenCross(game: Game): boolean {
+  return Boolean(game.plan.boss || game.plan.tower) || game.segmentHp.some((hp) => hp < game.cfg.wall.segmentHp * 0.5);
+}

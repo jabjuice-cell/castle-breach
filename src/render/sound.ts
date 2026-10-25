@@ -26,9 +26,65 @@ export class Sounds {
   }
 
   /**
-   * A heavy metal clang: a thump, a burst of filtered noise for the impact and
-   * a few out-of-tune ringing partials, like something big hitting a steel shield.
-   * A perfect parry rings higher and longer.
+   * The ring of a big steel plate: a low body tone with inharmonic overtones (a beaten plate,
+   * not a bell), each pair slightly detuned so it shimmers, all through a lowpass so nothing
+   * is thin or tinny. size scales the pitch down and the ring out.
+   */
+  private plate(now: number, out: AudioNode, base: number, ring: number, level: number) {
+    const ctx = this.ctx!;
+    const tone = ctx.createBiquadFilter();
+    tone.type = 'lowpass';
+    tone.frequency.value = 2600;
+    tone.Q.value = 0.5;
+    tone.connect(out);
+    for (const [ratio, amp, decay] of [[1, 0.55, 1], [1.59, 0.4, 0.8], [2.13, 0.3, 0.65], [2.98, 0.2, 0.5], [3.9, 0.12, 0.35], [5.2, 0.06, 0.2]]) {
+      for (const detune of [-0.004, 0.004]) {
+        const o = ctx.createOscillator();
+        o.type = 'sine';
+        o.frequency.value = base * ratio * (1 + detune);
+        const g = ctx.createGain();
+        g.gain.setValueAtTime(0, now);
+        g.gain.linearRampToValueAtTime(amp * level * 0.5, now + 0.004);
+        g.gain.exponentialRampToValueAtTime(0.0008, now + ring * decay);
+        o.connect(g).connect(tone);
+        o.start(now);
+        o.stop(now + ring * decay + 0.05);
+      }
+    }
+  }
+
+  /** A low thud: a sine dropping in pitch, for the weight of a blow. */
+  private thud(now: number, out: AudioNode, from: number, to: number, length: number, level: number) {
+    const ctx = this.ctx!;
+    const o = ctx.createOscillator();
+    o.frequency.setValueAtTime(from, now);
+    o.frequency.exponentialRampToValueAtTime(to, now + length);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(level, now);
+    g.gain.exponentialRampToValueAtTime(0.001, now + length * 1.2);
+    o.connect(g).connect(out);
+    o.start(now);
+    o.stop(now + length * 1.3);
+  }
+
+  /** The smack of impact itself: a short burst of noise, darker for a bigger hit. */
+  private smack(now: number, out: AudioNode, freq: number, length: number, level: number) {
+    const ctx = this.ctx!;
+    const noise = ctx.createBufferSource();
+    noise.buffer = this.noise(length, 2);
+    const band = ctx.createBiquadFilter();
+    band.type = 'bandpass';
+    band.frequency.value = freq;
+    band.Q.value = 0.7;
+    const g = ctx.createGain();
+    g.gain.value = level;
+    noise.connect(band).connect(g).connect(out);
+    noise.start(now);
+  }
+
+  /**
+   * A heave: the whole shield slammed into a ball (or the orcs). A deep, heavy CLANG: a thump
+   * you feel, a dark smack and a big plate ringing on for over a second. A perfect parry rings brighter.
    */
   clang(parry: boolean) {
     const ctx = this.ctx;
@@ -37,51 +93,17 @@ export class Sounds {
     if (now - this.lastClang < 0.05) return;
     this.lastClang = now;
     const out = ctx.createGain();
-    out.gain.value = parry ? 0.5 : 0.35;
+    out.gain.value = parry ? 0.6 : 0.5;
     out.connect(ctx.destination);
-
-    const pitch = (parry ? 1.25 : 1) * (0.94 + Math.random() * 0.12);
-    const ring = parry ? 1.1 : 0.6;
-    for (const [f, amp, decay] of [[310, 0.5, 1], [740, 0.35, 0.8], [1187, 0.25, 0.6], [1873, 0.18, 0.45], [2716, 0.1, 0.3]]) {
-      const o = ctx.createOscillator();
-      o.frequency.value = f * pitch;
-      const g = ctx.createGain();
-      g.gain.setValueAtTime(amp, now);
-      g.gain.exponentialRampToValueAtTime(0.001, now + ring * decay);
-      o.connect(g).connect(out);
-      o.start(now);
-      o.stop(now + ring * decay + 0.05);
-    }
-
-    // The hit itself: a short crack of noise through a band-pass.
-    const len = Math.floor(ctx.sampleRate * 0.08);
-    const buf = ctx.createBuffer(1, len, ctx.sampleRate);
-    const data = buf.getChannelData(0);
-    for (let i = 0; i < len; i++) data[i] = (Math.random() * 2 - 1) * (1 - i / len) ** 2;
-    const noise = ctx.createBufferSource();
-    noise.buffer = buf;
-    const band = ctx.createBiquadFilter();
-    band.type = 'bandpass';
-    band.frequency.value = 2400 * pitch;
-    band.Q.value = 0.8;
-    noise.connect(band).connect(out);
-    noise.start(now);
-
-    // A low thump so it feels heavy.
-    const thump = ctx.createOscillator();
-    thump.frequency.setValueAtTime(140, now);
-    thump.frequency.exponentialRampToValueAtTime(50, now + 0.15);
-    const tg = ctx.createGain();
-    tg.gain.setValueAtTime(0.8, now);
-    tg.gain.exponentialRampToValueAtTime(0.001, now + 0.18);
-    thump.connect(tg).connect(out);
-    thump.start(now);
-    thump.stop(now + 0.2);
+    const pitch = (parry ? 1.15 : 1) * (0.95 + Math.random() * 0.1);
+    this.thud(now, out, 110, 38, 0.28, 1);
+    this.smack(now, out, 900 * pitch, 0.07, 0.9);
+    this.plate(now, out, 132 * pitch, parry ? 1.8 : 1.3, 1);
   }
 
   /**
-   * A light metallic clink for an ordinary bounce off the shield: a bright tick
-   * and a few short, high, inharmonic partials. The heavy clang is kept for heaves.
+   * An ordinary ball off the shield: still a big steel shield, so a solid, low "dong" with a
+   * short ring and a thump under it, varied a little each time so a rally doesn't drone.
    */
   clink() {
     const ctx = this.ctx;
@@ -90,26 +112,12 @@ export class Sounds {
     if (now - this.lastClink < 0.03) return;
     this.lastClink = now;
     const out = ctx.createGain();
-    out.gain.value = 0.22;
+    out.gain.value = 0.32;
     out.connect(ctx.destination);
-    const pitch = 0.9 + Math.random() * 0.2;
-    for (const [f, amp, decay] of [[1480, 0.5, 0.22], [2350, 0.35, 0.16], [3720, 0.25, 0.1], [5210, 0.12, 0.06]]) {
-      const o = ctx.createOscillator();
-      o.frequency.value = f * pitch;
-      const g = ctx.createGain();
-      g.gain.setValueAtTime(amp, now);
-      g.gain.exponentialRampToValueAtTime(0.001, now + decay);
-      o.connect(g).connect(out);
-      o.start(now);
-      o.stop(now + decay + 0.03);
-    }
-    const noise = ctx.createBufferSource();
-    noise.buffer = this.noise(0.02, 1);
-    const high = ctx.createBiquadFilter();
-    high.type = 'highpass';
-    high.frequency.value = 4000;
-    noise.connect(high).connect(out);
-    noise.start(now);
+    const pitch = 0.9 + Math.random() * 0.22;
+    this.thud(now, out, 160 * pitch, 60, 0.12, 0.7);
+    this.smack(now, out, 1300 * pitch, 0.04, 0.6);
+    this.plate(now, out, 196 * pitch, 0.55, 0.8);
   }
 
   /** A crunch of stone when something smashes into the wall: louder for bigger hits. */
