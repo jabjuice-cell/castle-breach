@@ -97,6 +97,12 @@ for src, dest, cell in PROPS:
     w, h = sheet.width // 4, sheet.height // 2
     x, y = (cell % 4) * w, (cell // 4) * h
     save(sheet.crop((x, y, x + w, y + h)), dest, 384)
+# The townsfolk: a 4 x 2 sheet of eight characters who walk about the base.
+TOWNSFOLK = Image.open(ART / 'sprites/townsfolk-sheet.png').convert('RGBA')
+for cell in range(8):
+    w, h = TOWNSFOLK.width // 4, TOWNSFOLK.height // 2
+    x, y = (cell % 4) * w, (cell // 4) * h
+    save(TOWNSFOLK.crop((x, y, x + w, y + h)), f'sprites/townsfolk-{cell + 1}.webp', 256)
 
 if ONLY is not None:
     aspects = {**json.loads((OUT / 'aspects.json').read_text()), **aspects}

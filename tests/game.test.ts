@@ -3,6 +3,7 @@ import { averageBot } from '../src/sim/bot';
 import { makeConfig } from '../src/sim/config';
 import { type Ball, type Enemy, Game, type Projectile } from '../src/sim/game';
 import { applyMeta, buyMeta, metaCost, newProgress } from '../src/sim/meta';
+import { contact } from '../src/sim/obstacles';
 import { formation, planSize, planWave, waveBudget } from '../src/sim/waves';
 
 function run(game: Game, seconds: number) {
@@ -529,7 +530,7 @@ describe('run loop', () => {
     expect(game.place('crossbow', -3.5, -0.5)).toBe(true); // no snapping: it stands where it was put
     expect(game.defenders[0]).toMatchObject({ x: -3.5, y: -0.5, ground: 'tower' });
     expect(game.place('catapult', -2, -1)).toBe(false); // too close: they would overlap
-    expect(game.place('catapult', -12, -7.3)).toBe(true);
+    expect(game.place('catapult', -12, -6.3)).toBe(true);
     expect(game.defenders[1].ground).toBe('courtyard');
     expect(game.place('soldiers', 1, -1.2)).toBe(true);
     expect(game.defenders[2].ground).toBe('wall');
@@ -794,6 +795,51 @@ describe('run loop', () => {
     expect(game.canCallToArms).toBe(true);
   });
 
+  it('the tavern stands a round: the fallen soldiers get up and fight harder, then it rests', () => {
+    const cfg = veteran(quiet());
+    const game = new Game(1, cfg);
+    game.gold = 1000;
+    expect(game.whyNotPower('tavern')).toMatch(/build it/);
+    cfg.unlocks.buildings = ['keep', 'tavern'];
+    game.place('soldiers', 0, -1.2);
+    game.endSetup();
+    game.plan.groups = [];
+    game.skipPreview();
+    game.enemies.push(enemy({ x: 0, y: 60, state: 'stand', hp: 1e9 }));
+    const fallen = game.soldiers[3];
+    fallen.hp = 0;
+    fallen.x = 7;
+    expect(game.usePower('tavern')).toBe(true);
+    expect(fallen.hp).toBe(fallen.maxHp);
+    expect([fallen.x, fallen.y]).toEqual([fallen.postX, fallen.postY]);
+    expect(game.powerActive('tavern')).toBe(true);
+    expect(game.usePower('tavern')).toBe(false);
+    run(game, cfg.tavern.seconds + 0.1);
+    expect(game.powerActive('tavern')).toBe(false);
+  });
+
+  it('the tavern needs soldiers to stand a round for', () => {
+    const cfg = quiet();
+    cfg.unlocks.buildings = ['keep', 'tavern'];
+    const game = battle(1, cfg);
+    expect(game.canUse('tavern')).toBe(false);
+    expect(game.whyNotPower('tavern')).toMatch(/soldiers/);
+  });
+
+  it('the alchemist\'s brew turns every ball into a fire flask', () => {
+    const cfg = quiet();
+    cfg.unlocks.buildings = ['keep', 'alchemist'];
+    const game = battle(1, cfg);
+    expect(game.usePower('alchemist')).toBe(true);
+    expect(game.effects.flask).toBeCloseTo(game.time + cfg.alchemist.seconds);
+    expect(game.events.some((e) => e.type === 'power' && e.kind === 'alchemist')).toBe(true);
+  });
+
+  it('the town\'s buildings come from its upgrades', () => {
+    expect(applyMeta({}, 0).unlocks.buildings).toEqual(['keep']);
+    expect(applyMeta({ tavern: 1, alchemist: 1 }, 0).unlocks.buildings).toEqual(['keep', 'tavern', 'alchemist']);
+  });
+
   it('killing a warlord pays boss Renown', () => {
     const game = battle();
     game.enemies.push(enemy({ kind: 'warlord', y: 40, hp: 0, maxHp: 2000 }));
@@ -813,5 +859,49 @@ describe('run loop', () => {
     }
     expect(game.cleared).toBeGreaterThanOrEqual(2);
     expect(game.blocked).toBeGreaterThan(0);
+  });
+});
+
+describe('the field\'s structures', () => {
+  it('finds the contact between a circle and a round or turned box obstacle', () => {
+    expect(contact({ look: 'boulder', x: 0, y: 0, r: 1 }, 1.3, 0, 0.5)).toMatchObject({ nx: 1, ny: 0 });
+    expect(contact({ look: 'boulder', x: 0, y: 0, r: 1 }, 2, 0, 0.5)).toBeNull();
+    const box = { look: 'ruin' as const, x: 0, y: 0, hw: 2, hh: 0.5, angle: Math.PI / 2 };
+    // Turned a quarter, the box runs along y: a circle beside it at x 0.8 is pushed out along +x.
+    const hit = contact(box, 0.8, 1, 0.5)!;
+    expect(hit.nx).toBeCloseTo(1);
+    expect(hit.depth).toBeCloseTo(0.2);
+    expect(contact(box, 0, 3, 0.5)).toBeNull();
+  });
+
+  it('balls bank off a boulder, and orcs are pushed round it', () => {
+    const cfg = quiet();
+    cfg.obstacles.levels = [[{ look: 'boulder', x: 0, y: 30, r: 1.5 }]];
+    const game = battle(1, cfg);
+    const b = ball(game, { x: 0, y: 25, vx: 0, vy: 20 });
+    run(game, 0.3);
+    expect(b.vy).toBeLessThan(0);
+    expect(b.combo).toBe(cfg.bumpers.bankCombo);
+    const orc = enemy({ x: 0.2, y: 30 });
+    game.enemies.push(orc);
+    run(game, 0.05);
+    expect(Math.hypot(orc.x, orc.y - 30)).toBeGreaterThanOrEqual(1.5 + cfg.grunt.radius - 0.01);
+  });
+
+  it('a slanted wall throws a straight ball off sideways', () => {
+    const cfg = quiet();
+    cfg.obstacles.levels = [[{ look: 'ruin', x: 0, y: 30, hw: 3, hh: 0.6, angle: 0.6 }]];
+    const game = battle(1, cfg);
+    const b = ball(game, { x: 0, y: 24, vx: 0, vy: 20 });
+    run(game, 0.4);
+    expect(Math.abs(b.vx)).toBeGreaterThan(5);
+  });
+
+  it('a ball off the tree line says where, so the trees can lose some leaves', () => {
+    const game = battle();
+    ball(game, { x: 18, y: 30, vx: 20, vy: 10 });
+    game.events = [];
+    run(game, 0.2);
+    expect(game.events.some((e) => e.type === 'edge' && e.side === 1)).toBe(true);
   });
 });

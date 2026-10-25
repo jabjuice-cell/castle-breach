@@ -9,6 +9,10 @@ export class Sounds {
   private lastCrunch = 0;
   private scrapeGain: GainNode | null = null;
   private scrapeBand: BiquadFilterNode | null = null;
+  private hordeGain: GainNode | null = null;
+  private hordeVoice: BiquadFilterNode | null = null;
+  private nextDrum = 0;
+  private drumBeat = 0;
   muted = false;
 
   /** Browsers only allow audio after a click, so call this from one. */
@@ -262,6 +266,195 @@ export class Sounds {
     ng.gain.value = 0.5;
     noise.connect(low).connect(ng).connect(ctx.destination);
     noise.start(now);
+  }
+
+  /**
+   * The horde: a rumble of feet, a growling murmur from hundreds of throats and the orcs'
+   * war drums, all swelling with how many of them are on the field (level 0 to 1), with
+   * the odd yell over the top. Call every frame.
+   */
+  horde(level: number) {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    if (!this.hordeGain) {
+      this.hordeGain = ctx.createGain();
+      this.hordeGain.gain.value = 0;
+      this.hordeGain.connect(ctx.destination);
+      // Feet: a loop of irregular low thuds.
+      const feet = ctx.createBufferSource();
+      feet.buffer = this.stomps();
+      feet.loop = true;
+      const low = ctx.createBiquadFilter();
+      low.type = 'lowpass';
+      low.frequency.value = 420;
+      feet.connect(low).connect(this.hordeGain);
+      feet.start();
+      // The murmur: low growling saws through an "oh" vowel, wobbling slowly.
+      const voice = ctx.createBiquadFilter();
+      voice.type = 'bandpass';
+      voice.frequency.value = 480;
+      voice.Q.value = 1.6;
+      this.hordeVoice = voice;
+      const vg = ctx.createGain();
+      vg.gain.value = 0.16;
+      voice.connect(vg).connect(this.hordeGain);
+      for (const f of [82, 97, 110, 123, 138]) {
+        const o = ctx.createOscillator();
+        o.type = 'sawtooth';
+        o.frequency.value = f;
+        const lfo = ctx.createOscillator();
+        lfo.frequency.value = 0.15 + Math.random() * 0.3;
+        const depth = ctx.createGain();
+        depth.gain.value = f * 0.04;
+        lfo.connect(depth).connect(o.frequency);
+        o.connect(voice);
+        o.start();
+        lfo.start();
+      }
+      const crowd = ctx.createBufferSource();
+      crowd.buffer = this.grit();
+      crowd.loop = true;
+      const band = ctx.createBiquadFilter();
+      band.type = 'bandpass';
+      band.frequency.value = 650;
+      band.Q.value = 0.7;
+      const cg = ctx.createGain();
+      cg.gain.value = 0.25;
+      crowd.connect(band).connect(cg).connect(this.hordeGain);
+      crowd.start();
+    }
+    const v = this.muted ? 0 : Math.min(1, Math.max(0, level));
+    const now = ctx.currentTime;
+    this.hordeGain.gain.setTargetAtTime(v < 0.02 ? 0 : 0.06 + 0.3 * v, now, 0.6);
+    this.hordeVoice!.frequency.setTargetAtTime(420 + 160 * v, now, 0.5);
+    if (v < 0.05) {
+      this.nextDrum = now;
+      return;
+    }
+    // War drums: BOOM boom, BOOM boom, slightly ragged.
+    this.nextDrum = Math.max(this.nextDrum, now);
+    while (this.nextDrum < now + 0.25) {
+      const strong = this.drumBeat % 2 === 0;
+      this.drum(this.nextDrum, (strong ? 0.5 : 0.3) * (0.4 + 0.6 * v), strong ? 62 : 74);
+      this.nextDrum += (strong ? 0.28 : 0.52) + Math.random() * 0.03;
+      this.drumBeat++;
+    }
+    // Now and then a yell from the crowd.
+    if (Math.random() < 0.012 * v) this.yell(now + Math.random() * 0.2, 0.05 + 0.05 * v);
+  }
+
+  private drum(at: number, gain: number, freq: number) {
+    const ctx = this.ctx!;
+    const o = ctx.createOscillator();
+    o.frequency.setValueAtTime(freq * 1.6, at);
+    o.frequency.exponentialRampToValueAtTime(freq, at + 0.08);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, at);
+    g.gain.exponentialRampToValueAtTime(gain, at + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001, at + 0.45);
+    o.connect(g).connect(this.hordeGain ?? ctx.destination);
+    o.start(at);
+    o.stop(at + 0.5);
+  }
+
+  /** One orc bellowing: a gravelly saw that rises and falls through a vowel. */
+  private yell(at: number, gain: number) {
+    const ctx = this.ctx!;
+    const o = ctx.createOscillator();
+    o.type = 'sawtooth';
+    const f = 130 + Math.random() * 90;
+    const len = 0.4 + Math.random() * 0.4;
+    o.frequency.setValueAtTime(f * 0.8, at);
+    o.frequency.linearRampToValueAtTime(f * 1.25, at + len * 0.3);
+    o.frequency.linearRampToValueAtTime(f * 0.7, at + len);
+    const vowel = ctx.createBiquadFilter();
+    vowel.type = 'bandpass';
+    vowel.frequency.setValueAtTime(600, at);
+    vowel.frequency.linearRampToValueAtTime(1000, at + len * 0.4);
+    vowel.Q.value = 3;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, at);
+    g.gain.exponentialRampToValueAtTime(gain, at + 0.05);
+    g.gain.exponentialRampToValueAtTime(0.0001, at + len);
+    o.connect(vowel).connect(g).connect(ctx.destination);
+    o.start(at);
+    o.stop(at + len + 0.05);
+  }
+
+  /** Two seconds of heavy, uneven footfalls. */
+  private stomps(): AudioBuffer {
+    const ctx = this.ctx!;
+    const len = ctx.sampleRate * 2;
+    const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+    const data = buf.getChannelData(0);
+    let env = 0;
+    for (let i = 0; i < len; i++) {
+      if (Math.random() < 30 / ctx.sampleRate) env = 0.6 + Math.random() * 0.4;
+      env *= 0.9993;
+      data[i] = (Math.random() * 2 - 1) * (0.15 + env);
+    }
+    return buf;
+  }
+
+  /** The tavern's round: a crowd's "hurrah!" and the clink of tankards. */
+  cheer() {
+    const ctx = this.ctx;
+    if (!ctx || this.muted) return;
+    const now = ctx.currentTime;
+    for (let i = 0; i < 9; i++) {
+      const at = now + Math.random() * 0.12;
+      const o = ctx.createOscillator();
+      o.type = 'sawtooth';
+      const f = 160 + Math.random() * 160;
+      o.frequency.setValueAtTime(f, at);
+      o.frequency.linearRampToValueAtTime(f * 1.5, at + 0.25);
+      o.frequency.linearRampToValueAtTime(f * 1.3, at + 0.8);
+      const vowel = ctx.createBiquadFilter();
+      vowel.type = 'bandpass';
+      vowel.frequency.setValueAtTime(700, at);
+      vowel.frequency.linearRampToValueAtTime(1100, at + 0.3);
+      vowel.Q.value = 2.5;
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.0001, at);
+      g.gain.exponentialRampToValueAtTime(0.05, at + 0.06);
+      g.gain.exponentialRampToValueAtTime(0.0001, at + 0.9);
+      o.connect(vowel).connect(g).connect(ctx.destination);
+      o.start(at);
+      o.stop(at + 1);
+    }
+    for (let i = 0; i < 3; i++) setTimeout(() => this.clink(), 120 + i * 90);
+  }
+
+  /** The alchemist's brew: a fast bubbling and a fiery whoosh. */
+  brew() {
+    const ctx = this.ctx;
+    if (!ctx || this.muted) return;
+    const now = ctx.currentTime;
+    for (let i = 0; i < 14; i++) {
+      const at = now + i * 0.035 + Math.random() * 0.02;
+      const o = ctx.createOscillator();
+      const f = 300 + Math.random() * 500;
+      o.frequency.setValueAtTime(f, at);
+      o.frequency.exponentialRampToValueAtTime(f * 2.2, at + 0.05);
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.0001, at);
+      g.gain.exponentialRampToValueAtTime(0.12, at + 0.01);
+      g.gain.exponentialRampToValueAtTime(0.0001, at + 0.06);
+      o.connect(g).connect(ctx.destination);
+      o.start(at);
+      o.stop(at + 0.08);
+    }
+    const noise = ctx.createBufferSource();
+    noise.buffer = this.noise(0.9, 1.2);
+    const band = ctx.createBiquadFilter();
+    band.type = 'bandpass';
+    band.Q.value = 1.2;
+    band.frequency.setValueAtTime(300, now + 0.3);
+    band.frequency.exponentialRampToValueAtTime(3000, now + 1);
+    const g = ctx.createGain();
+    g.gain.value = 0.4;
+    noise.connect(band).connect(g).connect(ctx.destination);
+    noise.start(now + 0.3);
   }
 
   /** A wooden thunk when a defender is set down. */

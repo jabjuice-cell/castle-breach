@@ -3,8 +3,6 @@ import { type Defender, type PlacedKind, groundAt } from '../sim/defenders';
 import { type Ball, type Capsule, type CapsuleKind, type Enemy, type Game, type GameEvent } from '../sim/game';
 import { ENEMY_KINDS, type EnemyKind, formation } from '../sim/waves';
 import aspects from '../assets/aspects.json';
-import keepUrl from '../assets/castle/keep.webp';
-import tavernUrl from '../assets/castle/tavern.webp';
 import towerUrl from '../assets/castle/tower-crossbow.webp';
 import arrowUrl from '../assets/fx/arrow.webp';
 import boulderUrl from '../assets/fx/boulder.webp';
@@ -17,7 +15,6 @@ import royalShieldUrl from '../assets/fx/royal-shield.webp';
 import shieldFlashUrl from '../assets/fx/royal-shield-hit-overlay.webp';
 import stoneUrl from '../assets/fx/stone.webp';
 import craterUrl from '../assets/maps/crater.webp';
-import forestUrl from '../assets/maps/forest.jpg';
 import scorchUrl from '../assets/maps/scorch.webp';
 import archerUrl from '../assets/sprites/defender-archer.webp';
 import defCatapultUrl from '../assets/sprites/defender-catapult.webp';
@@ -31,7 +28,9 @@ import runnerUrl from '../assets/sprites/enemy-runner.webp';
 import siegeTowerUrl from '../assets/sprites/siege-tower-1.webp';
 import warlordUrl from '../assets/sprites/enemy-warlord.webp';
 import { type BurstOptions, Fireworks } from './fireworks';
+import { paintGround } from './ground';
 import { Terrain } from './terrain';
+import { BUILDINGS, World } from './world';
 import {
   GroundCanvas, type SpriteArt, blobTexture, capsuleTexture, detailTexture, glowTexture, imageSprite, puffTexture, loadImage, setAnisotropy,
 } from './textures';
@@ -52,9 +51,9 @@ export const QUALITIES: Quality[] = ['low', 'medium', 'high'];
  * cap, how often ground marks upload, and how many firework particles each burst throws.
  */
 const QUALITY: Record<Quality, { pixelRatio: number; groundWidth: number; cell: number; debris: number; upload: number; fx: number }> = {
-  low: { pixelRatio: 1, groundWidth: 1024, cell: 1, debris: 400, upload: 0.5, fx: 0.35 },
-  medium: { pixelRatio: 2, groundWidth: 1536, cell: 0.6, debris: 900, upload: 0.25, fx: 0.7 },
-  high: { pixelRatio: 3, groundWidth: 2048, cell: 0.4, debris: 1500, upload: 0.15, fx: 1 },
+  low: { pixelRatio: 1, groundWidth: 1280, cell: 1, debris: 400, upload: 0.5, fx: 0.35 },
+  medium: { pixelRatio: 2, groundWidth: 2048, cell: 0.6, debris: 900, upload: 0.25, fx: 0.7 },
+  high: { pixelRatio: 3, groundWidth: 2560, cell: 0.4, debris: 1500, upload: 0.15, fx: 1 },
 };
 
 const VOXEL = 0.5;
@@ -110,9 +109,11 @@ const SHIELD_ART_FILL = 0.86;
 const SHIELD_TILT = 0.37;
 const SHIELD_H = 1.2;
 /** The camera: height, distance back, and the point on the field it looks at. */
-const CAM_Y = 54;
-const CAM_Z = 29;
-const CAM_LOOK = -22;
+const CAM_Y = 64;
+const CAM_Z = 40;
+const CAM_LOOK = -18;
+/** A wide lens, so the town behind the wall fits under the field. */
+const CAM_FOV = 52;
 /** How far up the field the camera glides to show the coming horde. */
 const LOOK_AHEAD = 38;
 /** A heave's shove: quick, so it feels like a punch. */
@@ -235,6 +236,7 @@ export class BattleScene {
   private quality: Quality;
   private ground!: GroundCanvas;
   private terrain!: Terrain;
+  private world!: World;
   private groundMat: THREE.MeshLambertMaterial;
   private detail = detailTexture();
 
@@ -347,9 +349,9 @@ export class BattleScene {
     this.renderer.shadowMap.enabled = false;
     this.scene.background = new THREE.Color('#9cc4d8');
     // Light haze only: the far end of the field stays clear.
-    this.scene.fog = new THREE.Fog('#9cc4d8', 120, 230);
+    this.scene.fog = new THREE.Fog('#9cc4d8', 150, 300);
 
-    this.camera = new THREE.PerspectiveCamera(46, 1, 0.5, 300);
+    this.camera = new THREE.PerspectiveCamera(CAM_FOV, 1, 0.5, 420);
     this.camera.position.copy(this.camBase);
     this.camera.lookAt(this.camLook);
 
@@ -361,9 +363,12 @@ export class BattleScene {
     this.groundMat = new THREE.MeshLambertMaterial();
     this.addDetail(this.groundMat);
     this.buildGround();
-    this.addHills();
     this.buildCastle();
-    this.addTown();
+    this.world = new World(game, this.camera, {
+      puff: (x, y, z, size, color, life) => this.puff(x, y, z, size, color, life),
+      burst: (x, y, z, n, color, speed) => this.burst(x, y, z, n, color, speed),
+    });
+    this.scene.add(this.world.root);
 
     const makeSprites = (art: SpriteArt, size: number, max: number, centred = false) => {
       const geo = new THREE.PlaneGeometry(2 * size * art.aspect, 2 * size);
@@ -555,6 +560,7 @@ export class BattleScene {
   setGame(game: Game) {
     this.hordeFor = -1;
     this.game = game;
+    this.world.setGame(game);
     this.rebuildCastle();
     this.ground.reset();
     this.terrain.reset();
@@ -594,6 +600,17 @@ export class BattleScene {
     this.camBase.set(0, CAM_Y * pull, CAM_Z * pull - (pull - 1) * 8);
     this.camera.updateProjectionMatrix();
     this.fireworks.setViewport(h * this.renderer.getPixelRatio(), this.camera.fov);
+  }
+
+  /** The building under a screen point, if any. */
+  pickBuilding(ndcX: number, ndcY: number): import('../sim/game').BuildingKind | null {
+    this.raycaster.setFromCamera(new THREE.Vector2(ndcX, ndcY), this.camera);
+    return this.world.pick(this.raycaster.ray);
+  }
+
+  /** Lights a building while the mouse is over it. */
+  hoverBuilding(kind: import('../sim/game').BuildingKind) {
+    this.world.glow(kind, 0.45);
   }
 
   /** The shield x under a screen point: where the mouse ray crosses the shield's line. */
@@ -810,14 +827,35 @@ export class BattleScene {
           if (ev.parry) this.flash(0.18, '#fff6c8');
           break;
         }
-        case 'callToArms': {
-          // Gold and blue bursts off every tower top, and a warm flash.
-          this.flash(0.25, '#ffe9a0');
-          for (const st of this.game.stacks) {
-            fw.burst(st.x, this.standHeight(st.x, TOWER_Z) + 0.5, -TOWER_Z, { count: 30, colors: ['#ffd34a', '#2a4fb0', '#ffffff'], speed: 7, life: 0.9, size: 0.45, up: 1, gravity: 8 });
+        case 'power': {
+          const b = BUILDINGS[ev.kind];
+          this.world.glow(ev.kind, 1);
+          this.world.cheer();
+          if (ev.kind === 'keep') {
+            // Gold and blue bursts off every tower top, and a warm flash.
+            this.flash(0.25, '#ffe9a0');
+            for (const st of this.game.stacks) {
+              fw.burst(st.x, this.standHeight(st.x, TOWER_Z) + 0.5, -TOWER_Z, { count: 30, colors: ['#ffd34a', '#2a4fb0', '#ffffff'], speed: 7, life: 0.9, size: 0.45, up: 1, gravity: 8 });
+            }
+          } else if (ev.kind === 'tavern') {
+            // Foam and gold over the tavern, and a cheer along the soldiers' line.
+            this.flash(0.15, '#fff2c0');
+            fw.burst(b.x, b.top, b.z, { count: 60, colors: ['#fff6dc', '#ffd34a', '#e8a040'], speed: 9, life: 1, size: 0.5, up: 1, gravity: 9 });
+            for (const sol of this.game.soldiers) if (Math.random() < 0.15) fw.burst(sol.x, 1.2, -sol.y, { count: 4, colors: ['#ffd34a'], speed: 3, life: 0.5, size: 0.3, up: 1, gravity: 6 });
+          } else {
+            // A green fireball out of the alchemist's chimney, and every ball catches light.
+            this.flash(0.2, '#c8ffb0');
+            fw.burst(b.x, b.top, b.z, { count: 80, colors: ['#7dff3a', '#c8ff6a', '#ffffff'], speed: 11, life: 1.1, size: 0.55, up: 1, gravity: 6 });
+            for (const ball of this.game.balls) fw.burst(ball.x, BALL_Y, -ball.y, { count: 20, colors: ['#ff8a2a', '#ffd34a'], speed: 5, life: 0.5, size: 0.4, gravity: 0 });
           }
           break;
         }
+        case 'edge':
+          this.world.chipTree(ev.side, -ev.y);
+          break;
+        case 'obstacle':
+          this.world.chipObstacle(ev.index, ev.x, -ev.y);
+          break;
         case 'heave':
           this.heaveT = 0;
           fw.burst(ev.x, 0.2, -sy, { count: 14, colors: ['#e8d8b0', '#c0a878'], speed: 5, life: 0.4, size: 0.4, ring: true, gravity: 0, drag: 5 });
@@ -971,6 +1009,7 @@ export class BattleScene {
     this.updateTower(dt);
     this.updatePlanning();
     this.updateRockets(dt);
+    this.world.update(dt, time);
     this.fireworks.update(dt);
     this.flashLevel = Math.max(0, this.flashLevel - dt * 2.2);
 
@@ -1290,9 +1329,11 @@ export class BattleScene {
   private buildGround() {
     const q = QUALITY[this.quality];
     const hw = this.game.cfg.field.halfWidth;
-    const minZ = -(this.game.cfg.field.spawnY + 14);
-    const maxZ = 22;
-    this.ground = new GroundCanvas(hw * 2 + 8, maxZ - minZ, minZ, forestUrl, q.groundWidth);
+    // The painted ground runs from past the orc camp to behind the town, and well out under the trees.
+    const minZ = -(this.game.cfg.field.spawnY + 60);
+    const maxZ = 28;
+    const worldW = 84;
+    this.ground = new GroundCanvas(worldW, maxZ - minZ, minZ, (ctx, w, h) => paintGround(ctx, w, h, { worldW, worldH: maxZ - minZ, minZ, halfWidth: hw }), q.groundWidth);
     this.groundMat.map = this.ground.texture;
     this.groundMat.needsUpdate = true;
     this.terrain = new Terrain(this.ground.worldW, this.ground.worldH, (minZ + maxZ) / 2, q.cell, this.groundMat, -1.5);
@@ -1481,20 +1522,6 @@ export class BattleScene {
     });
     this.stackMesh = mesh;
     this.scene.add(mesh);
-  }
-
-  /** The keep and the tavern behind the courtyard. Scenery; the wall is what you defend. */
-  private addTown() {
-    const billboard = (art: SpriteArt, h: number, x: number, z: number) => {
-      const geo = new THREE.PlaneGeometry(h * art.aspect, h);
-      geo.translate(0, h / 2, 0);
-      const m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ map: art.texture, alphaTest: 0.5 }));
-      m.position.set(x, 0, z);
-      m.onBeforeRender = () => m.quaternion.copy(this.camera.quaternion);
-      this.scene.add(m);
-    };
-    billboard(imageSprite(keepUrl, aspects.keep), 7, 0, 13.5);
-    billboard(imageSprite(tavernUrl, aspects.tavern), 4.2, -14, 12.5);
   }
 
   private crumble(group: VoxelGroup, fraction: number) {
@@ -1929,31 +1956,4 @@ export class BattleScene {
     });
   }
 
-  private addHills() {
-    // Voxel-ish hills and woods behind the spawn line and along the sides, to frame the field.
-    const minZ = -(this.game.cfg.field.spawnY + 14);
-    const mat = new THREE.MeshLambertMaterial({ color: '#4f7a33' });
-    const tree = new THREE.MeshLambertMaterial({ color: '#2f5a28' });
-    const tree2 = new THREE.MeshLambertMaterial({ color: '#7fb33a' });
-    const trunk = new THREE.MeshLambertMaterial({ color: '#5a4026' });
-    let s = 3;
-    const rnd = () => ((s = (s * 16807) % 2147483647) / 2147483647);
-    const hw = this.game.cfg.field.halfWidth;
-    for (let i = 0; i < 70; i++) {
-      const side = i % 2 === 0 ? -1 : 1;
-      const x = side * (hw + 7 + rnd() * 14);
-      const z = minZ + rnd() * (Math.abs(minZ) + 20);
-      const h = 1 + rnd() * 4;
-      const box = new THREE.Mesh(new THREE.BoxGeometry(4 + rnd() * 6, h, 4 + rnd() * 6), mat);
-      box.position.set(x, h / 2 - 0.2, z);
-      this.scene.add(box);
-      if (rnd() < 0.7) {
-        const t = new THREE.Mesh(new THREE.BoxGeometry(0.5, 1.5, 0.5), trunk);
-        t.position.set(x + (rnd() - 0.5) * 2, h + 0.75, z);
-        const c = new THREE.Mesh(new THREE.BoxGeometry(2, 2, 2), rnd() < 0.5 ? tree : tree2);
-        c.position.set(t.position.x, h + 2.2, z);
-        this.scene.add(t, c);
-      }
-    }
-  }
 }

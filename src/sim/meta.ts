@@ -37,7 +37,9 @@ export const META_UPGRADES: MetaUpgrade[] = [
   { id: 'window', group: 'shield', name: 'Battle drums', blurb: 'A wider window to time a heave, per level.', costs: [25, 60, 130] },
   { id: 'power', group: 'shield', name: 'Iron boss', blurb: 'A heave smashes through one more orc line, per level.', costs: [80, 200] },
   { id: 'plating', group: 'shield', name: 'Plating', blurb: 'Shrugs off one orc trick a wave, per level.', costs: [60, 150] },
-  // Town: money.
+  // Town: money, and buildings with powers to click in battle.
+  { id: 'tavern', group: 'town', name: 'The Rusty Tankard', blurb: 'Builds the tavern. Click it in battle to stand a round: fallen soldiers come back and everyone fights harder.', costs: [35] },
+  { id: 'alchemist', group: 'town', name: 'Alchemist\'s workshop', blurb: 'Builds the alchemist. Click it in battle and every ball burns like a fire flask for 8 s.', costs: [50] },
   { id: 'treasury', group: 'town', name: 'Treasury', blurb: '+60 gold in the war chest for every level, per level.', costs: [20, 45, 100, 220] },
   { id: 'market', group: 'town', name: 'Market', blurb: '+15% gold from kills, per level.', costs: [40, 90, 200] },
 ];
@@ -87,6 +89,7 @@ export function applyMeta(meta: MetaLevels, level: number, base: Config = makeCo
   const cfg = structuredClone(base);
   const lv = (id: string) => meta[id] ?? 0;
   cfg.unlocks.defenders = ['crossbow', ...(['archers', 'soldiers', 'catapult'] as const).filter((k) => lv(k) > 0)];
+  cfg.unlocks.buildings = ['keep', ...(['tavern', 'alchemist'] as const).filter((k) => lv(k) > 0)];
   cfg.bonuses.damage *= 1 + 0.15 * lv('fletching');
   cfg.bonuses.rate *= 1 + 0.12 * lv('drill');
   cfg.wall.segmentHp = Math.round(cfg.wall.segmentHp * (1 + 0.2 * lv('masonry')));

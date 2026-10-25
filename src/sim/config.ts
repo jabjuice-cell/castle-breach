@@ -7,12 +7,16 @@
  * The wall's front face is at y = 0; enemies spawn near y = field.spawnY.
  * One design "tile" is about 2.2 units, so a grunt's 1 tile/s is speed 2.2.
  */
+import { LEVEL_OBSTACLES, type Obstacle } from './obstacles';
+
 export const defaultConfig = {
   /**
    * The Breakout field: about 24 tiles wide by 40 tall, one tile = 1.67 units.
    * The tree lines at x = +-halfWidth and the top edge at y = topY are bounce edges.
    */
   field: { halfWidth: 20, topY: 68, spawnY: 70 },
+  /** Real structures on each level's field (see obstacles.ts): balls bank off them, orcs go round. */
+  obstacles: { levels: LEVEL_OBSTACLES as Obstacle[][] },
   /** The run is lost when any one segment reaches 0 HP. */
   wall: { segments: 5, segmentHp: 400, depth: 2, warnBelow: 0.25 },
 
@@ -190,9 +194,9 @@ export const defaultConfig = {
    * on the wall, the towers or in the courtyard behind (y from minY up to the wall's front face).
    */
   /** Defenders on sale. At first only the crossbow; the town's upgrades unlock the rest (see meta.ts). */
-  unlocks: { defenders: ['crossbow'] as string[] },
+  unlocks: { defenders: ['crossbow'] as string[], buildings: ['keep'] as string[] },
   castle: {
-    minY: -10,
+    minY: -7,
     maxY: 0,
     /** Defenders keep this far from the side edges of the field. */
     edge: 0.5,
@@ -214,6 +218,13 @@ export const defaultConfig = {
   },
   /** The call to arms from the keep: defenders fire this much faster and soldiers move this much quicker, for a while. */
   callToArms: { seconds: 6, cooldown: 45, rate: 2, run: 2.5 },
+  /**
+   * The other buildings' powers, once the town has built them. The tavern stands a round:
+   * the fallen soldiers come back and everyone fights harder and runs. The alchemist's brew
+   * turns every ball into a fire flask.
+   */
+  tavern: { seconds: 8, cooldown: 50, dps: 1.5, run: 2 },
+  alchemist: { seconds: 8, cooldown: 55 },
   /** Towers the player builds on the wall walk or stacks on the joints' towers, a storey at a time. */
   towers: { cost: 50, costGrowth: 1.3, maxStoreys: 3 },
   /**

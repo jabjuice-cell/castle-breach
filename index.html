@@ -43,11 +43,17 @@
       .seg.hit .bar { transform: translateY(-2px); }
       @keyframes warn { 50% { border-color: #ff3a2a; box-shadow: 0 0 12px #ff3a2a; } }
       #heaveBar { background: linear-gradient(#ffe38a, #e8a920); }
-      .arms { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
-      .arms .bar { flex: 1; margin: 0; height: 8px; }
-      #arms { pointer-events: auto; font-size: 13px; padding: 3px 10px; box-shadow: 0 2px 0 var(--ink); white-space: nowrap; }
-      #arms.live { background: var(--gold); }
-      #armsBar { background: linear-gradient(#9ad0ff, #3a78d8); }
+      /* Over each of the town's buildings: its power, its key and a bar that refills while it rests. Click it (or the building). */
+      .btag { position: absolute; transform: translate(-50%, -100%); pointer-events: auto; cursor: pointer; background: rgba(28, 22, 16, 0.82); color: #f4ecd8; border: 2px solid #14100c; border-radius: 5px; padding: 3px 8px 4px; font-size: 12px; white-space: nowrap; text-align: center; box-shadow: 0 2px 0 rgba(0, 0, 0, 0.35); }
+      .btag .bar { height: 5px; margin-top: 3px; }
+      .btag .bar > i { background: linear-gradient(#9ad0ff, #3a78d8); }
+      .btag.ready { background: var(--parchment); color: var(--ink); animation: ready 1.2s ease-in-out infinite; }
+      .btag.ready .bar > i { background: linear-gradient(#ffe38a, #e8a920); }
+      .btag.live { background: var(--gold); color: var(--ink); }
+      .btag.hover { transform: translate(-50%, -100%) scale(1.08); }
+      .btag.locked { opacity: 0.55; cursor: default; }
+      .btag kbd { font-size: 11px; }
+      @keyframes ready { 50% { box-shadow: 0 2px 0 rgba(0, 0, 0, 0.35), 0 0 12px #ffd34a; } }
       #heaveBar.locked { background: linear-gradient(#a8a090, #6d6250); }
       .play { display: flex; gap: 12px; align-items: baseline; margin-top: 6px; font-weight: 800; font-size: 14px; min-height: 18px; }
       .combo { color: var(--gold); }
@@ -164,7 +170,7 @@
       #queen { position: absolute; left: max(16px, env(safe-area-inset-left, 0px)); bottom: max(170px, calc(env(safe-area-inset-bottom, 0px) + 156px)); width: min(340px, calc(100% - 32px)); background: var(--parchment); color: var(--ink); border: 3px solid var(--ink); border-radius: 6px; padding: 10px 12px; box-shadow: 0 5px 0 rgba(0, 0, 0, 0.35); }
       @media (max-width: 720px) { #tray { bottom: auto; top: 76px; } }
       @media (max-width: 560px) { #callEarly { bottom: 150px; } .wave { font-size: 24px; }  #preview h2 { font-size: 26px; } .hint { display: none; } #queen { display: none; } }
-      @media (prefers-reduced-motion: reduce) { .bar > i { transition: none; } .seg.warn .bar { animation: none; } }
+      @media (prefers-reduced-motion: reduce) { .bar > i { transition: none; } .seg.warn .bar { animation: none; } .btag.ready { animation: none; } }
     </style>
   </head>
   <body>
@@ -172,6 +178,7 @@
     <div class="hud">
       <div class="markers" id="markers"></div>
       <div class="markers" id="wallBars"></div>
+      <div class="markers" id="buildTags"></div>
       <div class="markers" id="floaters"></div>
       <div class="markers"><div id="placeTag" hidden></div></div>
       <div class="top">
@@ -201,7 +208,6 @@
           <div class="label"><span><img class="ico" data-icon="shield" alt="" />Heave</span><span id="heaveText">Ready</span></div>
           <div class="bar"><i id="heaveBar"></i></div>
           <div class="play"><span id="balls">0 balls</span><span id="combo" class="combo"></span><span id="effects"></span></div>
-          <div class="arms" id="armsRow" hidden><button id="arms" type="button">Call to arms <kbd>Q</kbd></button><div class="bar"><i id="armsBar"></i></div></div>
           <div class="hint">Mouse moves the shield: sweep it as a ball lands to bend the shot · <kbd>Left click</kbd> or <kbd>Space</kbd> as it lands to heave</div>
         </div>
       </div>
@@ -218,7 +224,7 @@
           <li>Chain hits without touching the shield for a <b>combo</b> gold multiplier. Hits behind the lines pay double, the towers make bank shots and barrel orcs blow up their friends. Catch falling capsules, but not the red ones.</li>
           <li>Every ball or boulder you miss hits the wall. If any one stretch of wall falls, the castle is breached.</li>
           <li>Before each level, spend your war chest on defenders and put them anywhere on the castle. Each one covers only part of the field, and the red hatching shows your blind spots. Click a defender to aim or upgrade it, stack towers on the wall for reach, and scroll up to look at the horde. Between waves, click a wall&rsquo;s Repair tag to patch it.</li>
-          <li>In a tight spot, press <kbd>Q</kbd> to sound the <b>call to arms</b>: every defender shoots twice as fast for a few seconds.</li>
+          <li>In a tight spot, click the <b>keep</b> (or press <kbd>Q</kbd>) to sound the call to arms: every defender shoots twice as fast for a few seconds. Build the tavern and the alchemist in the town for two more powers (<kbd>W</kbd> and <kbd>E</kbd>).</li>
           <li>Three levels of five waves. Lose one and you are back in the town, where Renown buys upgrades that last for ever. Then the next run starts again from level 1.</li>
         </ul>
         <button id="play" type="button">Hold the wall!</button>

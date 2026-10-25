@@ -37,5 +37,13 @@
   "enemy-runner": 0.7788,
   "enemy-bolt": 0.2695,
   "royal-shield-hit-overlay": 1.008,
-  "siege-tower-1": 0.667
+  "siege-tower-1": 0.667,
+  "townsfolk-1": 0.9297,
+  "townsfolk-2": 0.9258,
+  "townsfolk-3": 1.0579,
+  "townsfolk-4": 1.0079,
+  "townsfolk-5": 1.0364,
+  "townsfolk-6": 1.0407,
+  "townsfolk-7": 1.0987,
+  "townsfolk-8": 1.0407
 }

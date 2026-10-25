@@ -5,7 +5,7 @@ import * as THREE from 'three';
  * ground are still drawn on canvases at startup.
  */
 
-function canvas(w: number, h: number): [HTMLCanvasElement, CanvasRenderingContext2D] {
+export function canvas(w: number, h: number): [HTMLCanvasElement, CanvasRenderingContext2D] {
   const c = document.createElement('canvas');
   c.width = w;
   c.height = h;
@@ -310,32 +310,31 @@ export class GroundCanvas {
   readonly texture: THREE.CanvasTexture;
   private ctx: CanvasRenderingContext2D;
   private c: HTMLCanvasElement;
-  private base = new Image();
+  /** The freshly painted ground, kept to wipe the marks off again. */
+  private base: HTMLCanvasElement;
   private dirty = false;
   private lastUpload = 0;
   private rnd = 1;
 
-  /** width is the canvas resolution across the field; height follows the world's shape. */
+  /** width is the canvas resolution across the ground; height follows the world's shape. paint draws the clean ground once. */
   constructor(
     readonly worldW: number,
     readonly worldH: number,
     private readonly worldMinZ: number,
-    baseUrl: string,
+    paint: (ctx: CanvasRenderingContext2D, w: number, h: number) => void,
     width: number,
   ) {
     [this.c, this.ctx] = canvas(width, Math.round((width * worldH) / worldW));
     this.texture = texture(this.c);
     this.texture.anisotropy = 8;
-    this.base.onload = () => this.reset();
-    this.base.src = baseUrl;
+    const [b, bctx] = canvas(this.c.width, this.c.height);
+    paint(bctx, b.width, b.height);
+    this.base = b;
     this.reset();
   }
 
   reset() {
-    const { ctx, c } = this;
-    ctx.fillStyle = '#7fb046';
-    ctx.fillRect(0, 0, c.width, c.height);
-    if (this.base.complete && this.base.naturalWidth) ctx.drawImage(this.base, 0, 0, c.width, c.height);
+    this.ctx.drawImage(this.base, 0, 0);
     this.rnd = 1;
     this.texture.needsUpdate = true;
   }

@@ -3,6 +3,7 @@ import {
   type Defender, type DefenderKind, type Levels, type PlacedKind, type Track,
   type Stack, emptyLevels, groundAt, jointStacks, onWall, stackAt, trackMult, upgradeCost,
 } from './defenders';
+import { type Obstacle, contact } from './obstacles';
 import { Rng } from './rng';
 import { type EnemyKind, type Shape, type WavePlan, formation, planSize, planWave } from './waves';
 
@@ -172,6 +173,10 @@ export interface Capsule {
   y: number;
 }
 
+/** The town's buildings behind the wall: click one in battle for its power. */
+export const BUILDING_KINDS = ['keep', 'tavern', 'alchemist'] as const;
+export type BuildingKind = (typeof BUILDING_KINDS)[number];
+
 export const SHIELD_TRACKS = ['width', 'window', 'power', 'recovery', 'plating'] as const;
 export type ShieldTrack = (typeof SHIELD_TRACKS)[number];
 
@@ -193,7 +198,11 @@ export type GameEvent =
   | { type: 'plank'; x: number; y: number }
   | { type: 'floorDown'; x: number; y: number; floorsLeft: number }
   | { type: 'heave'; x: number }
-  | { type: 'callToArms' }
+  /** A building's power: the keep's call to arms, the tavern's round, the alchemist's brew. */
+  | { type: 'power'; kind: BuildingKind }
+  /** A ball bounced off a tree line (side: -1 left, 1 right), or off one of the field's structures. */
+  | { type: 'edge'; x: number; y: number; side: number }
+  | { type: 'obstacle'; x: number; y: number; index: number }
   | { type: 'boltFired'; x: number; y: number }
   | { type: 'volley'; x: number; y: number; arrows: number }
   /** combo: the ball's combo after this hit (only for ball hits). */
@@ -293,6 +302,8 @@ export class Game {
 
   /** Renown bonus for each wave called early, by wave number. */
   private earlyBonus = new Map<number, number>();
+  /** The structures standing on this level's field. */
+  readonly obstacles: Obstacle[];
   private rng: Rng;
   private grid = new Map<number, Enemy[]>();
 
@@ -306,6 +317,7 @@ export class Game {
     this.gold = cfg.economy.warChest;
     this.shieldLevels = { ...cfg.bonuses.shield };
     this.stacks = jointStacks(cfg);
+    this.obstacles = cfg.obstacles.levels[Math.min(level, cfg.obstacles.levels.length - 1)] ?? [];
     this.wave = this.cleared = this.firstWave - 1;
     this.plan = planWave(this.firstWave, seed, cfg);
   }
@@ -403,29 +415,82 @@ export class Game {
     return true;
   }
 
-  /** The call to arms: when it can sound again, and until when it lasts. */
-  arms = { readyAt: 0, until: 0 };
+  /** Each building's power: when it can be used again, and until when it lasts. */
+  powers: Record<BuildingKind, { readyAt: number; until: number }> = {
+    keep: { readyAt: 0, until: 0 }, tavern: { readyAt: 0, until: 0 }, alchemist: { readyAt: 0, until: 0 },
+  };
+
+  /** The keep's call to arms. */
+  get arms(): { readyAt: number; until: number } {
+    return this.powers.keep;
+  }
 
   get armsActive(): boolean {
-    return this.time < this.arms.until;
+    return this.powerActive('keep');
   }
 
   get canCallToArms(): boolean {
-    return this.phase === 'battle' && this.time >= this.arms.readyAt;
+    return this.canUse('keep');
+  }
+
+  /** The town has built this one. */
+  hasBuilding(kind: BuildingKind): boolean {
+    return this.cfg.unlocks.buildings.includes(kind);
+  }
+
+  powerActive(kind: BuildingKind): boolean {
+    return this.time < this.powers[kind].until;
+  }
+
+  /** The power's length and rest, in seconds. */
+  powerTiming(kind: BuildingKind): { seconds: number; cooldown: number } {
+    return kind === 'keep' ? this.cfg.callToArms : this.cfg[kind];
+  }
+
+  /** Why a building's power can't be used right now, or '' if it can. */
+  whyNotPower(kind: BuildingKind): string {
+    if (!this.hasBuilding(kind)) return 'build it in the town';
+    if (this.phase !== 'battle') return 'ready when the battle starts';
+    if (this.time < this.powers[kind].readyAt) return `resting, ${Math.ceil(this.powers[kind].readyAt - this.time)} s`;
+    if (kind === 'tavern' && !this.defenders.some((d) => d.kind === 'soldiers')) return 'needs soldiers';
+    return '';
+  }
+
+  canUse(kind: BuildingKind): boolean {
+    return this.whyNotPower(kind) === '';
   }
 
   /**
-   * Sounds the horn from the keep: for a few seconds every defender shoots twice as fast
-   * and the soldiers run. Then it needs a long rest.
+   * Clicks a building. The keep sounds the horn: for a few seconds every defender shoots twice
+   * as fast and the soldiers run. The tavern stands a round: the fallen soldiers come back, and
+   * everyone fights harder. The alchemist's brew turns every ball into a fire flask.
+   * Then the building needs a long rest.
    */
-  callToArms(): boolean {
-    if (!this.canCallToArms) return false;
-    const c = this.cfg.callToArms;
-    this.arms = { readyAt: this.time + c.cooldown, until: this.time + c.seconds };
-    // Everyone fires at once as the horn sounds.
-    for (const d of this.defenders) d.timer = Math.min(d.timer, 0.1);
-    this.events.push({ type: 'callToArms' });
+  usePower(kind: BuildingKind): boolean {
+    if (!this.canUse(kind)) return false;
+    const t = this.powerTiming(kind);
+    this.powers[kind] = { readyAt: this.time + t.cooldown, until: this.time + t.seconds };
+    if (kind === 'keep') {
+      // Everyone fires at once as the horn sounds.
+      for (const d of this.defenders) d.timer = Math.min(d.timer, 0.1);
+    } else if (kind === 'tavern') {
+      for (const s of this.soldiers) {
+        // The fallen come back to their posts from the tavern.
+        if (s.hp <= 0) {
+          s.x = s.postX;
+          s.y = s.postY;
+        }
+        s.hp = s.maxHp;
+      }
+    } else {
+      this.effects.flask = Math.max(this.effects.flask, this.time + t.seconds);
+    }
+    this.events.push({ type: 'power', kind });
     return true;
+  }
+
+  callToArms(): boolean {
+    return this.usePower('keep');
   }
 
   /** True when the next wave can be called now for a bonus. */
@@ -1218,6 +1283,14 @@ export class Game {
       const decay = Math.exp(-friction * dt);
       e.vx *= decay;
       e.vy *= decay;
+      // Round the field's structures, not through them.
+      for (const o of this.obstacles) {
+        const hit = contact(o, e.x, e.y, stats.radius);
+        if (hit) {
+          e.x += hit.nx * hit.depth;
+          e.y += hit.ny * hit.depth;
+        }
+      }
       e.x = Math.max(-hw + 0.3, Math.min(hw - 0.3, e.x));
       e.y = Math.max(front, e.y);
       // Knocked back off the wall: start marching again.
@@ -1229,7 +1302,8 @@ export class Game {
   private updateSoldiers(dt: number): void {
     if (this.soldiers.length === 0) return;
     const c = this.cfg.soldiers;
-    const dps = c.dps * this.mult('soldiers', 'damage') * this.mult('soldiers', 'rate');
+    const round = this.powerActive('tavern');
+    const dps = c.dps * this.mult('soldiers', 'damage') * this.mult('soldiers', 'rate') * (round ? this.cfg.tavern.dps : 1);
     const heavies = this.enemies.filter((e) => e.kind === 'ogre' || e.kind === 'warlord');
     // Only orcs near the wall matter; bucket them into 1-wide columns so each soldier checks its own stretch.
     const hw = this.cfg.field.halfWidth;
@@ -1275,7 +1349,7 @@ export class Game {
       // They rush what is close to their post, but trudge along the wall to anything further.
       const near = Math.hypot(gx - s.postX, gy - s.postY) <= c.guard * (target && heavies.includes(target) ? c.heavyGuard : 1);
       if (dist > stopAt) {
-        const rush = this.armsActive ? this.cfg.callToArms.run : 1;
+        const rush = Math.max(this.armsActive ? this.cfg.callToArms.run : 1, round ? this.cfg.tavern.run : 1);
         const stepLen = Math.min(dist - stopAt, (near ? c.speed : c.walk) * rush * dt);
         s.x += (dx / dist) * stepLen;
         s.y += (dy / dist) * stepLen;
@@ -1756,10 +1830,12 @@ export class Game {
           b.x = -hw + r;
           b.vx = Math.abs(b.vx);
           this.steepen(b);
+          this.events.push({ type: 'edge', x: -hw, y: b.y, side: -1 });
         } else if (b.x > hw - r) {
           b.x = hw - r;
           b.vx = -Math.abs(b.vx);
           this.steepen(b);
+          this.events.push({ type: 'edge', x: hw, y: b.y, side: 1 });
         }
         if (b.y > top - r) {
           // Only the Royal Ball rebounds off the back; a caught boulder sails away over the horde.
@@ -1784,6 +1860,7 @@ export class Game {
         }
         if (b.y < this.cfg.bumpers.y + 2) this.ballVsBumpers(b, bumpers);
         if (this.tower) this.ballVsTower(b);
+        if (this.obstacles.length) this.ballVsObstacles(b);
         this.ballVsOrcs(b);
       }
       if (alive) keep.push(b);
@@ -1854,6 +1931,21 @@ export class Game {
       b.vy -= 2 * vn * ny;
     }
     this.steepen(b);
+  }
+
+  /** The field's structures are bank shots too: the ball glances off at whatever angle the stone gives it. */
+  private ballVsObstacles(b: Ball): void {
+    const r = this.cfg.balls.radius;
+    this.obstacles.forEach((o, index) => {
+      const hit = contact(o, b.x, b.y, r);
+      if (!hit || b.vx * hit.nx + b.vy * hit.ny >= 0) return;
+      this.reflect(b, hit.nx, hit.ny);
+      b.x += hit.nx * (hit.depth + 0.01);
+      b.y += hit.ny * (hit.depth + 0.01);
+      b.banked = true;
+      this.addCombo(b, this.cfg.bumpers.bankCombo);
+      this.events.push({ type: 'obstacle', x: b.x - hit.nx * r, y: b.y - hit.ny * r, index });
+    });
   }
 
   /** Bank shots off the tower turrets: a free save, +2 combo and a harder next hit. */

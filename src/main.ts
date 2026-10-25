@@ -7,10 +7,11 @@ import queenUrl from './assets/characters/queen.webp';
 import { queenAdvice } from './queen';
 import { BattleScene, CAPSULE_LOOK, type PlanPreview, QUALITIES, type Quality } from './render/scene';
 import { Sounds } from './render/sound';
+import { BUILDINGS } from './render/world';
 import { DEFENDER_KINDS, type DefenderKind, type Ground, type PlacedKind, SPECIAL_NAMES, type Track, USEFUL_TRACKS, groundAt, stackAt } from './sim/defenders';
-import { Game, STEP } from './sim/game';
+import { BUILDING_KINDS, type BuildingKind, Game, STEP } from './sim/game';
 import { META_GROUPS, META_UPGRADES, type MetaGroup, type Progress, applyMeta, buyMeta, metaCost, newProgress } from './sim/meta';
-import { ENEMY_KINDS, type EnemyKind } from './sim/waves';
+import { ENEMY_KINDS, type EnemyKind, planSize } from './sim/waves';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -159,7 +160,27 @@ const GROUND_NOTE: Record<Ground, string> = {
 };
 
 // On the window, so the shield and an aim keep following the mouse over the HUD panels too.
-window.addEventListener('pointermove', pointerToSim);
+window.addEventListener('pointermove', (e) => {
+  pointerToSim(e);
+  hovered = e.target === canvas && !placing && !aiming && !building ? buildingAt(e) : null;
+  canvas.style.cursor = hovered ? 'pointer' : '';
+});
+
+// ---- the town's buildings: click one (or press its key) for its power ----------
+
+const POWER_KEYS: Record<string, BuildingKind> = { KeyQ: 'keep', KeyW: 'tavern', KeyE: 'alchemist' };
+const POWER_KEY: Record<BuildingKind, string> = { keep: 'Q', tavern: 'W', alchemist: 'E' };
+/** The building under the mouse, lit up while it's there. */
+let hovered: BuildingKind | null = null;
+
+function buildingAt(e: PointerEvent | MouseEvent): BuildingKind | null {
+  const r = canvas.getBoundingClientRect();
+  return view.pickBuilding(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+}
+
+function usePower(kind: BuildingKind) {
+  if (!game.usePower(kind)) toast(`${BUILDINGS[kind].name}: ${game.whyNotPower(kind)}`);
+}
 canvas.addEventListener('pointerdown', (e) => {
   pointerToSim(e);
   sounds.unlock();
@@ -202,6 +223,12 @@ canvas.addEventListener('pointerdown', (e) => {
     }
   }
   selected = null;
+  // A click on the keep, tavern or alchemist uses its power instead of heaving.
+  const b = buildingAt(e);
+  if (b && running) {
+    usePower(b);
+    return;
+  }
   if (running) game.heave();
 });
 window.addEventListener('pointerup', (e) => {
@@ -245,7 +272,8 @@ window.addEventListener('keydown', (e) => {
     building = false;
     selected = null;
   }
-  if (e.code === 'KeyQ' && running) game.callToArms();
+  const power = POWER_KEYS[e.code];
+  if (power && running) usePower(power);
   if (e.code === 'Enter' && running) {
     e.preventDefault();
     if (game.phase === 'setup') startBattle();
@@ -265,7 +293,6 @@ $('play').addEventListener('click', () => {
 });
 $('startNow').addEventListener('click', () => (game.phase === 'setup' ? startBattle() : game.callEarly()));
 $('callEarly').addEventListener('click', () => game.callEarly());
-$('arms').addEventListener('click', () => game.callToArms());
 $('again').addEventListener('click', () => showTown());
 
 // ---- looking up the field at the coming horde -------------------------------
@@ -392,23 +419,22 @@ const hud = {
   bottom: $('bottom'),
   queen: $('queen'),
   queenText: $('queenText'),
-  armsRow: $('armsRow'),
-  arms: $<HTMLButtonElement>('arms'),
-  armsBar: $('armsBar'),
+  buildTags: $('buildTags'),
 };
 
 /** Lane markers over the spawn line while the next wave lines up: what is coming down each lane. */
-let markerPlan = -1;
+/** The plan the labels were made for (the object, not its number: a restarted level plans the same wave number afresh). */
+let markerPlan: object | null = null;
 function updateMarkers() {
   const show = game.phase === 'preview' || game.phase === 'setup';
   if (!show) {
-    if (markerPlan !== -1) hud.markers.replaceChildren();
-    markerPlan = -1;
+    if (markerPlan) hud.markers.replaceChildren();
+    markerPlan = null;
     return;
   }
   // Rebuild labels once per plan, then just reposition them (the camera can move on resize/shake).
-  if (markerPlan !== game.plan.number) {
-    markerPlan = game.plan.number;
+  if (markerPlan !== game.plan) {
+    markerPlan = game.plan;
     hud.markers.replaceChildren(
       ...game.plan.groups.map((g) => {
         const el = document.createElement('div');
@@ -570,18 +596,39 @@ function updateHud(dt: number) {
     hud.startNow.innerHTML = setup ? 'To battle! <kbd>Enter</kbd>' : `${icon('call')}Start now, +${game.earlyCallGold()} gold <kbd>Enter</kbd>`;
   }
 
-  // The call to arms: a button with a bar that refills while the horn rests.
-  hud.armsRow.hidden = game.phase !== 'battle';
-  if (game.phase === 'battle') {
-    const a = game.arms;
-    const live = game.armsActive;
-    const rest = Math.max(0, a.readyAt - game.time);
-    const html = live ? `To arms! ${Math.ceil(a.until - game.time)}s` : rest > 0 ? `Horn rests ${Math.ceil(rest)}s` : 'Call to arms <kbd>Q</kbd>';
-    if (hud.arms.innerHTML !== html) hud.arms.innerHTML = html;
-    hud.arms.disabled = !game.canCallToArms;
-    hud.arms.classList.toggle('live', live);
-    hud.armsBar.style.transform = `scaleX(${live ? (a.until - game.time) / c.callToArms.seconds : 1 - rest / c.callToArms.cooldown})`;
-  }
+  // Over each building: its power, its key, and a bar that refills while it rests.
+  BUILDING_KINDS.forEach((kind, i) => {
+    const el = hud.buildTags.children[i] as HTMLElement;
+    const b = BUILDINGS[kind];
+    const p = view.project(b.x, -b.z, b.top);
+    el.style.left = `${p.x}px`;
+    el.style.top = `${p.y}px`;
+    el.hidden = !running || view.lookAhead > 0;
+    if (el.hidden) return;
+    const built = game.hasBuilding(kind);
+    const pw = game.powers[kind];
+    const t = game.powerTiming(kind);
+    const live = game.powerActive(kind);
+    const rest = Math.max(0, pw.readyAt - game.time);
+    const ready = game.canUse(kind);
+    const html = !built
+      ? `${b.name}: build it in the town`
+      : live
+        ? `<b>${b.power}!</b> ${Math.ceil(pw.until - game.time)}s`
+        : game.phase !== 'battle'
+          ? `<b>${b.power}</b> <kbd>${POWER_KEY[kind]}</kbd>`
+          : rest > 0
+            ? `${b.power}: rests ${Math.ceil(rest)}s`
+            : ready
+              ? `<b>${b.power}</b> <kbd>${POWER_KEY[kind]}</kbd>`
+              : `${b.power}: ${game.whyNotPower(kind)}`;
+    const span = el.firstElementChild as HTMLElement;
+    if (span.innerHTML !== html) span.innerHTML = html;
+    el.className = `btag${!built ? ' locked' : live ? ' live' : ready ? ' ready' : ''}${hovered === kind ? ' hover' : ''}`;
+    const bar = el.lastElementChild!.firstElementChild as HTMLElement;
+    bar.style.transform = `scaleX(${!built ? 0 : live ? (pw.until - game.time) / t.seconds : 1 - rest / t.cooldown})`;
+  });
+  if (hovered) view.hoverBuilding(hovered);
 
   const tail = game.phase === 'battle' && game.canCallEarly();
   hud.callEarly.hidden = !tail;
@@ -742,6 +789,11 @@ function startBattle() {
   game.endSetup();
 }
 
+hud.buildTags.addEventListener('click', (e) => {
+  const tag = (e.target as HTMLElement).closest<HTMLElement>('[data-building]');
+  if (tag) usePower(tag.dataset.building as BuildingKind);
+});
+
 for (const el of [hud.tray, hud.defPop, hud.wallBars]) {
   el.addEventListener('click', (e) => {
     const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('button[data-action]');
@@ -872,6 +924,15 @@ function buildHud() {
       const el = document.createElement('div');
       el.className = 'seg';
       el.innerHTML = '<div class="bar"><b></b><i></i></div><button type="button" class="fix" hidden></button>';
+      return el;
+    }),
+  );
+  hud.buildTags.replaceChildren(
+    ...BUILDING_KINDS.map((kind) => {
+      const el = document.createElement('div');
+      el.className = 'btag';
+      el.dataset.building = kind;
+      el.innerHTML = '<span></span><div class="bar"><i></i></div>';
       return el;
     }),
   );
@@ -1020,9 +1081,17 @@ function frame(now: number) {
         case 'waveCleared':
           toast(`Wave ${ev.wave} beaten back, +${ev.gold} gold`);
           break;
-        case 'callToArms':
-          sounds.horn();
-          toast('To arms!');
+        case 'power':
+          if (ev.kind === 'keep') {
+            sounds.horn();
+            toast('To arms!');
+          } else if (ev.kind === 'tavern') {
+            sounds.cheer();
+            toast('A round on the house! The soldiers are back on their feet');
+          } else {
+            sounds.brew();
+            toast('Fire brew! Every ball burns');
+          }
           break;
         case 'calledEarly':
           toast(`Early call! +${ev.gold} gold`);
@@ -1039,6 +1108,9 @@ function frame(now: number) {
   updateLook(dt);
   updateGhost();
   sounds.scrape(running && game.phase === 'battle' ? Math.abs(game.shield.vx) / game.cfg.shield.speed : 0);
+  // The horde swells with the crowd on the field (and mutters while it waits up the far end).
+  const crowd = running && !game.over ? (game.phase === 'battle' ? game.enemies.length : 0.3 * planSize(game.plan)) : 0;
+  sounds.horde(Math.sqrt(Math.min(1, crowd / 500)));
   view.render(dt, now / 1000);
   updateHud(dt);
   updateShop();
