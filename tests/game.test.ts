@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { averageBot } from '../src/sim/bot';
 import { makeConfig } from '../src/sim/config';
 import { type Ball, type Enemy, Game, type Projectile } from '../src/sim/game';
+import { applyMeta, buyMeta, metaCost, newProgress } from '../src/sim/meta';
 import { formation, planSize, planWave, waveBudget } from '../src/sim/waves';
 
 function run(game: Game, seconds: number) {
@@ -27,7 +28,7 @@ const quiet = () => makeConfig({
   capsules: { chance: 0 },
 });
 
-/** Every defender for sale, as in a later run. */
+/** Every defender for sale, as once the town has unlocked them. */
 const veteran = (cfg = makeConfig()) => {
   cfg.unlocks.defenders = ['crossbow', 'archers', 'catapult', 'soldiers'];
   return cfg;
@@ -36,7 +37,7 @@ const veteran = (cfg = makeConfig()) => {
 /** A game in battle with an empty field: no blocks coming and the Royal Ball put away. */
 function battle(seed = 1, cfg = quiet()) {
   const game = new Game(seed, cfg);
-  game.closeCouncil();
+  game.endSetup();
   game.plan.groups = [];
   game.skipPreview();
   game.balls = [];
@@ -77,16 +78,15 @@ describe('waves', () => {
     }
   });
 
-  it('brings catapults every wave, barrels from wave 5 and bosses on 10, 20 and 25', () => {
+  it('brings catapults every wave, barrels from wave 5, the siege tower on 10 and the warlord riding it on 15', () => {
     const cfg = makeConfig();
     expect(planWave(1, 1, cfg).totals.orcCatapult).toBe(3);
-    expect(planWave(25, 1, cfg).totals.orcCatapult).toBe(13);
+    expect(planWave(15, 1, cfg).totals.orcCatapult).toBe(9);
     expect(planWave(4, 1, cfg).totals.barrel).toBe(0);
     expect(planWave(5, 1, cfg).totals.barrel).toBe(2);
-    expect(planWave(10, 1, cfg).tower).toBe(true);
-    expect(planWave(20, 1, cfg).totals.warlord).toBe(1);
-    expect(planWave(20, 1, cfg).tower).toBe(false);
-    expect(planWave(25, 1, cfg)).toMatchObject({ tower: true, totals: { warlord: 1 } });
+    expect(planWave(10, 1, cfg)).toMatchObject({ tower: true, totals: { warlord: 0 } });
+    expect(planWave(14, 1, cfg).boss).toBe(false);
+    expect(planWave(15, 1, cfg)).toMatchObject({ tower: true, totals: { warlord: 1 } });
   });
 
   it('formations put the front rank first', () => {
@@ -98,7 +98,7 @@ describe('waves', () => {
 
   it('spawns exactly the previewed enemies', () => {
     const game = new Game(3, quiet());
-    game.closeCouncil();
+    game.endSetup();
     const total = planSize(game.plan);
     game.skipPreview();
     run(game, 30);
@@ -123,7 +123,7 @@ describe('the shield and the balls', () => {
 
   it('serves the Royal Ball from the shield at the start of a wave, and again after it is lost', () => {
     const game = new Game(1, quiet());
-    game.closeCouncil();
+    game.endSetup();
     game.skipPreview();
     const royal = game.balls.find((b) => b.primary)!;
     expect(royal.stuck).toBe(true);
@@ -368,7 +368,7 @@ describe('the shield and the balls', () => {
 
   it('the siege tower is chipped apart floor by floor, tipping out orcs', () => {
     const game = new Game(1, makeConfig({ ...quiet(), waves: { ...quiet().waves, towerWaves: [1] } }));
-    game.closeCouncil();
+    game.endSetup();
     game.plan.groups = [];
     game.skipPreview();
     game.balls = [];
@@ -420,7 +420,7 @@ describe('game', () => {
 
   it('blocks march in formation and close ranks when orcs fall', () => {
     const game = new Game(1, quiet());
-    game.closeCouncil();
+    game.endSetup();
     game.skipPreview();
     run(game, 0.1);
     const block = game.blocks[0];
@@ -438,11 +438,12 @@ describe('game', () => {
     expect(block.members.filter((e) => e.slotY === front)).toHaveLength(rank.length);
   });
 
-  it('wins after the final wave', () => {
+  it('wins the level after its last wave, for the level-clear Renown', () => {
     const cfg = quiet();
-    cfg.waves.finalWave = 1;
-    const game = new Game(1, cfg);
-    game.closeCouncil();
+    cfg.levels.waves = 1;
+    const game = new Game(1, cfg, 1);
+    expect([game.firstWave, game.lastWave]).toEqual([2, 2]);
+    game.endSetup();
     game.skipPreview();
     const total = planSize(game.plan);
     for (let i = 0; i < 60 * 120 && !game.over; i++) {
@@ -452,30 +453,73 @@ describe('game', () => {
     expect(game.kills).toBe(total);
     expect(game.phase).toBe('won');
     expect(game.wavesSurvived).toBe(1);
+    expect(game.renown).toBeGreaterThanOrEqual(cfg.renown.levelClear[1]);
   });
 });
 
 describe('run loop', () => {
-  it('opens with a War Council and stays paused until it closes', () => {
-    const game = new Game(1);
-    expect(game.phase).toBe('council');
-    expect(game.gold).toBe(game.cfg.economy.startGold);
+  it('opens each level with a paused setup and its war chest', () => {
+    const game = new Game(1, makeConfig(), 1);
+    expect(game.phase).toBe('setup');
+    expect(game.gold).toBe(game.cfg.economy.warChest);
+    expect(game.plan.number).toBe(6);
+    expect(game.levelWave).toBe(1);
     run(game, 5);
     expect(game.time).toBe(0);
-    game.closeCouncil();
+    game.endSetup();
     expect(game.phase).toBe('preview');
   });
 
-  it('run 1 sells the crossbow only; later runs sell the rest', () => {
-    const first = new Game(1);
+  it('sells the crossbow only until the town unlocks the rest', () => {
+    const first = new Game(1, applyMeta({}, 0));
     expect(first.defenders).toHaveLength(0);
     first.gold = 1000;
     expect(first.place('archers', -4, -1)).toBe(false);
     expect(first.place('soldiers', -4, -1)).toBe(false);
     expect(first.place('crossbow', -4, -1)).toBe(true);
-    const later = new Game(1, veteran());
+    const later = new Game(1, applyMeta({ archers: 1 }, 0));
     later.gold = 1000;
     expect(later.place('archers', -4, -1)).toBe(true);
+    expect(later.place('soldiers', 8, -1)).toBe(false);
+  });
+
+  it('town upgrades cost Renown, max out, and carry into every level', () => {
+    const p = newProgress();
+    p.renown = 1000;
+    expect(metaCost(p.meta, 'width')).toBe(15);
+    expect(buyMeta(p, 'width')).toBe(true);
+    expect(p.renown).toBe(985);
+    expect(buyMeta(p, 'power') && buyMeta(p, 'power')).toBe(true);
+    expect(buyMeta(p, 'power')).toBe(false);
+    for (let i = 0; i < 3; i++) buyMeta(p, 'recovery');
+    buyMeta(p, 'masonry');
+    buyMeta(p, 'fletching');
+    buyMeta(p, 'treasury');
+    const plain = new Game(1, applyMeta({}, 2), 2);
+    const game = new Game(1, applyMeta(p.meta, 2), 2);
+    expect(game.shieldHalfWidth()).toBeCloseTo(plain.shieldHalfWidth() + 0.42);
+    expect(game.heaveLines()).toBe(plain.heaveLines() + 2);
+    expect(game.heaveCooldown()).toBeCloseTo(plain.heaveCooldown() - 1.2);
+    expect(game.segmentHp[0]).toBe(plain.segmentHp[0] * 1.2);
+    expect(game.mult('crossbow', 'damage')).toBeCloseTo(1.15);
+    expect(game.gold).toBe(plain.gold + 60);
+    expect(plain.gold).toBe(800);
+  });
+
+  it('sells defenders back: in full during the setup, at half price once the level is under way', () => {
+    const game = new Game(1, quiet());
+    game.gold = 1000;
+    game.place('crossbow', -4, -1);
+    game.place('crossbow', 4, -1);
+    const [a, b] = game.defenders;
+    expect([a.paid, b.paid]).toEqual([100, 125]);
+    expect(game.sell(a.id)).toBe(true);
+    expect(game.gold).toBe(1000 - 125);
+    game.endSetup();
+    expect(game.sellValue(b.id)).toBe(Math.floor(b.paid / 2));
+    // A saved load-out goes back down as far as the gold allows.
+    const next = new Game(2, quiet());
+    expect(next.restoreLoadout([{ kind: 'crossbow', x: -4, y: -1 }, { kind: 'crossbow', x: 4, y: -1 }, { kind: 'archers', x: 0, y: -1 }])).toBe(1);
   });
 
   it('defenders go exactly where they are put on the castle, clear of each other', () => {
@@ -491,8 +535,9 @@ describe('run loop', () => {
     expect(game.defenders[2].ground).toBe('wall');
     // Each extra one of a kind costs more.
     expect(game.defenderCost('crossbow')).toBe(Math.round(100 * game.cfg.castle.priceGrowth));
-    game.closeCouncil();
-    expect(game.place('archers', 12, -1)).toBe(false); // the shop is shut
+    game.endSetup();
+    game.skipPreview();
+    expect(game.place('archers', 12, -1)).toBe(false); // the shop is shut mid-battle
   });
 
   it('coverage: crossbows shoot up a lane, tower tops angle wider, catapults have a blind spot', () => {
@@ -518,7 +563,7 @@ describe('run loop', () => {
     expect(game.move(cb.id, 4, -1)).toBe(true);
     expect([cb.x, cb.y]).toEqual([4, -1]);
     expect(game.defenderAt(4.5, -1)).toBe(cb);
-    game.closeCouncil();
+    game.endSetup();
     game.skipPreview();
     game.wave = 10;
     game.gold = 100;
@@ -543,23 +588,7 @@ describe('run loop', () => {
     expect(game.upgrade('archers', 'damage')).toBe(false); // nothing to upgrade yet
   });
 
-  it('sells shield upgrades for the run, up to their caps', () => {
-    const game = new Game(1);
-    game.gold = 1e6;
-    const w = game.shieldHalfWidth();
-    expect(game.shieldCost('width')).toBe(60);
-    expect(game.upgradeShield('width')).toBe(true);
-    expect(game.shieldCost('width')).toBe(Math.round(60 * 1.15));
-    expect(game.shieldHalfWidth()).toBeCloseTo(w + 0.42);
-    expect(game.upgradeShield('power')).toBe(true);
-    expect(game.upgradeShield('power')).toBe(true);
-    expect(game.upgradeShield('power')).toBe(false);
-    expect(game.heaveLines()).toBe(5);
-    for (let i = 0; i < 10; i++) game.upgradeShield('recovery');
-    expect(game.heaveCooldown()).toBeCloseTo(1.2);
-  });
-
-  it('repairs walls at 1 gold per 2 HP, only during the council', () => {
+  it('repairs walls at 1 gold per 2 HP between waves, but not mid-battle', () => {
     const game = new Game(1);
     game.segmentHp[0] = 300;
     game.gold = 20;
@@ -567,14 +596,17 @@ describe('run loop', () => {
     expect(game.repair(0)).toBe(40);
     expect(game.gold).toBe(0);
     expect(game.segmentHp[0]).toBe(340);
-    game.closeCouncil();
+    game.endSetup();
+    game.gold = 10;
+    expect(game.repair(0)).toBe(20);
+    game.skipPreview();
     game.gold = 100;
     expect(game.repair(0)).toBe(0);
   });
 
   it('pays kill gold, wave-clear gold and Renown', () => {
     const game = new Game(1, quiet());
-    game.closeCouncil();
+    game.endSetup();
     game.plan.groups = [];
     game.callEarly();
     game.balls = [];
@@ -599,17 +631,23 @@ describe('run loop', () => {
     expect(game.enemies.length).toBeGreaterThanOrEqual(1);
   });
 
-  it('opens the War Council after every third wave', () => {
+  it('opens the shop over the battlefield in the lull between waves, and the level ends after five', () => {
     const game = new Game(1, quiet());
-    game.closeCouncil();
-    for (let w = 1; w <= 3; w++) {
+    game.endSetup();
+    for (let w = 1; w <= 4; w++) {
       game.plan.groups = [];
       game.skipPreview();
       run(game, 0.05);
+      expect(game.phase).toBe('preview');
+      expect(game.shopOpen).toBe(true);
     }
-    expect(game.cleared).toBe(3);
-    expect(game.phase).toBe('council');
-    expect(game.plan.number).toBe(4);
+    expect(game.cleared).toBe(4);
+    expect(game.levelWave).toBe(5);
+    game.plan.groups = [];
+    game.skipPreview();
+    expect(game.canCallEarly()).toBe(false); // nothing after the last wave to call
+    run(game, 0.05);
+    expect(game.phase).toBe('won');
   });
 
   it('soldiers hold the stretch of wall below their spot and rush orcs that get close', () => {
@@ -623,7 +661,7 @@ describe('run loop', () => {
     expect(Math.min(...xs)).toBeGreaterThan(-1);
     expect(Math.max(...xs)).toBeGreaterThan(12);
     expect(Math.max(...xs)).toBeLessThan(17);
-    game.closeCouncil();
+    game.endSetup();
     game.plan.groups = [];
     game.skipPreview();
     game.balls = [];
@@ -637,7 +675,7 @@ describe('run loop', () => {
     const game = new Game(1, veteran(quiet()));
     game.gold = 150;
     expect(game.place('catapult', 4, -1)).toBe(true);
-    game.closeCouncil();
+    game.endSetup();
     game.plan.groups = [];
     game.skipPreview();
     game.balls = [];
@@ -653,7 +691,7 @@ describe('run loop', () => {
     const game = new Game(1, veteran(makeConfig({ crossbow: { range: -100 }, waves: { orcCatapultsBase: 0, orcCatapultsPerWave: 0 } })));
     game.gold = 80;
     expect(game.place('archers', -12, -1)).toBe(true);
-    game.closeCouncil();
+    game.endSetup();
     game.plan.groups = [];
     game.skipPreview();
     game.balls = [];
@@ -670,7 +708,7 @@ describe('run loop', () => {
   it('crossbows hunt orc catapults before the crowd', () => {
     const game = new Game(1, makeConfig({ archers: { range: -100 } }));
     game.place('crossbow', -4, -1);
-    game.closeCouncil();
+    game.endSetup();
     game.plan.groups = [];
     game.skipPreview();
     game.enemies.push(enemy({ x: 0, y: 10, state: 'stand' }), enemy({ kind: 'orcCatapult', x: 5, y: 50, state: 'stand', hp: 60, maxHp: 60 }));

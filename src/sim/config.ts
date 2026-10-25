@@ -22,9 +22,9 @@ export const defaultConfig = {
   grunt: { hp: 10, speed: 1.8, radius: 0.45, mass: 1, wallDps: 1, meleeDps: 2, climbSeconds: 3, gold: 1, threat: 1 },
   /** A brick that shoots back: throws pebbles at the wall as its block marches, or (boltShare of them) fires fast bolts. */
   chucker: { hp: 10, speed: 1.8, radius: 0.5, mass: 1, wallDps: 1, meleeDps: 2, climbSeconds: 3, gold: 2, threat: 2, throwFromY: 44, throwInterval: 4, boltShare: 0.5 },
-  /** Riders zig-zag across the field in a skirmish line. */
   /** Goblin runners: small, quick and fragile, sprinting down the side lanes in loose packs. */
   runner: { hp: 6, speed: 3.6, radius: 0.4, mass: 0.8, wallDps: 1, meleeDps: 2, climbSeconds: 2, gold: 1, threat: 1 },
+  /** Riders zig-zag across the field in a skirmish line. */
   rider: { hp: 8, speed: 2.6, radius: 0.55, mass: 1.2, wallDps: 1, meleeDps: 3, climbSeconds: 2, gold: 2, threat: 2, zigSpeed: 4, zigRate: 1.6 },
   /** The ball source: marches at the back of a block, then parks and lobs boulders at the wall. */
   orcCatapult: {
@@ -45,7 +45,7 @@ export const defaultConfig = {
     /** 6 tiles either side, within a row's depth. */
     staggerRadius: 10, staggerSeconds: 2, staggerDamage: 5, staggerKnock: 0.83, killCombo: 3,
   },
-  /** Boss on wave 20 and the last. Speeds up orcs around it and bats balls back down. */
+  /** Boss on the last wave, riding the siege tower. Speeds up orcs around it and bats balls back down. */
   warlord: {
     hp: 2000, speed: 0.6, radius: 1.6, mass: 10, wallDps: 25, meleeDps: 60, climbSeconds: 0, gold: 100, threat: 0,
     auraRadius: 7, auraSpeed: 1.3,
@@ -67,7 +67,7 @@ export const defaultConfig = {
 
   /** Enemy projectiles: what reaches the wall does wallDamage. A blocked one becomes a ball. */
   /**
-   * The wave 10 boss: a tower about 5 tiles wide of 4 floors, each a row of 6 plank bricks (as in its art).
+   * The boss at the end of level 2 (wave 10): a tower about 5 tiles wide of 4 floors, each a row of 6 plank bricks (as in its art).
    * Balls chip the bottom standing floor; each floor that falls tips out a block of orcs.
    */
   siegeTower: {
@@ -157,14 +157,13 @@ export const defaultConfig = {
     bankCombo: 2,
     bankDamage: 1.25,
   },
-  /** Shield upgrades bought in the War Council, for this run only. */
+  /** What each level of a shield upgrade (bought in the town with Renown) adds. */
   shieldUpgrades: {
-    costGrowth: 1.15,
-    width: { cost: 60, step: 0.42, max: 8 },
-    window: { cost: 80, step: 0.015, max: 8 },
-    power: { cost: 150, step: 1, max: 2 },
-    recovery: { cost: 70, step: 0.3, max: 6 },
-    plating: { cost: 120, step: 1, max: 3 },
+    width: { step: 0.42 },
+    window: { step: 0.015 },
+    power: { step: 1 },
+    recovery: { step: 0.4 },
+    plating: { step: 1 },
   },
   /** Power-ups fall from knocked-out orcs and only count if the shield catches them. */
   capsules: {
@@ -190,10 +189,7 @@ export const defaultConfig = {
    * Archers, crossbows and catapults can be placed anywhere on the castle grounds:
    * on the wall, the towers or in the courtyard behind (y from minY up to the wall's front face).
    */
-  /**
-   * Defenders the War Council sells. Run 1 has the crossbow only; research opens
-   * the rest (until the research tree lands, the game offers a "veteran" start with all four).
-   */
+  /** Defenders on sale. At first only the crossbow; the town's upgrades unlock the rest (see meta.ts). */
   unlocks: { defenders: ['crossbow'] as string[] },
   castle: {
     minY: -10,
@@ -266,8 +262,29 @@ export const defaultConfig = {
   physics: { friction: 6, separation: 8 },
 
   // ---- run structure ----------------------------------------------------------
+  /**
+   * The campaign: three levels of five waves, with the town between them. Wave numbers run
+   * on across levels (level 2 is waves 6 to 10), so the difficulty keeps climbing.
+   * Each level starts with a fresh war chest to buy its load-out.
+   */
+  levels: {
+    waves: 5,
+    names: ['The Old Road', 'Mill Ford', 'The Black Gate'],
+    warChest: [200, 450, 800],
+  },
+  /** Bonuses from the town's permanent upgrades (meta.ts sets them; 1 and 0 mean none). */
+  bonuses: {
+    damage: 1,
+    rate: 1,
+    killGold: 1,
+    /** Damage per second to every orc climbing the wall. */
+    spikesDps: 0,
+    /** Levels of each shield upgrade. */
+    shield: { width: 0, window: 0, power: 0, recovery: 0, plating: 0 },
+  },
   waves: {
-    previewSeconds: 8,
+    /** The lull between waves: time to repair, upgrade and buy before the next one marches. */
+    previewSeconds: 12,
     /** Threat budget in grunt-equivalents: base * growth^(wave - 1). */
     budgetBase: 30,
     budgetGrowth: 1.17,
@@ -294,11 +311,11 @@ export const defaultConfig = {
     orcCatapultsBase: 3,
     orcCatapultsPerWave: 0.45,
     orcCatapultsMax: 14,
-    ogresFromWave: 12,
+    ogresFromWave: 8,
     ogreShare: 0.12,
-    /** Bosses: the siege tower on 10, the warlord on 20, and the warlord riding the tower on the last. */
-    towerWaves: [10, 25],
-    warlordWaves: [20, 25],
+    /** Bosses: the siege tower ends level 2, and the warlord rides it at the end of level 3. */
+    towerWaves: [10, 15],
+    warlordWaves: [15],
     /** Catapults fire salvos that land together on different sections: size base, +1 every N waves, up to max. */
     salvoFromWave: 4,
     salvoBase: 2,
@@ -308,24 +325,21 @@ export const defaultConfig = {
     salvoFlight: 4,
     salvoSpread: 0.5,
     /** From this wave catapults aim at the section with the least boulder cover. */
-    seekGapsFromWave: 12,
+    seekGapsFromWave: 8,
     /** Barrel orcs break away for the weakest section once this close to the wall. */
     barrelSeekY: 25,
     /** Barrel orcs per block: base from fromWave, +1 every N waves, up to max. */
     barrelsFromWave: 5,
     barrelsEvery: 10,
     barrelsMax: 3,
-    /** The run is won after this wave. */
-    finalWave: 25,
   },
   economy: {
-    startGold: 150,
+    /** Gold to buy the level's load-out with (applyMeta sets it from levels.warChest and the Treasury). */
+    warChest: 200,
     /** Kill gold grows this much per wave. */
     killGoldGrowth: 1.04,
     clearBase: 10,
     clearPerWave: 2,
-    /** War Council opens before wave 1 and after every Nth wave. */
-    councilEvery: 3,
     repairGoldPerHp: 0.5,
     /** The next wave can be called once this share of the current one is left on the field. */
     callEarlyAt: 0.15,
@@ -338,7 +352,8 @@ export const defaultConfig = {
     earlyPerSecond: 0.02,
     earlyCap: 0.5,
     bossKill: 50,
-    actClear: 500,
+    /** For beating each level. */
+    levelClear: [60, 120, 300],
   },
 };
 

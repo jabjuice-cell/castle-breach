@@ -1,6 +1,6 @@
 import type { Config } from './config';
 
-/** Defenders the player buys at the War Council and places on the castle grounds. */
+/** Defenders the player buys in the setup or between waves and places on the castle grounds. */
 
 export const DEFENDER_KINDS = ['crossbow', 'archers', 'catapult', 'soldiers'] as const;
 export type DefenderKind = (typeof DEFENDER_KINDS)[number];
@@ -51,6 +51,8 @@ export interface Defender {
   ground: Ground;
   x: number;
   y: number;
+  /** Gold paid for it, for selling it back. */
+  paid: number;
   /** Countdown to the next shot. */
   timer: number;
   /** Where it last aimed, for the renderer. */

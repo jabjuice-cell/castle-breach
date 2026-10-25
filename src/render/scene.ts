@@ -1165,7 +1165,7 @@ export class BattleScene {
     const { preview, lanes } = this.planning;
     if (preview) {
       const { kind, x, y } = preview;
-      defs.push({ id: -1, kind, ground: groundAt(g.cfg, x, y), x, y, timer: 0, aimX: x, aimY: 30, firedAt: -99 });
+      defs.push({ id: -1, kind, ground: groundAt(g.cfg, x, y), x, y, paid: 0, timer: 0, aimX: x, aimY: 30, firedAt: -99 });
     }
     // A wall section is a blind spot if no archer cone reaches out in front of it and no crossbow lane runs up it.
     const seg = g.segmentWidth();
@@ -1395,7 +1395,7 @@ export class BattleScene {
       const frac = hp / g.cfg.wall.segmentHp;
       this.crumble(this.segments[i], frac);
       // A hurt section smokes; a nearly broken one burns, with embers going up.
-      if (frac >= 0.5 || g.phase === 'council') return;
+      if (frac >= 0.5 || g.phase === 'setup') return;
       const x = -g.cfg.field.halfWidth + (Math.random() * 0.8 + 0.1) * segW + i * segW;
       const burning = frac < g.cfg.wall.warnBelow;
       if (Math.random() < dt * (burning ? 7 : 2)) this.puff(x, 2.2, 0.8, burning ? 3 : 2, burning ? '#3a3430' : '#8a8278', burning ? 2.2 : 1.6);

@@ -1,5 +1,5 @@
 import { type DefenderKind, PLACED_KINDS, type PlacedKind, USEFUL_TRACKS } from './defenders';
-import { type Game, SHIELD_TRACKS, type ShieldTrack } from './game';
+import type { Game } from './game';
 import { Rng } from './rng';
 
 /**
@@ -39,7 +39,6 @@ function upgrades(game: Game): Purchase[] {
   for (const kind of ownedKinds(game)) {
     for (const track of USEFUL_TRACKS[kind]) list.push({ cost: game.upgradeCost(kind, track), buy: () => game.upgrade(kind, track) });
   }
-  for (const track of SHIELD_TRACKS) if (track !== 'plating') list.push({ cost: game.shieldCost(track), buy: () => game.upgradeShield(track) });
   return list;
 }
 
@@ -98,37 +97,25 @@ function randomShop(game: Game, rng: Rng): void {
  * between them so their cones cover every section against boulders; soldiers and
  * catapults stand back in the courtyard.
  */
-const BUILD_ORDER: ([DefenderKind, number, number] | [ShieldTrack, number, 'shield'])[] = [
+const BUILD_ORDER: [DefenderKind, number, number][] = [
   ['crossbow', -4, -1],
-  ['width', 1, 'shield'],
   ['archers', 0, -1],
   ['crossbow', 4, -1],
   ['archers', -8, -1],
   ['archers', 8, -1],
-  ['recovery', 2, 'shield'],
   ['soldiers', 0, -5.5],
   ['crossbow', -12, -1],
   ['crossbow', 12, -1],
   ['catapult', -8, -8],
-  ['width', 3, 'shield'],
   ['soldiers', -16, -5.5],
   ['soldiers', 16, -5.5],
-  ['window', 2, 'shield'],
   ['catapult', 8, -8],
-  ['power', 1, 'shield'],
 ];
 
 /** Planned shopping: keep walls healthy, buy in a set order, then spread upgrades. */
 function plannedShop(game: Game): void {
   repairBelow(game, 0.75);
-  for (const item of BUILD_ORDER) {
-    if (item[2] === 'shield') {
-      const [track, level] = item;
-      if (game.shieldLevels[track] >= level) continue;
-      if (!game.upgradeShield(track)) return;
-      continue;
-    }
-    const [kind, x, y] = item;
+  for (const [kind, x, y] of BUILD_ORDER) {
     if (!game.unlocked(kind)) continue;
     if (!placeAt(game, kind, x, y)) return;
   }
@@ -217,14 +204,19 @@ export function paddleBot(skill: PaddleSkill, strong: boolean, placement: Placem
   const errors = new WeakMap<object, number>();
   const decided = new WeakSet<object>();
   let rng: Rng | null = null;
+  let shoppedFor = -1;
 
   return (game) => {
     rng ??= new Rng(game.seed * 31 + 7);
-    if (game.phase === 'council') {
+    // Shop once in the setup and once in each lull between waves.
+    if (game.shopOpen && shoppedFor !== game.plan.number) {
+      shoppedFor = game.plan.number;
       if (placement === 'planned') plannedShop(game);
       else if (placement === 'random') randomShop(game, rng);
       else cheapestShop(game);
-      game.closeCouncil();
+    }
+    if (game.phase === 'setup') {
+      game.endSetup();
       return;
     }
     if (strong && game.canCallEarly()) game.callEarly();

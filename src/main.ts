@@ -8,7 +8,8 @@ import { queenAdvice } from './queen';
 import { BattleScene, CAPSULE_LOOK, type PlanPreview, QUALITIES, type Quality } from './render/scene';
 import { Sounds } from './render/sound';
 import { DEFENDER_KINDS, type DefenderKind, type Ground, type PlacedKind, SPECIAL_NAMES, type Track, USEFUL_TRACKS, groundAt } from './sim/defenders';
-import { Game, SHIELD_TRACKS, STEP, type ShieldTrack } from './sim/game';
+import { Game, STEP } from './sim/game';
+import { META_GROUPS, META_UPGRADES, type MetaGroup, type Progress, applyMeta, buyMeta, metaCost, newProgress } from './sim/meta';
 import { ENEMY_KINDS, type EnemyKind } from './sim/waves';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -40,7 +41,8 @@ let quality: Quality = QUALITIES.includes(loadSetting('quality') as Quality) ? (
 const calm = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 const canvas = $<HTMLCanvasElement>('game');
-let game = new Game(Math.floor(Math.random() * 1e9));
+const progress = loadProgress();
+let game = newLevel();
 const view = new BattleScene(canvas, game, quality);
 
 const sounds = new Sounds();
@@ -74,6 +76,7 @@ const params = new URLSearchParams(location.search);
 if (params.has('debug')) {
   Object.defineProperty(window, 'game', { get: () => game });
   Object.defineProperty(window, 'view', { get: () => view });
+  Object.defineProperty(window, 'progress', { get: () => progress });
 }
 const autoplay = params.has('debug') && params.has('auto');
 
@@ -95,9 +98,11 @@ const input = { x: 0, y: 30, shieldX: 0 };
 let placing: PlacedKind | null = null;
 let dragging: number | null = null;
 
+/** Where the last press on a defender started, to tell a click (open its card) from a drag (move it). */
+let pressAt = { x: 0, y: 0 };
+
 /** Defenders can be picked up and moved freely between waves; mid-battle it costs gold (hold Shift). */
-const canArrange = (e?: { shiftKey: boolean }) =>
-  running && (game.phase === 'council' || game.phase === 'preview' || (game.phase === 'battle' && !!e?.shiftKey));
+const canArrange = (e?: { shiftKey: boolean }) => running && (game.shopOpen || (game.phase === 'battle' && !!e?.shiftKey));
 
 function resize() {
   view.resize(window.innerWidth, window.innerHeight);
@@ -126,7 +131,7 @@ function tryPlace(kind: PlacedKind) {
     placing = null;
     toast(`${DEFENDER_INFO[kind].name} in position`);
     sounds.thunk();
-    renderCouncil();
+    trayKey = '';
     return;
   }
   toast(game.canPlace(kind, input.x, input.y) ? 'Not enough gold' : whyNot(kind, input.x, input.y));
@@ -164,24 +169,32 @@ canvas.addEventListener('pointerdown', (e) => {
     const d = game.defenderAt(input.x, input.y);
     if (d) {
       dragging = d.id;
+      pressAt = { x: input.x, y: input.y };
       return;
     }
   }
+  selected = null;
   if (running) game.heave();
 });
 window.addEventListener('pointerup', (e) => {
   if (e.button !== 0 || dragging === null) return;
-  const cost = game.moveCost();
-  const moved = game.defenders.find((d) => d.id === dragging);
-  if (moved && !game.move(dragging, input.x, input.y)) toast(game.gold < cost ? `Moving costs ${cost} gold mid-battle` : whyNot(moved.kind, input.x, input.y));
-  else if (cost > 0) toast(`Moved for ${cost} gold: it packs up for a moment`);
+  const id = dragging;
   dragging = null;
-  renderCouncilIfOpen();
+  // Barely moved: a click, which opens the defender's card.
+  if (Math.hypot(input.x - pressAt.x, input.y - pressAt.y) < 0.6) {
+    selected = game.shopOpen ? id : null;
+    return;
+  }
+  const cost = game.moveCost();
+  const moved = game.defenders.find((d) => d.id === id);
+  if (moved && !game.move(id, input.x, input.y)) toast(game.gold < cost ? `Moving costs ${cost} gold mid-battle` : whyNot(moved.kind, input.x, input.y));
+  else if (cost > 0) toast(`Moved for ${cost} gold: it packs up for a moment`);
+  trayKey = '';
 });
 
 function cancelPlacing() {
   placing = null;
-  renderCouncil();
+  trayKey = '';
 }
 canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 window.addEventListener('keydown', (e) => {
@@ -189,26 +202,28 @@ window.addEventListener('keydown', (e) => {
     e.preventDefault();
     if (running && !e.repeat) game.heave();
   }
-  if (e.code === 'Escape' && placing) cancelPlacing();
-  if (e.code === 'Enter' && running && game.phase !== 'council') game.callEarly();
+  if (e.code === 'Escape') {
+    if (placing) cancelPlacing();
+    selected = null;
+  }
+  if (e.code === 'Enter' && running) {
+    e.preventDefault();
+    if (game.phase === 'setup') startBattle();
+    else game.callEarly();
+  }
 });
 
 $('play').addEventListener('click', () => {
   sounds.unlock();
   $('intro').hidden = true;
-  running = true;
+  // A brand-new player goes straight to the first level; anyone with Renown or a run under way sees the town first.
+  const fresh = progress.renown < 1 && progress.levelsBeaten === 0 && Object.keys(progress.meta).length === 0;
+  if (fresh) running = true;
+  else showTown();
 });
-$('startNow').addEventListener('click', () => game.callEarly());
+$('startNow').addEventListener('click', () => (game.phase === 'setup' ? startBattle() : game.callEarly()));
 $('callEarly').addEventListener('click', () => game.callEarly());
-$('again').addEventListener('click', () => {
-  game = new Game(Math.floor(Math.random() * 1e9));
-  placing = null;
-  dragging = null;
-  view.setGame(game);
-  buildHud();
-  $('lost').hidden = true;
-  running = true;
-});
+$('again').addEventListener('click', () => showTown());
 
 // ---- names -----------------------------------------------------------------
 
@@ -231,7 +246,6 @@ const DEFENDER_INFO: Record<DefenderKind, { name: string; blurb: string }> = {
 };
 
 const TRACK_NAMES: Record<Track, string> = { damage: 'Damage', rate: 'Rate of fire', special: '' };
-const SHIELD_NAMES: Record<ShieldTrack, string> = { width: 'Width', window: 'Heave timing', power: 'Heave power', recovery: 'Recovery', plating: 'Plating' };
 const LANES = ['far left', 'left', 'gate', 'right', 'far right'];
 
 function count(n: number, kind: EnemyKind) {
@@ -277,7 +291,8 @@ const hud = {
   placeTag: $('placeTag'),
   floaters: $('floaters'),
   flash: $('flash'),
-  council: $('council'),
+  tray: $('tray'),
+  defPop: $('defPop'),
   toast: $('toast'),
   bottom: $('bottom'),
   queen: $('queen'),
@@ -287,7 +302,7 @@ const hud = {
 /** Lane markers over the spawn line while the next wave lines up: what is coming down each lane. */
 let markerPlan = -1;
 function updateMarkers() {
-  const show = game.phase === 'preview' || game.phase === 'council';
+  const show = game.phase === 'preview' || game.phase === 'setup';
   if (!show) {
     if (markerPlan !== -1) hud.markers.replaceChildren();
     markerPlan = -1;
@@ -374,10 +389,9 @@ let wallLag: { frac: number; hold: number }[] = [];
 
 function updateHud(dt: number) {
   const c = game.cfg;
-  const shownWave = game.phase === 'preview' || game.phase === 'council' ? game.plan.number : game.wave;
-  hud.wave.textContent = `Wave ${Math.max(1, shownWave)} of ${c.waves.finalWave}`;
+  hud.wave.textContent = `Level ${game.level + 1} · Wave ${game.levelWave} of ${c.levels.waves}`;
   hud.phase.textContent =
-    game.phase === 'council' ? 'War Council'
+    game.phase === 'setup' ? `${c.levels.names[game.level]}: setting up`
     : game.phase === 'preview' ? 'Incoming'
     : game.phase === 'battle' ? `${game.enemies.length} orcs on the field`
     : game.phase === 'won' ? 'Victory'
@@ -430,16 +444,27 @@ function updateHud(dt: number) {
     const [red, yellow] = el.firstElementChild!.children as unknown as HTMLElement[];
     red.style.transform = `scaleX(${lag.frac})`;
     yellow.style.transform = `scaleX(${frac})`;
+    // Between waves a damaged section shows what patching it costs; clicking the tag repairs it.
+    const fix = el.lastElementChild as HTMLButtonElement;
+    const cost = game.repairCost(i);
+    fix.hidden = !(running && game.shopOpen && cost > 0);
+    if (!fix.hidden) {
+      const html = `Repair <span class="cost">${Math.min(cost, Math.max(1, Math.floor(game.gold)))}g</span>`;
+      if (fix.innerHTML !== html) fix.innerHTML = html;
+      fix.disabled = game.gold < 1;
+    }
   });
 
-  const previewing = game.phase === 'preview' && running;
+  const previewing = (game.phase === 'preview' || game.phase === 'setup') && running;
   hud.preview.hidden = !previewing;
   hud.queen.hidden = !previewing;
   if (previewing) {
-    hud.previewTitle.textContent = `${game.plan.boss ? 'Boss wave! ' : ''}Wave ${game.plan.number} marches in ${Math.ceil(game.phaseTimer)}`;
-    hud.previewText.textContent = `${planText()}, down ${laneText()}.`;
+    const setup = game.phase === 'setup';
+    const wave = `${game.plan.boss ? 'Boss wave! ' : ''}Wave ${game.levelWave}`;
+    hud.previewTitle.textContent = setup ? `Level ${game.level + 1}: ${c.levels.names[game.level]}` : `${wave} marches in ${Math.ceil(game.phaseTimer)}`;
+    hud.previewText.textContent = setup ? `${wave} brings ${planText()}, down ${laneText()}.` : `${planText()}, down ${laneText()}.`;
     hud.queenText.textContent = queenAdvice(game);
-    hud.startNow.innerHTML = `${icon('call')}Start now, +${game.earlyCallGold()} gold <kbd>Enter</kbd>`;
+    hud.startNow.innerHTML = setup ? 'To battle! <kbd>Enter</kbd>' : `${icon('call')}Start now, +${game.earlyCallGold()} gold <kbd>Enter</kbd>`;
   }
 
   const tail = game.phase === 'battle' && game.canCallEarly();
@@ -467,7 +492,7 @@ function updateHud(dt: number) {
   updateFloaters(dt);
 }
 
-// ---- War Council ---------------------------------------------------------
+// ---- the shop over the battlefield ------------------------------------------
 
 function trackEffect(kind: DefenderKind, track: Track): string {
   const lv = game.levels[kind][track];
@@ -477,149 +502,229 @@ function trackEffect(kind: DefenderKind, track: Track): string {
   return `${Math.round(game.soldierHp())} HP each`;
 }
 
-function shieldEffect(track: ShieldTrack): string {
-  switch (track) {
-    case 'width':
-      return `${((game.shieldHalfWidth() * 2) / 1.67).toFixed(1)} tiles wide`;
-    case 'window':
-      return `${Math.round(game.heaveWindow() * 1000)} ms window`;
-    case 'power':
-      return `smashes ${game.heaveLines()} line${game.heaveLines() === 1 ? '' : 's'}`;
-    case 'recovery':
-      return `${game.heaveCooldown().toFixed(2)} s between heaves`;
-    case 'plating':
-      return `shrugs off ${game.shieldLevels.plating} orc trick${game.shieldLevels.plating === 1 ? '' : 's'} a wave`;
-  }
-}
+const costBtn = (action: string, label: string, cost: number, disabled = false) =>
+  `<button type="button" data-action="${action}" ${disabled || cost > game.gold ? 'disabled' : ''}>${label} <span class="cost">${Number.isFinite(cost) ? `${cost}g` : ''}</span></button>`;
 
-function councilHtml(): string {
+/** The tray in the corner while the shop is open: defenders to buy, and the button to start. */
+function trayHtml(): string {
   const gold = Math.floor(game.gold);
-  const btn = (action: string, label: string, cost: number, disabled = false) =>
-    `<button type="button" data-action="${action}" ${disabled || cost > gold ? 'disabled' : ''}>${label} <span class="cost">${Number.isFinite(cost) ? `${cost}g` : ''}</span></button>`;
-
-  const recruits = DEFENDER_KINDS.map((k) => {
-    if (!game.unlocked(k)) return `<div class="row locked"><div><b>${DEFENDER_INFO[k].name}</b><small>Unlocks with Renown in a later run.</small></div><small>🔒</small></div>`;
-    const n = game.count(k);
-    const label = placing === k ? 'Click the castle…' : n ? 'Place another' : 'Place';
-    return `<div class="row${placing === k ? ' placing' : ''}"><div><b>${DEFENDER_INFO[k].name}</b><small>${n ? `${n} placed · ` : ''}${DEFENDER_INFO[k].blurb}</small></div>${btn(`place:${k}`, label, game.defenderCost(k))}</div>`;
+  const setup = game.phase === 'setup';
+  const buy = DEFENDER_KINDS.map((k) => {
+    if (!game.unlocked(k)) return `<button type="button" class="locked" disabled><b>${DEFENDER_INFO[k].name}</b><small>🔒 Unlock in the town</small></button>`;
+    const cost = game.defenderCost(k);
+    return `<button type="button" data-action="place:${k}" class="${placing === k ? 'on' : ''}" ${cost > gold ? 'disabled' : ''}><b>${DEFENDER_INFO[k].name}</b><small>${cost} gold${game.count(k) ? ` · ${game.count(k)} placed` : ''}</small></button>`;
   }).join('');
+  const again = setup && progress.lastLoadout.length && !game.defenders.length
+    ? `<button type="button" class="again" data-action="again">Put back last level's defenders</button>`
+    : '';
   const tip = placing
-    ? 'Click anywhere on the castle to put it down: the wall, a tower top or the courtyard. It goes exactly where you click. Right click or Esc to cancel.'
-    : 'Put defenders anywhere on the castle. Tower tops reach 25% further; the courtyard is 20% shorter. The ground shows what each defender covers; red hatching is a blind spot. Drag defenders to move them.';
-  const slots = `${recruits}<p class="tip">${tip}</p>`;
-
-  const shield = SHIELD_TRACKS.map((t) => {
-    const cost = game.shieldCost(t);
-    return `<div class="track"><span>${SHIELD_NAMES[t]} <i>Lv ${game.shieldLevels[t]}</i><small>${shieldEffect(t)}</small></span>${Number.isFinite(cost) ? btn(`shield:${t}`, 'Upgrade', cost) : '<small>Max</small>'}</div>`;
-  }).join('');
-
-  const owned = DEFENDER_KINDS.filter((k) => game.owns(k));
-  const upgrades = owned
-    .map((kind) => {
-      const tracks = USEFUL_TRACKS[kind]
-        .map((t) => {
-          const name = t === 'special' ? SPECIAL_NAMES[kind] : TRACK_NAMES[t];
-          return `<div class="track"><span>${name} <i>Lv ${game.levels[kind][t]}</i><small>${trackEffect(kind, t)}</small></span>${btn(`up:${kind}:${t}`, 'Upgrade', game.upgradeCost(kind, t))}</div>`;
-        })
-        .join('');
-      return `<div class="def"><b>${DEFENDER_INFO[kind].name}</b>${tracks}</div>`;
-    })
-    .join('');
-
-  const sides = ['Far left', 'Left', 'Gate', 'Right', 'Far right'];
-  const walls = game.segmentHp
-    .map((hp, i) => {
-      const cost = game.repairCost(i);
-      const pct = Math.round((hp / game.cfg.wall.segmentHp) * 100);
-      // The four painted states: sound, chipped, cracked, crumbling.
-      const state = pct > 75 ? 0 : pct > 50 ? 1 : pct > 25 ? 2 : 3;
-      const blind = game.sectionCover(i) === 0 ? ' <b class="danger">blind spot</b>' : '';
-      return `<div class="row wall"><div><i class="wallimg" style="background-position: ${state * 33.333}% 0"></i><span><b>${sides[i] ?? `Wall ${i + 1}`}</b><small>${pct}%${blind}</small></span></div>${cost > 0 ? btn(`repair:${i}`, 'Repair', Math.min(cost, Math.max(1, gold)), gold < 1) : '<small>Sound</small>'}</div>`;
-    })
-    .join('');
-
-  const next = game.plan;
+    ? 'Click the castle to put it down: the wall, a tower top or the courtyard. Right click or Esc to cancel.'
+    : setup
+      ? 'Spend your war chest on defenders and put them anywhere on the castle. Click one to upgrade or sell it (full refund until the battle starts); drag it to move it.'
+      : 'Between waves: click a defender to upgrade it, a wall\'s Repair tag to patch it, or buy more. The next wave won\'t wait.';
   return `
-    <header><h2>War Council</h2><span class="purse g">${icon('gold')}${gold} gold</span></header>
-    <div class="queen"><img src="${queenUrl}" alt="The Queen" /><p><b>The Queen</b>${queenAdvice(game)}</p></div>
-    <p class="next">${next.boss ? '<b class="danger">Boss wave.</b> ' : ''}Wave ${next.number} brings ${planText()}, down ${laneText()}.</p>
-    <section><h3>Defenders</h3>${slots}</section>
-    <section><h3>Royal shield</h3><div class="def">${shield}</div></section>
-    ${upgrades ? `<section><h3>Defender upgrades</h3>${upgrades}</section>` : ''}
-    <section><h3>Walls</h3>${walls}</section>
-    <button type="button" class="go" data-action="go">To battle! <kbd>Enter</kbd></button>`;
+    <header><h3>${setup ? 'Load-out' : 'Between waves'}</h3><span class="purse">${icon('gold')}${gold} gold</span></header>
+    <div class="buy">${buy}</div>${again}
+    <p class="tip">${tip}</p>
+    ${setup ? '<button type="button" class="go" data-action="go">To battle! <kbd>Enter</kbd></button>' : ''}`;
 }
 
-let councilShown = false;
-function renderCouncil() {
-  const scroll = hud.council.scrollTop;
-  hud.council.innerHTML = councilHtml();
-  hud.council.scrollTop = scroll;
-}
-function renderCouncilIfOpen() {
-  if (game.phase === 'council') renderCouncil();
-}
-
-function updateCouncil() {
-  const open = game.phase === 'council' && running;
-  if (open && !councilShown) renderCouncil();
-  hud.council.hidden = !open;
-  hud.bottom.hidden = open;
-  // The council lists the walls itself; the bars over them would cover the spots.
-  hud.wallBars.hidden = open;
-  councilShown = open;
+/** The card over a clicked defender: its kind's upgrades, and selling it. */
+function popHtml(d: { id: number; kind: DefenderKind }): string {
+  const kind = d.kind;
+  const tracks = USEFUL_TRACKS[kind]
+    .map((t) => {
+      const name = t === 'special' ? SPECIAL_NAMES[kind] : TRACK_NAMES[t];
+      return `<div class="track"><span>${name} <i>Lv ${game.levels[kind][t]}</i><small>${trackEffect(kind, t)}</small></span>${costBtn(`up:${kind}:${t}`, 'Upgrade', game.upgradeCost(kind, t))}</div>`;
+    })
+    .join('');
+  const plural = { crossbow: 'crossbows', archers: 'archer squads', catapult: 'catapults', soldiers: 'companies' }[kind];
+  return `<h3>${DEFENDER_INFO[kind].name}</h3><small>Upgrades apply to all your ${plural}.</small>${tracks}
+    <footer><button type="button" data-action="sell:${d.id}">Sell for ${game.sellValue(d.id)}g</button><button type="button" data-action="close">Done</button></footer>`;
 }
 
-hud.council.addEventListener('click', (e) => {
-  const el = (e.target as HTMLElement).closest<HTMLButtonElement>('button[data-action]');
-  if (!el || el.disabled) return;
-  const [action, a, b] = el.dataset.action!.split(':');
-  if (action === 'place') {
+let trayKey = '';
+let selected: number | null = null;
+function updateShop() {
+  const open = running && game.shopOpen;
+  hud.tray.hidden = !open;
+  if (open) {
+    // Re-render only when something it shows has changed, so the buttons stay clickable.
+    const key = [game.phase, Math.floor(game.gold), placing, game.defenders.length, progress.lastLoadout.length].join('|');
+    if (key !== trayKey) {
+      trayKey = key;
+      hud.tray.innerHTML = trayHtml();
+    }
+  } else {
+    trayKey = '';
+  }
+  const d = selected !== null && open ? game.defenders.find((o) => o.id === selected) : undefined;
+  if (!d) selected = null;
+  hud.defPop.hidden = !d;
+  if (d) {
+    const key = `${d.id}|${Math.floor(game.gold)}|${Object.values(game.levels[d.kind]).join(',')}|${game.phase}`;
+    if (hud.defPop.dataset.key !== key) {
+      hud.defPop.dataset.key = key;
+      hud.defPop.innerHTML = popHtml(d);
+    }
+    const p = view.project(d.x, d.y, view.standHeight(d.x, -d.y) + 3);
+    hud.defPop.style.left = `${Math.min(window.innerWidth - 135, Math.max(135, p.x))}px`;
+    hud.defPop.style.top = `${Math.max(250, p.y)}px`;
+  }
+}
+
+function shopAction(action: string) {
+  const [verb, a, b] = action.split(':');
+  if (verb === 'place') {
     placing = placing === a ? null : (a as PlacedKind);
-  } else if (action === 'up') {
-    game.upgrade(a as DefenderKind, b as Track);
-  } else if (action === 'shield') {
-    game.upgradeShield(a as ShieldTrack);
-  } else if (action === 'repair') {
-    game.repair(Number(a));
-  } else if (action === 'go') {
-    placing = null;
-    game.closeCouncil();
+    selected = null;
+  } else if (verb === 'up') {
+    if (game.upgrade(a as DefenderKind, b as Track)) sounds.thunk();
+  } else if (verb === 'sell') {
+    if (game.sell(Number(a))) toast('Sold');
+    selected = null;
+  } else if (verb === 'close') {
+    selected = null;
+  } else if (verb === 'repair') {
+    const hp = game.repair(Number(a));
+    if (hp > 0) {
+      sounds.thunk();
+      floater(`+${Math.round(hp)} wall`, -game.cfg.field.halfWidth + (Number(a) + 0.5) * game.segmentWidth(), 2, 'good', 1);
+    }
+  } else if (verb === 'again') {
+    const n = game.restoreLoadout(progress.lastLoadout);
+    toast(n < progress.lastLoadout.length ? `${n} of ${progress.lastLoadout.length} put back: the war chest ran out` : 'Defenders back in position');
+  } else if (verb === 'go') {
+    startBattle();
   }
-  renderCouncil();
-});
-window.addEventListener('keydown', (e) => {
-  if (e.code === 'Enter' && running && game.phase === 'council') {
-    e.preventDefault();
-    placing = null;
-    game.closeCouncil();
-  }
-});
-
-// ---- end of run ----------------------------------------------------------
-
-function bankRenown(earned: number): number {
-  try {
-    const total = Number(localStorage.getItem('castle-breach:renown') ?? 0) + earned;
-    localStorage.setItem('castle-breach:renown', String(total));
-    return total;
-  } catch {
-    return earned;
-  }
+  trayKey = '';
+  hud.defPop.dataset.key = '';
 }
+
+function startBattle() {
+  placing = null;
+  selected = null;
+  game.endSetup();
+}
+
+for (const el of [hud.tray, hud.defPop, hud.wallBars]) {
+  el.addEventListener('click', (e) => {
+    const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('button[data-action]');
+    if (btn && !btn.disabled) shopAction(btn.dataset.action!);
+  });
+}
+
+// ---- progress, the town and the end of a level --------------------------------
+
+/** What the player keeps between runs: Renown, the town's upgrades and how far this run has got. */
+function loadProgress(): Progress {
+  const p = newProgress();
+  try {
+    const saved = localStorage.getItem('castle-breach:progress');
+    if (saved) return { ...p, ...JSON.parse(saved) };
+    // Renown banked before the town existed carries over.
+    p.renown = Number(localStorage.getItem('castle-breach:renown') ?? 0) || 0;
+  } catch {
+    // No storage: a fresh start every visit.
+  }
+  return p;
+}
+function saveProgress() {
+  saveSetting('progress', JSON.stringify(progress));
+}
+
+function newLevel(): Game {
+  const level = progress.levelsBeaten;
+  return new Game(Math.floor(Math.random() * 1e9), applyMeta(progress.meta, level), level);
+}
+
+function startLevel() {
+  game = newLevel();
+  placing = null;
+  dragging = null;
+  selected = null;
+  view.setGame(game);
+  buildHud();
+  $('town').hidden = true;
+  $('lost').hidden = true;
+  running = true;
+}
+
+const GROUP_NAMES: Record<MetaGroup, string> = { defence: 'Defence', wall: 'The wall', shield: 'The royal shield', town: 'The town' };
+
+function townHtml(): string {
+  const names = game.cfg.levels.names;
+  const next = progress.levelsBeaten;
+  const levels = names
+    .map((n, i) => `<span class="${i < next ? 'done' : i === next ? 'next' : ''}">${i + 1}. ${n}</span>`)
+    .join('');
+  const groups = META_GROUPS.map((g) => {
+    const ups = META_UPGRADES.filter((u) => u.group === g)
+      .map((u) => {
+        const lv = progress.meta[u.id] ?? 0;
+        const cost = metaCost(progress.meta, u.id);
+        const pips = u.costs.map((_, i) => (i < lv ? '◆' : '◇')).join('');
+        const btn = Number.isFinite(cost)
+          ? `<button type="button" data-meta="${u.id}" ${cost > progress.renown ? 'disabled' : ''}>${icon('renown')}${cost}</button>`
+          : '<small>Done</small>';
+        return `<div class="up"><div class="row"><b>${u.name}</b>${btn}</div><small>${u.blurb}</small><span class="pips">${pips}</span></div>`;
+      })
+      .join('');
+    return `<section><h2>${GROUP_NAMES[g]}</h2>${ups}</section>`;
+  }).join('');
+  const fresh = next === 0;
+  return `<div class="scroll">
+    <header><div><h1>The Town</h1><p class="sub">${fresh ? 'Spend Renown on upgrades that last for ever, then march out. A run is three levels; lose one and it starts again from the first.' : `Level ${next} held! Spend your Renown, then march on to level ${next + 1}.`}</p></div>
+    <span class="purse">${icon('renown')}${Math.floor(progress.renown)} Renown</span></header>
+    <div class="levels">${levels}</div>
+    <div class="groups">${groups}</div>
+    <button type="button" class="march" data-march>March to ${names[next]}!</button>
+    <p class="tag">The town itself, with its buildings and townsfolk, is coming. For now the upgrades live on this page.</p>
+  </div>`;
+}
+
+function showTown() {
+  running = false;
+  $('lost').hidden = true;
+  $('intro').hidden = true;
+  const town = $('town');
+  town.innerHTML = townHtml();
+  town.hidden = false;
+}
+
+$('town').addEventListener('click', (e) => {
+  const el = e.target as HTMLElement;
+  const up = el.closest<HTMLButtonElement>('button[data-meta]');
+  if (up && !up.disabled && buyMeta(progress, up.dataset.meta!)) {
+    saveProgress();
+    sounds.chime(1);
+    showTown();
+  }
+  if (el.closest('button[data-march]')) startLevel();
+});
 
 function showEnd(won: boolean, segment = 0) {
+  const names = game.cfg.levels.names;
+  progress.renown += game.renownEarned;
+  const finale = won && game.level >= names.length - 1;
+  if (won) {
+    progress.lastLoadout = game.loadout();
+    progress.levelsBeaten = finale ? 0 : game.level + 1;
+  } else {
+    progress.levelsBeaten = 0;
+  }
+  saveProgress();
   $('lostWaves').textContent = String(game.wavesSurvived);
   $('lostKills').textContent = String(game.kills);
   $('lostCombo').textContent = String(game.bestCombo);
   $('lostRenown').textContent = String(game.renownEarned);
-  $('endTitle').textContent = won ? 'The wall holds!' : 'Breached!';
-  $('lostText').textContent = won
-    ? `All ${game.cfg.waves.finalWave} waves beaten back. The orcs are already planning something stupider.`
-    : `The orcs broke through the ${LANES[segment] ?? ''} wall during wave ${game.wave}.`;
-  const total = bankRenown(game.renownEarned);
-  $('bank').textContent = `${total} Renown banked in total. The research tree to spend it on arrives in a later update.`;
-  $('again').textContent = won ? 'Play again' : 'Try again';
+  $('endTitle').textContent = finale ? 'The wall holds!' : won ? `${names[game.level]} held!` : 'Breached!';
+  $('lostText').textContent = finale
+    ? 'All three levels beaten back. The orcs are already planning something stupider. A new run starts from level 1, with every upgrade you bought.'
+    : won
+      ? `All ${game.cfg.levels.waves} waves of level ${game.level + 1} beaten back. On to ${names[game.level + 1]}, once you have been to the town.`
+      : `The orcs broke through the ${LANES[segment] ?? ''} wall during wave ${game.levelWave} of level ${game.level + 1}. Back to the town: spend your Renown, then the next run starts from level 1.`;
+  $('bank').textContent = `${Math.floor(progress.renown)} Renown to spend in the town.`;
   $('lost').hidden = false;
   running = false;
 }
@@ -630,18 +735,18 @@ function buildHud() {
     ...game.segmentHp.map(() => {
       const el = document.createElement('div');
       el.className = 'seg';
-      el.innerHTML = '<div class="bar"><b></b><i></i></div>';
+      el.innerHTML = '<div class="bar"><b></b><i></i></div><button type="button" class="fix" hidden></button>';
       return el;
     }),
   );
-  councilShown = false;
+  trayKey = '';
 }
 buildHud();
 
 /** The see-through defender under the mouse while placing or dragging one, and the planning overlay with its coverage preview. */
 function updateGhost() {
   if (dragging !== null && !game.defenders.some((d) => d.id === dragging)) dragging = null;
-  const planning = running && (game.phase === 'council' || game.phase === 'preview' || dragging !== null);
+  const planning = running && (game.shopOpen || dragging !== null);
   let preview: PlanPreview | null = null;
   const dragged = dragging !== null ? game.defenders.find((d) => d.id === dragging) : undefined;
   const kind = placing ?? dragged?.kind;
@@ -659,7 +764,7 @@ function updateGhost() {
     const hover = planning ? game.defenderAt(input.x, input.y) : undefined;
     canvas.style.cursor = hover ? 'grab' : '';
   }
-  view.setPlanning(planning, preview, game.phase === 'preview' || game.phase === 'council');
+  view.setPlanning(planning, preview, game.shopOpen);
 }
 
 // ---- loop ------------------------------------------------------------------
@@ -761,7 +866,7 @@ function frame(now: number) {
   sounds.scrape(running && game.phase === 'battle' ? Math.abs(game.shield.vx) / game.cfg.shield.speed : 0);
   view.render(dt, now / 1000);
   updateHud(dt);
-  updateCouncil();
+  updateShop();
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);

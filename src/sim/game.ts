@@ -209,11 +209,15 @@ export type GameEvent =
   | { type: 'waveCleared'; wave: number; gold: number }
   | { type: 'calledEarly'; wave: number; gold: number }
   | { type: 'bossKilled'; x: number; y: number }
-  | { type: 'council' }
   | { type: 'lost'; segment: number }
   | { type: 'won' };
 
-export type Phase = 'council' | 'preview' | 'battle' | 'lost' | 'won';
+/**
+ * setup: before the level's first wave, buying and placing the load-out (the game is paused).
+ * preview: the lull before each wave, when the shop is open over the battlefield.
+ * won and lost end the level.
+ */
+export type Phase = 'setup' | 'preview' | 'battle' | 'lost' | 'won';
 
 export const STEP = 1 / 60;
 
@@ -226,7 +230,9 @@ export class Game {
   readonly cfg: Config;
   readonly seed: number;
   time = 0;
-  phase: Phase = 'council';
+  phase: Phase = 'setup';
+  /** The level being played (0-based); it is waves firstWave to lastWave. */
+  readonly level: number;
   phaseTimer = 0;
   /** The wave in progress (or the last one fought). 0 before the first. */
   wave = 0;
@@ -247,7 +253,8 @@ export class Game {
   private nextBallId = 0;
   private nextBlockId = 0;
   levels: Levels = emptyLevels();
-  shieldLevels: Record<ShieldTrack, number> = { width: 0, window: 0, power: 0, recovery: 0, plating: 0 };
+  /** Shield upgrades, from the town. */
+  shieldLevels: Record<ShieldTrack, number>;
   segmentHp: number[];
   gold: number;
   goldEarned = 0;
@@ -284,21 +291,40 @@ export class Game {
   private rng: Rng;
   private grid = new Map<number, Enemy[]>();
 
-  constructor(seed = 1, cfg: Config = makeConfig()) {
+  /** cfg normally comes from applyMeta, with the town's upgrades in it. */
+  constructor(seed = 1, cfg: Config = makeConfig(), level = 0) {
     this.cfg = cfg;
     this.seed = seed;
+    this.level = level;
     this.rng = new Rng(seed);
     this.segmentHp = new Array(cfg.wall.segments).fill(cfg.wall.segmentHp);
-    this.gold = cfg.economy.startGold;
-    this.plan = planWave(1, seed, cfg);
+    this.gold = cfg.economy.warChest;
+    this.shieldLevels = { ...cfg.bonuses.shield };
+    this.wave = this.cleared = this.firstWave - 1;
+    this.plan = planWave(this.firstWave, seed, cfg);
+  }
+
+  get firstWave(): number {
+    return this.level * this.cfg.levels.waves + 1;
+  }
+
+  get lastWave(): number {
+    return this.firstWave + this.cfg.levels.waves - 1;
+  }
+
+  /** The wave on show (the one fighting, or the one coming), counted from 1 within the level. */
+  get levelWave(): number {
+    const n = this.phase === 'battle' || this.over ? this.wave : this.plan.number;
+    return Math.max(1, n - this.firstWave + 1);
   }
 
   get over(): boolean {
     return this.phase === 'lost' || this.phase === 'won';
   }
 
+  /** Waves of this level beaten back. */
   get wavesSurvived(): number {
-    return this.cleared;
+    return this.cleared - this.firstWave + 1;
   }
 
   // ---- player input -------------------------------------------------------
@@ -375,7 +401,7 @@ export class Game {
   canCallEarly(): boolean {
     if (this.phase === 'preview') return true;
     if (this.phase !== 'battle' || this.nextGroup < this.plan.groups.length || this.tower) return false;
-    if (this.councilAfter(this.wave) || this.wave >= this.cfg.waves.finalWave) return false;
+    if (this.wave >= this.lastWave) return false;
     return this.enemies.length <= Math.max(2, Math.ceil(planSize(this.plan) * this.cfg.economy.callEarlyAt));
   }
 
@@ -411,13 +437,14 @@ export class Game {
     if (this.phase === 'preview') this.callEarly();
   }
 
-  // ---- War Council ----------------------------------------------------------
+  // ---- the shop: the load-out in the setup, then upgrades and repairs between waves ----
 
+  /** The shop is open in the setup and in the lull before each wave, over the battlefield. */
   get shopOpen(): boolean {
-    return this.phase === 'council';
+    return this.phase === 'setup' || this.phase === 'preview';
   }
 
-  /** Whether the War Council sells this defender yet (run 1 has the crossbow only). */
+  /** Whether this defender is on sale yet (the town unlocks all but the crossbow). */
   unlocked(kind: DefenderKind): boolean {
     return this.cfg.unlocks.defenders.includes(kind);
   }
@@ -454,18 +481,48 @@ export class Game {
     if (!this.shopOpen || !this.unlocked(kind) || this.gold < cost) return false;
     if (!this.canPlace(kind, x, y)) return false;
     this.gold -= cost;
-    this.addDefender(kind, x, y);
+    this.addDefender(kind, x, y, cost);
     if (kind === 'soldiers') this.musterSoldiers();
     return true;
   }
 
-  /** Gold a move costs right now: free in the War Council and the preview, paid mid-battle. */
+  /** Gold back for selling a defender: all of it in the setup, half once the level is under way. */
+  sellValue(id: number): number {
+    const d = this.defenders.find((o) => o.id === id);
+    if (!d) return 0;
+    return this.phase === 'setup' ? d.paid : Math.floor(d.paid / 2);
+  }
+
+  /** Sells a defender (and its share of nothing else: upgrades stay with the kind). */
+  sell(id: number): boolean {
+    if (!this.shopOpen) return false;
+    const i = this.defenders.findIndex((o) => o.id === id);
+    if (i < 0) return false;
+    this.gold += this.sellValue(id);
+    const [d] = this.defenders.splice(i, 1);
+    if (d.kind === 'soldiers') this.musterSoldiers();
+    return true;
+  }
+
+  /** Where each defender stands, to put the same load-out back next level. */
+  loadout(): { kind: PlacedKind; x: number; y: number }[] {
+    return this.defenders.map((d) => ({ kind: d.kind, x: d.x, y: d.y }));
+  }
+
+  /** Buys and places a saved load-out, in order, as far as the war chest goes. Returns how many went down. */
+  restoreLoadout(list: { kind: PlacedKind; x: number; y: number }[]): number {
+    let n = 0;
+    for (const d of list) if (this.unlocked(d.kind) && this.place(d.kind, d.x, d.y)) n++;
+    return n;
+  }
+
+  /** Gold a move costs right now: free in the setup and the lull between waves, paid mid-battle. */
   moveCost(): number {
     return this.phase === 'battle' ? Math.round((this.cfg.castle.moveGold * this.wave) / 5) : 0;
   }
 
   /**
-   * Moves a placed defender to (x, y). Free in the War Council and the preview;
+   * Moves a placed defender to (x, y). Free in the setup and between waves;
    * mid-battle it costs gold and it has to pack up before it fires again.
    */
   move(id: number, x: number, y: number): boolean {
@@ -571,23 +628,6 @@ export class Game {
     return true;
   }
 
-  /** Price of the next level of a shield upgrade, or Infinity at the cap. */
-  shieldCost(track: ShieldTrack): number {
-    const u = this.cfg.shieldUpgrades;
-    const level = this.shieldLevels[track];
-    if (level >= u[track].max) return Infinity;
-    return Math.round(u[track].cost * u.costGrowth ** level);
-  }
-
-  /** Buys a shield upgrade for the rest of this run. */
-  upgradeShield(track: ShieldTrack): boolean {
-    const cost = this.shieldCost(track);
-    if (!this.shopOpen || this.gold < cost) return false;
-    this.gold -= cost;
-    this.shieldLevels[track]++;
-    return true;
-  }
-
   repairCost(segment: number): number {
     const missing = this.cfg.wall.segmentHp - this.segmentHp[segment];
     return Math.ceil(missing * this.cfg.economy.repairGoldPerHp);
@@ -605,9 +645,9 @@ export class Game {
     return hp;
   }
 
-  /** Leaves the War Council; the next wave's preview starts. */
-  closeCouncil(): void {
-    if (this.phase !== 'council') return;
+  /** Ends the setup; the first wave's preview starts. */
+  endSetup(): void {
+    if (this.phase !== 'setup') return;
     this.musterSoldiers();
     this.phase = 'preview';
     this.phaseTimer = this.cfg.waves.previewSeconds;
@@ -615,8 +655,10 @@ export class Game {
 
   // ---- defender stats -------------------------------------------------------
 
+  /** A defender stat's multiplier: its upgrade track, times the town's bonus for damage and rate of fire. */
   mult(kind: DefenderKind, track: Track): number {
-    return trackMult(this.levels[kind][track], this.cfg);
+    const b = this.cfg.bonuses;
+    return trackMult(this.levels[kind][track], this.cfg) * (track === 'damage' ? b.damage : track === 'rate' ? b.rate : 1);
   }
 
   crossbowPierce(): number {
@@ -643,10 +685,6 @@ export class Game {
     return Math.max(0, Math.min(this.cfg.wall.segments - 1, i));
   }
 
-  councilAfter(wave: number): boolean {
-    return wave > 0 && wave % this.cfg.economy.councilEvery === 0 && wave < this.cfg.waves.finalWave;
-  }
-
   /** Renown the run has earned so far, rounded. Breach keeps everything. */
   get renownEarned(): number {
     return Math.round(this.renown);
@@ -666,7 +704,7 @@ export class Game {
   // ---- simulation ---------------------------------------------------------
 
   step(dt = STEP): void {
-    if (this.over || this.phase === 'council') return;
+    if (this.over || this.phase === 'setup') return;
     this.time += dt;
     this.updateShield(dt);
     // Queen's tea slows everything but the shield.
@@ -704,20 +742,16 @@ export class Game {
       this.projectiles = this.projectiles.filter((p) => p.friendly);
       this.balls = [];
       this.capsules = [];
-      if (this.wave >= this.cfg.waves.finalWave) {
-        this.renown += this.cfg.renown.actClear;
+      if (this.wave >= this.lastWave) {
+        const clear = this.cfg.renown.levelClear;
+        this.renown += clear[Math.min(this.level, clear.length - 1)];
         this.phase = 'won';
         this.events.push({ type: 'won' });
         return;
       }
       this.plan = planWave(this.wave + 1, this.seed, this.cfg);
-      if (this.councilAfter(this.wave)) {
-        this.phase = 'council';
-        this.events.push({ type: 'council' });
-      } else {
-        this.phase = 'preview';
-        this.phaseTimer = this.cfg.waves.previewSeconds;
-      }
+      this.phase = 'preview';
+      this.phaseTimer = this.cfg.waves.previewSeconds;
     }
   }
 
@@ -743,8 +777,8 @@ export class Game {
     this.events.push({ type: 'waveCleared', wave: w, gold });
   }
 
-  private addDefender(kind: PlacedKind, x: number, y: number): void {
-    this.defenders.push({ id: this.nextDefenderId++, kind, ground: groundAt(this.cfg, x, y), x, y, timer: 0, aimX: x, aimY: 30, firedAt: -99 });
+  private addDefender(kind: PlacedKind, x: number, y: number, paid = 0): void {
+    this.defenders.push({ id: this.nextDefenderId++, kind, ground: groundAt(this.cfg, x, y), x, y, paid, timer: 0, aimX: x, aimY: 30, firedAt: -99 });
   }
 
   private startWave(): void {
@@ -1060,10 +1094,12 @@ export class Game {
           e.y = Math.min(e.y, front);
           e.timer -= dt;
           if (e.timer <= 0) e.state = 'wall';
+          e.hp -= this.cfg.bonuses.spikesDps * dt;
           break;
         case 'wall':
           e.y = Math.min(e.y, front);
           this.damageSegment(this.segmentAt(e.x), stats.wallDps * dt, e.x, e.kind);
+          e.hp -= this.cfg.bonuses.spikesDps * dt;
           break;
       }
 
@@ -2047,7 +2083,7 @@ export class Game {
 
   private removeDead(): void {
     const alive: Enemy[] = [];
-    const growth = this.cfg.economy.killGoldGrowth ** Math.max(0, this.wave - 1);
+    const growth = this.cfg.economy.killGoldGrowth ** Math.max(0, this.wave - 1) * this.cfg.bonuses.killGold;
     for (const e of this.enemies) {
       if (e.hp > 0) {
         alive.push(e);

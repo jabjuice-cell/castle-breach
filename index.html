@@ -66,7 +66,6 @@
       .floater.bad { font-family: var(--ui); font-size: 18px; color: #ff8a7a; }
       #placeTag { position: absolute; transform: translate(-50%, -100%); font-size: 12px; font-weight: 700; padding: 2px 7px; border-radius: 4px; background: rgba(20, 40, 16, 0.85); color: #c8ffc8; white-space: nowrap; pointer-events: none; }
       #placeTag.bad { background: rgba(60, 16, 12, 0.85); color: #ffb0a6; }
-      #council .row.locked { opacity: 0.55; }
       .purse { display: flex; gap: 16px; font-weight: 800; font-size: 18px; }
       .purse .g { color: var(--gold); }
       .purse > span { display: inline-flex; align-items: center; gap: 5px; }
@@ -74,8 +73,49 @@
       .label .ico { width: 18px; height: 18px; margin-right: 5px; }
       .label > span:first-child { display: inline-flex; align-items: center; }
       button .ico { width: 20px; height: 20px; margin: -3px 4px -3px -4px; }
-      .wallimg { width: 36px; height: 48px; flex: none; background-image: var(--wall-states); background-size: 400% 100%; background-repeat: no-repeat; }
-      #council .row.wall > div:first-child { display: flex; align-items: center; gap: 8px; }
+      /* The shop over the battlefield: a tray of defenders to buy, a card for a clicked defender, repair tags on the wall bars. */
+      .card { background: var(--parchment); color: var(--ink); border: 3px solid var(--ink); border-radius: 6px; box-shadow: 0 5px 0 rgba(0, 0, 0, 0.35); pointer-events: auto; }
+      .card h3 { margin: 0; font-family: var(--display); font-weight: 800; font-size: 24px; line-height: 1; }
+      .card small { display: block; font-size: 12px; opacity: 0.75; }
+      .card button { font-size: 13px; padding: 4px 9px; box-shadow: 0 2px 0 var(--ink); white-space: nowrap; }
+      .card button .cost { color: #9a6a00; margin-left: 2px; }
+      .card button:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+      .card .go { display: block; width: 100%; margin-top: 10px; font-size: 18px; padding: 8px; background: var(--gold); }
+      .card .go kbd { background: var(--ink); color: var(--parchment); }
+      #tray { position: absolute; right: max(16px, env(safe-area-inset-right, 0px)); bottom: max(16px, env(safe-area-inset-bottom, 0px)); width: min(330px, calc(100% - 32px)); padding: 10px 12px 12px; }
+      #tray header { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+      #tray .purse { font-size: 18px; color: #9a6a00; }
+      #tray .buy { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 8px; }
+      #tray .buy button { display: flex; flex-direction: column; align-items: flex-start; text-align: left; white-space: normal; padding: 5px 8px; }
+      #tray .buy button.on { background: var(--gold); }
+      #tray .buy button.locked { opacity: 0.45; }
+      #tray .tip { margin: 8px 0 0; font-size: 12px; line-height: 1.35; opacity: 0.8; }
+      #tray .again { width: 100%; margin-top: 6px; }
+      #defPop { position: absolute; transform: translate(-50%, calc(-100% - 12px)); width: 250px; padding: 10px 12px; }
+      #defPop .track { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: 6px; font-size: 14px; }
+      #defPop .track i { font-style: normal; font-weight: 800; opacity: 0.6; margin-left: 4px; }
+      #defPop footer { display: flex; justify-content: space-between; align-items: center; margin-top: 10px; gap: 8px; }
+      .seg .fix { position: absolute; left: 50%; top: 18px; transform: translateX(-50%) skewX(18deg); pointer-events: auto; font-size: 12px; padding: 2px 8px; box-shadow: 0 2px 0 var(--ink); white-space: nowrap; }
+      .seg .fix .cost { color: #9a6a00; }
+      /* The town between levels: a placeholder screen until the town itself is built. */
+      #town { overflow-y: auto; align-items: start; padding-top: max(24px, env(safe-area-inset-top, 0px)); padding-bottom: 24px; }
+      #town .scroll { max-width: 980px; width: 100%; box-sizing: border-box; }
+      #town header { display: flex; justify-content: space-between; align-items: flex-end; gap: 12px; flex-wrap: wrap; }
+      #town .purse { color: #6a3fa0; font-size: 22px; }
+      #town .groups { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 14px; margin: 14px 0; }
+      #town h2 { margin: 0 0 6px; font-size: 12px; letter-spacing: 0.12em; text-transform: uppercase; opacity: 0.7; }
+      #town .up { border-top: 1px solid rgba(43, 33, 22, 0.15); padding: 7px 0; display: grid; gap: 4px; }
+      #town .up b { font-size: 15px; }
+      #town .up small { font-size: 12px; opacity: 0.75; line-height: 1.3; }
+      #town .up .row { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+      #town .pips { letter-spacing: 2px; color: #6a3fa0; font-size: 13px; }
+      #town .up button { font-size: 13px; padding: 3px 9px; box-shadow: 0 2px 0 var(--ink); }
+      #town .up button:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+      #town .march { font-size: 20px; padding: 10px 22px; background: var(--gold); }
+      #town .levels { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 6px; font-size: 14px; }
+      #town .levels span { padding: 2px 9px; border-radius: 10px; background: rgba(43, 33, 22, 0.1); }
+      #town .levels span.done { background: #3f8a3a; color: #fff; }
+      #town .levels span.next { background: var(--gold); font-weight: 800; }
       .bottom { position: absolute; bottom: max(14px, env(safe-area-inset-bottom, 0px)); left: max(16px, env(safe-area-inset-left, 0px)); display: flex; gap: 12px; align-items: stretch; width: min(340px, calc(100% - 32px)); }
       .bottom .panel { flex: 1; }
       .hint { font-size: 12px; opacity: 0.85; margin-top: 6px; }
@@ -97,25 +137,6 @@
       #bossBar { background: linear-gradient(#ff7a62, #a8321e); }
       #callEarly { position: absolute; bottom: max(16px, env(safe-area-inset-bottom, 0px)); right: max(16px, env(safe-area-inset-right, 0px)); pointer-events: auto; max-width: calc(100% - 32px); }
       #toast { position: absolute; top: 24%; left: 50%; transform: translateX(-50%); font-family: var(--display); font-size: 28px; color: var(--gold); text-shadow: 0 2px 0 var(--ink), 0 0 12px rgba(0, 0, 0, 0.5); white-space: nowrap; }
-      #council { position: absolute; top: max(76px, calc(env(safe-area-inset-top, 0px) + 64px)); right: max(16px, env(safe-area-inset-right, 0px)); bottom: max(16px, env(safe-area-inset-bottom, 0px)); width: min(400px, calc(100% - 32px)); overflow-y: auto; pointer-events: auto; background: var(--parchment); color: var(--ink); border: 3px solid var(--ink); border-radius: 6px; padding: 14px 16px 16px; box-shadow: 0 8px 0 rgba(0, 0, 0, 0.35); }
-      #council header { display: flex; justify-content: space-between; align-items: baseline; }
-      #council h2 { margin: 0; font-family: var(--display); font-weight: 800; font-size: 34px; line-height: 1; }
-      #council .purse { font-size: 20px; color: #9a6a00; }
-      #council .next { margin: 6px 0 4px; font-size: 14px; line-height: 1.35; }
-      #council .danger { color: #b3301c; }
-      #council h3 { margin: 14px 0 6px; font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; opacity: 0.7; }
-      #council .row { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 6px 0; border-top: 1px solid rgba(43, 33, 22, 0.15); }
-      #council .row.empty b { color: #7a5a1a; }
-      #council small { display: block; font-size: 12px; opacity: 0.75; }
-      #council .btns { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
-      #council .def { padding: 8px 0; border-top: 1px solid rgba(43, 33, 22, 0.15); }
-      #council .track { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: 6px; font-size: 14px; }
-      #council .track i { font-style: normal; font-weight: 800; opacity: 0.6; margin-left: 4px; }
-      #council button { font-size: 13px; padding: 4px 9px; box-shadow: 0 2px 0 var(--ink); white-space: nowrap; }
-      #council button .cost { color: #9a6a00; margin-left: 2px; }
-      #council button:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
-      #council .go { display: block; width: 100%; margin-top: 16px; font-size: 18px; padding: 9px; background: var(--gold); }
-      #council .go kbd { background: var(--ink); color: var(--parchment); }
       button { font-family: var(--ui); font-weight: 800; font-size: 15px; color: var(--ink); background: var(--parchment); border: 2px solid var(--ink); border-radius: 5px; padding: 7px 16px; cursor: pointer; box-shadow: 0 3px 0 var(--ink); }
       button:hover { background: #fff4d6; }
       button:active { transform: translateY(2px); box-shadow: 0 1px 0 var(--ink); }
@@ -135,11 +156,8 @@
       .queen img { width: 64px; height: 64px; object-fit: cover; object-position: top; border-radius: 50%; border: 3px solid var(--gold); background: #2a4fb0; flex: none; }
       .queen p { margin: 0; font-size: 14px; line-height: 1.35; font-style: italic; }
       .queen p b { display: block; font-style: normal; font-family: var(--display); font-size: 18px; color: #2a4fb0; }
-      #council .queen { margin: 10px 0 4px; padding: 8px 10px; background: rgba(42, 79, 176, 0.08); border-radius: 6px; }
       #queen { position: absolute; left: max(16px, env(safe-area-inset-left, 0px)); bottom: max(170px, calc(env(safe-area-inset-bottom, 0px) + 156px)); width: min(340px, calc(100% - 32px)); background: var(--parchment); color: var(--ink); border: 3px solid var(--ink); border-radius: 6px; padding: 10px 12px; box-shadow: 0 5px 0 rgba(0, 0, 0, 0.35); }
-      #council .tip { margin: 8px 0 0; font-size: 12px; opacity: 0.75; }
-      #council .row.placing { background: rgba(242, 193, 78, 0.3); border-radius: 4px; padding-left: 6px; }
-      @media (max-width: 720px) { #council { top: auto; height: 58%; left: 16px; width: auto; } }
+      @media (max-width: 720px) { #tray { bottom: auto; top: 76px; } }
       @media (max-width: 560px) { #callEarly { bottom: 150px; } .wave { font-size: 24px; }  #preview h2 { font-size: 26px; } .hint { display: none; } #queen { display: none; } }
       @media (prefers-reduced-motion: reduce) { .bar > i { transition: none; } .seg.warn .bar { animation: none; } }
     </style>
@@ -165,7 +183,8 @@
       </div>
       <div id="toast" hidden></div>
       <button id="callEarly" type="button" hidden>Call the next wave</button>
-      <div id="council" hidden></div>
+      <div class="markers"><div class="card" id="defPop" hidden></div></div>
+      <div class="card" id="tray" hidden></div>
       <div class="panel" id="preview" hidden>
         <h2 id="previewTitle">Wave 1 marches in 6</h2>
         <p id="previewText">8 grunts</p>
@@ -192,7 +211,8 @@
           <li><kbd>Left click</kbd> or <kbd>Space</kbd> right as a ball lands to <b>heave</b>: a power shot that smashes through a whole orc line.</li>
           <li>Chain hits without touching the shield for a <b>combo</b> gold multiplier. Hits behind the lines pay double, the towers make bank shots and barrel orcs blow up their friends. Catch falling capsules, but not the red ones.</li>
           <li>Every ball or boulder you miss hits the wall. If any one stretch of wall falls, the castle is breached.</li>
-          <li>At the <b>War Council</b> place defenders on the castle&rsquo;s fixed spots. Each one covers only part of the field, and the red hatching shows your blind spots. Plan well: a good plan matters more than quick hands.</li>
+          <li>Before each level, spend your war chest on defenders and put them anywhere on the castle. Each one covers only part of the field, and the red hatching shows your blind spots. Between waves, click a wall to repair it and a defender to upgrade it.</li>
+          <li>Three levels of five waves. Lose one and you are back in the town, where Renown buys upgrades that last for ever. Then the next run starts again from level 1.</li>
         </ul>
         <button id="play" type="button">Hold the wall!</button>
         <p class="tag">Breakout build · work in progress</p>
@@ -210,9 +230,11 @@
           <div><b id="lostRenown">0</b>Renown earned</div>
         </div>
         <p class="sub" id="bank"></p>
-        <button id="again" type="button">Try again</button>
+        <button id="again" type="button">To the town</button>
       </div>
     </div>
+
+    <div class="overlay" id="town" hidden></div>
     <div id="flash"></div>
     <script type="module" src="/src/main.ts"></script>
   </body>

@@ -24,8 +24,8 @@ const RULES: Rule[] = [
     const worst = g.segmentHp.indexOf(Math.min(...g.segmentHp));
     if (g.segmentHp[worst] > g.cfg.wall.segmentHp * 0.5) return null;
     const side = SIDES[worst] ?? 'one';
-    return g.phase === 'council'
-      ? [`The ${side} wall looks rather crumbly. Have you tried asking it nicely? Or paying the masons, I suppose.`]
+    return g.shopOpen
+      ? [`The ${side} wall looks rather crumbly. Have you tried asking it nicely? Or clicking it and paying the masons, I suppose.`]
       : [`The ${side} wall is wobbling. If it falls we lose, apparently. Nobody tells me anything.`];
   },
   (g) => {
@@ -37,10 +37,10 @@ const RULES: Rule[] = [
       `The ${SIDES[blind]} section is a blind spot, darling. Orcs can smell those. So can I, frankly.`,
     ];
   },
-  (g) => (g.phase === 'council' && g.defenders.length === 0 ? [
+  (g) => (g.phase === 'setup' && g.defenders.length === 0 ? [
     "Put a crossbow on a tower top. It shoots straight up its lane and angles across to the next one. The towers are taller, so they see further. Like me.",
   ] : null),
-  (g) => (g.phase === 'council' && g.unlocked('archers') && !g.owns('archers') ? [
+  (g) => (g.phase === 'setup' && g.unlocked('archers') && !g.owns('archers') ? [
     "Have you thought about archers? Thirty of them, for a pittance. They shoot boulders out of the sky before they reach you. Science!",
   ] : null),
   (g) => (g.plan.totals.barrel > 0 ? [
@@ -54,8 +54,8 @@ const RULES: Rule[] = [
   (g) => (g.plan.totals.rider > 0 ? [
     "Pigs! Orcs riding pigs! They come down the edge lanes. Bank a ball off the corner tower and see how they like it.",
   ] : null),
-  (g) => (g.phase === 'council' && g.gold >= 250 ? [
-    `You have ${Math.floor(g.gold)} gold just lying about! In my day we spent it on gowns. Perhaps a wider shield? Width is the gown of war.`,
+  (g) => (g.shopOpen && g.gold >= 250 ? [
+    `You have ${Math.floor(g.gold)} gold just lying about! In my day we spent it on gowns. Click a defender to upgrade it. Upgrades are the gowns of war.`,
   ] : null),
   (g) => (g.plan.totals.chucker > 0 ? [
     "Some of them throw rocks. At my castle! Block them and the rocks bounce back as little pebbles. Petty, but effective.",
@@ -65,6 +65,7 @@ const RULES: Rule[] = [
 const IDLE = [
   "Remember, orcs are mostly stupid. Mostly.",
   "Do keep the wall in one piece, darling. There's a ball on Thursday. A real one, not the bouncing kind.",
+  "If we lose, we simply go back to town, spend our Renown on something shiny and try again. That's what Renown is for. And gowns.",
   "I've drawn up a battle plan. It's a lovely drawing of a horse.",
   "Sound the horn early and the treasury pays a bonus. I love a bonus. I love a horn.",
   "Hit lots of orcs without the ball touching the shield. The gold piles up. That's how I run the court.",
@@ -74,7 +75,7 @@ const IDLE = [
 
 /** Picks this moment's advice. Stable for a given wave and phase, so it doesn't flicker. */
 export function queenAdvice(game: Game): string {
-  const key = game.plan.number * 7 + (game.phase === 'council' ? 1 : 0) + game.seed;
+  const key = game.plan.number * 7 + (game.phase === 'setup' ? 1 : 0) + game.seed;
   const hit = RULES.findIndex((r) => r(game));
   // Bosses and crumbling walls always get a mention; otherwise she sometimes just rambles.
   const lines = hit >= 0 && (hit < 3 || key % 4 !== 0) ? RULES[hit](game)! : IDLE;
