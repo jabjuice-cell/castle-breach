@@ -98,7 +98,7 @@ export class Terrain {
         pos.setY(i, this.heights[i]);
       }
     }
-    pos.needsUpdate = true;
+    this.markRows(pos, c0, c1, r0, r1);
     this.updateNormals(c0, c1, r0, r1);
   }
 
@@ -118,6 +118,14 @@ export class Terrain {
         normal.setXYZ(r * w + c, n.x, n.y, n.z);
       }
     }
-    normal.needsUpdate = true;
+    this.markRows(normal, Math.max(0, c0 - 1), Math.min(this.nx, c1 + 1), Math.max(0, r0 - 1), Math.min(this.nz, r1 + 1));
+  }
+
+  /** Uploads only the rows of the grid that changed, not the whole mesh (a full upload cost ~100 ms per blast). */
+  private markRows(attr: THREE.BufferAttribute, c0: number, c1: number, r0: number, r1: number) {
+    const w = this.nx + 1;
+    const start = r0 * w + c0;
+    attr.addUpdateRange(start * 3, ((r1 - r0) * w + (c1 - c0) + 1) * 3);
+    attr.needsUpdate = true;
   }
 }

@@ -297,20 +297,23 @@ export class World {
     this.buildScatter();
   }
 
-  /** A low wooden rail fence along the back edge (field.topY) where the ball bounces. */
+  /** A chunky stone wall along the back edge (field.topY) where the ball bounces; orcs march in from behind it. */
   private buildBackFence(): void {
     const hw = this.hw;
     const z = -this.game.cfg.field.topY;
-    const wood = new THREE.MeshLambertMaterial({ color: '#8a5a32' });
-    const n = Math.max(2, Math.round((2 * hw) / 3) + 1);
-    const posts = new THREE.InstancedMesh(new THREE.BoxGeometry(0.4, 1.2, 0.4), wood, n);
-    for (let i = 0; i < n; i++) posts.setMatrixAt(i, tmpM.makeTranslation(-hw + (2 * hw * i) / (n - 1), 0.6, z));
+    const stone = new THREE.MeshLambertMaterial({ color: '#7d7a72' });
+    const cap = new THREE.MeshLambertMaterial({ color: '#d8d2c0' });
+    const post = new THREE.MeshLambertMaterial({ color: '#b2432c' });
+    const wall = new THREE.Mesh(new THREE.BoxGeometry(2 * hw + 1, 1.8, 0.7), stone);
+    wall.position.set(0, 0.9, z - 0.35);
+    this.field.add(wall);
+    const top = new THREE.Mesh(new THREE.BoxGeometry(2 * hw + 1.2, 0.3, 1), cap);
+    top.position.set(0, 1.95, z - 0.35);
+    this.field.add(top);
+    const n = Math.max(2, Math.round((2 * hw) / 4) + 1);
+    const posts = new THREE.InstancedMesh(new THREE.BoxGeometry(0.8, 2.6, 0.9), post, n);
+    for (let i = 0; i < n; i++) posts.setMatrixAt(i, tmpM.makeTranslation(-hw + (2 * hw * i) / (n - 1), 1.3, z - 0.35));
     this.field.add(posts);
-    for (const y of [0.5, 0.95]) {
-      const rail = new THREE.Mesh(new THREE.BoxGeometry(2 * hw, 0.15, 0.2), wood);
-      rail.position.set(0, y, z);
-      this.field.add(rail);
-    }
   }
 
   /** Three staggered rows of voxel trees down each side of the field, their crowns just over its edge. */
