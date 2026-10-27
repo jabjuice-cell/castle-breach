@@ -140,7 +140,14 @@ export const defaultConfig = {
     /** A heave is a big effort: one every 3 seconds. */
     heaveCooldown: 3,
     heaveSpeed: 1.5,
-    /** A Perfect Return (a heave pressed just before contact) makes the ball's next damaging impact this much harder. */
+    /**
+     * The shield bash (the same click as the heave): a fresh press arms a Perfect Return for the window above,
+     * and can be pressed again after this many seconds. The heave's slam and plough stay on heaveCooldown.
+     */
+    bashCooldown: 0.65,
+    /** A Perfect Return sends the ball out this much faster, never past maxSpeed * heaveSpeed (the tunnelling-safe cap). */
+    perfectSpeed: 1.3,
+    /** A Perfect Return makes the ball's next damaging impact this much harder. */
     perfectDamage: 1.5,
     /** A heave ploughs through orc lines (up to lineMax orcs each) at heaveDamage each, instead of bouncing. */
     heaveLines: 3,

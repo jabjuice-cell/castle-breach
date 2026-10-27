@@ -71,6 +71,20 @@ $('sound').addEventListener('click', () => {
 });
 showSound();
 
+/** Camera shake is optional; it starts off for players who ask their system for reduced motion. */
+const shakeSetting = loadSetting('shake');
+let shakeOn = shakeSetting === null ? !window.matchMedia('(prefers-reduced-motion: reduce)').matches : shakeSetting === '1';
+function showShake() {
+  view.shakeScale = shakeOn ? 1 : 0;
+  $('shake').textContent = shakeOn ? 'Shake: On' : 'Shake: Off';
+}
+$('shake').addEventListener('click', () => {
+  shakeOn = !shakeOn;
+  saveSetting('shake', shakeOn ? '1' : '0');
+  showShake();
+});
+showShake();
+
 function showQuality() {
   $('quality').textContent = `Detail: ${QUALITY_NAMES[quality]}`;
 }
@@ -303,6 +317,8 @@ window.addEventListener('keydown', (e) => {
     e.preventDefault();
     if (running && !e.repeat) game.heave();
   }
+  // Dev aid (?debug): P lobs a practice boulder at the shield, Shift+P one off to the side, to try Perfect Returns.
+  if (e.code === 'KeyP' && params.has('debug') && running && !e.repeat) game.practiceBall(e.shiftKey ? 6 : 0);
   if (e.code === 'Escape') {
     if (placing) cancelPlacing();
     if (aiming) cancelAiming();
@@ -1132,7 +1148,8 @@ function frame(now: number) {
           break;
         case 'deflect':
           // A light clink for a bounce; the full clang for a heave or a trick shot off the rim.
-          if (ev.parry) hitStop = Math.max(hitStop, 0.04);
+          // No hit-stop on a Perfect Return: freezing the sim would make the other balls harder to track.
+          if (ev.parry && !ev.perfect) hitStop = Math.max(hitStop, 0.04);
           if (ev.parry || ev.trick) sounds.clang(ev.parry);
           else sounds.clink();
           if (ev.trick) floater('Trick shot!', ev.x, game.cfg.shield.y, 'trick', 0.9);

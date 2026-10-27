@@ -436,6 +436,124 @@ describe('the shield and the balls', () => {
     expect(game.perfects).toBe(1);
   });
 
+  it('the bash rests 0.65 s after a press: presses in the rest are ignored, then it re-arms', () => {
+    const game = battle();
+    game.heave();
+    const first = game.shield.bashAt;
+    run(game, 0.5);
+    game.heave();
+    expect(game.shield.bashAt).toBe(first);
+    run(game, 0.2);
+    game.heave();
+    expect(game.shield.bashAt).toBeGreaterThan(first + 0.6);
+    expect(game.shield.bashAt).toBeCloseTo(game.time, 5);
+  });
+
+  it('a press during the bash rest cannot make a Perfect Return, and the ball still rebounds', () => {
+    const game = battle();
+    game.heave();
+    run(game, 0.4);
+    game.heave();
+    const b = ball(game, { x: 0, y: 4.9, vy: -20 });
+    run(game, 0.05);
+    expect(b.perfect).toBe(false);
+    expect(game.perfects).toBe(0);
+    expect(b.vy).toBeGreaterThan(0);
+  });
+
+  it('a Perfect Return leaves 1.3x faster than an ordinary return, never past maxSpeed * heaveSpeed', () => {
+    const speedAfter = (press: boolean, vy: number) => {
+      const game = battle();
+      game.heave();
+      run(game, 0.7);
+      expect(game.canHeave).toBe(false);
+      if (press) game.heave();
+      const b = ball(game, { x: 0, y: 4.9, vy });
+      run(game, 0.05);
+      expect(b.perfect).toBe(press);
+      return Math.hypot(b.vx, b.vy);
+    };
+    const cfg = makeConfig();
+    expect(speedAfter(true, -20) / speedAfter(false, -20)).toBeCloseTo(cfg.shield.perfectSpeed, 3);
+    expect(speedAfter(true, -60)).toBeLessThanOrEqual(cfg.balls.maxSpeed * cfg.shield.heaveSpeed + 1e-9);
+  });
+
+  it('with the heave cooling but the bash ready, a press is perfect without a plough', () => {
+    const game = battle();
+    game.heave();
+    run(game, 0.7);
+    expect(game.canHeave).toBe(false);
+    expect(game.heave()).toBe(true);
+    const b = ball(game, { x: 0, y: 4.9, vy: -20 });
+    run(game, 0.05);
+    expect(b.perfect).toBe(true);
+    expect(b.heaved).toBe(false);
+    expect(b.lines).toBe(0);
+  });
+
+  it('a perfect ball keeps its bonus off a raised shield front, then spends it for 1.5x on an ordinary orc', () => {
+    const dmg = (perfect: boolean) => {
+      const game = battle();
+      const front = enemy({ kind: 'shieldOrc', x: 5, y: 30, hp: 14, maxHp: 14, shielded: true });
+      const orc = enemy({ x: -8, y: 30, hp: 100, maxHp: 100, state: 'stand' });
+      game.enemies.push(front, orc);
+      const b = ball(game, { x: 5, y: 29.2, vx: 0, vy: 20, perfect });
+      game.step();
+      expect(game.events.some((e) => e.type === 'clang')).toBe(true);
+      expect(front.hp).toBe(14);
+      expect(b.perfect).toBe(perfect);
+      b.x = -8;
+      b.y = 29.2;
+      b.vx = 0;
+      b.vy = 20;
+      b.passing = null;
+      for (let i = 0; i < 30 && orc.hp === 100; i++) game.step();
+      expect(orc.hp).toBeLessThan(100);
+      expect(b.perfect).toBe(false);
+      return 100 - orc.hp;
+    };
+    expect(dmg(true)).toBeCloseTo(dmg(false) * makeConfig().shield.perfectDamage, 5);
+  });
+
+  it('the perfect event names the ball and the contact time', () => {
+    const game = battle();
+    game.heave();
+    run(game, 0.05);
+    ball(game, { id: 7, x: 0, y: 4.9, vy: -20 });
+    game.events = [];
+    let ev: { type: string; ball?: number; at?: number } | undefined;
+    for (let i = 0; i < 10 && !ev; i++) {
+      game.step();
+      ev = game.events.find((e) => e.type === 'perfect');
+    }
+    expect(ev).toMatchObject({ ball: 7 });
+    expect(ev!.at).toBe(game.time);
+    expect(game.events.find((e) => e.type === 'deflect')).toMatchObject({ perfect: true });
+  });
+
+  it('a perfect ball stays perfect through a bumper rebound', () => {
+    const cfg = quiet();
+    cfg.bumpers.enabled = true;
+    const game = battle(1, cfg);
+    const t = game.bumpers()[2];
+    game.setShield(-15);
+    run(game, 0.5);
+    const b = ball(game, { x: t.x + 0.3, y: t.y + 2, vy: -20, perfect: true });
+    run(game, 0.15);
+    expect(b.banked).toBe(true);
+    expect(b.perfect).toBe(true);
+  });
+
+  it('practiceBall lobs a ball down at the shield', () => {
+    const game = battle();
+    game.practiceBall(3);
+    expect(game.balls).toHaveLength(1);
+    const b = game.balls[0];
+    expect(b.x).toBeCloseTo(game.shield.x + 3, 5);
+    expect(b.y).toBeGreaterThan(game.cfg.shield.y);
+    expect(b.vy).toBeLessThan(0);
+  });
+
   it('bank shots: tower turrets (when switched on) bounce balls back up for +2 combo', () => {
     expect(battle().bumpers()).toHaveLength(0);
     const on = () => {

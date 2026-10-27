@@ -405,6 +405,8 @@ export class BattleScene {
   private defenderObjs = new Map<number, { kind: PlacedKind; obj: THREE.Group | null }>();
   /** Placement ghost: where a defender would go, green if it fits. */
   private shake = 0;
+  /** 0 turns camera shake off (a player setting); 1 is full. */
+  shakeScale = 1;
   // Steep enough (about 57 degrees at the wall) that the wall doesn't hide the fighting at its foot.
   // The wall sits low on the screen so most of it is battlefield.
   private camBase = new THREE.Vector3(0, CAM_Y, CAM_Z);
@@ -1221,7 +1223,7 @@ export class BattleScene {
     this.updateGhost(time);
 
     this.shake = Math.max(0, this.shake - dt * 2.5);
-    const k = this.shake * this.shake;
+    const k = this.shake * this.shake * this.shakeScale;
     // Looking ahead glides the camera up the field and down closer to the horde (eased), and back.
     this.lookNow += (this.lookAhead - this.lookNow) * Math.min(1, dt * 2.2);
     const ahead = this.lookNow * this.lookNow * (3 - 2 * this.lookNow) * LOOK_AHEAD;
@@ -1316,14 +1318,15 @@ export class BattleScene {
       tmpV.set(b.x, y, -b.y);
       this.balls.setMatrixAt(n, tmpM.compose(tmpV, tmpQ.setFromAxisAngle(FORWARD, this.time * 3 + b.id), tmpS.setScalar(size)));
       this.balls.setColorAt(n++, tmpC.set(color));
-      const glow = (b.heaved && b.lines > 0 ? 6 : b.combo >= 10 ? 5 : 3.5) * r * size;
+      const glow = (b.perfect ? 6.5 : b.heaved && b.lines > 0 ? 6 : b.combo >= 10 ? 5 : 3.5) * r * size;
       this.halos.setMatrixAt(h, tmpM.compose(tmpV, camQ, tmpS.set(glow, glow, 1)));
       this.halos.setColorAt(h++, tmpC.set(color).multiplyScalar(b.kind === 'pebble' ? 0.4 : 0.8));
       // A comet trail, longer and hotter with the combo.
       if (!b.stuck) {
-        const hot = b.combo >= 10 || (b.heaved && b.lines > 0);
+        const hot = b.perfect || b.combo >= 10 || (b.heaved && b.lines > 0);
+        // A Perfect Return burns an orange trail until it lands its hit.
         this.fireworks.burst(b.x, BALL_Y, -b.y, {
-          count: hot ? 3 : 1.2, colors: [color, '#ffffff'], speed: 0.8, life: hot ? 0.45 : 0.3, size: r * size * (hot ? 1.8 : 1.3), gravity: 0, drag: 4,
+          count: hot ? 3 : 1.2, colors: b.perfect ? ORANGE : [color, '#ffffff'], speed: 0.8, life: hot ? 0.45 : 0.3, size: r * size * (hot ? 1.8 : 1.3), gravity: 0, drag: 4,
         });
       }
     }

@@ -200,7 +200,7 @@ export type ShieldTrack = (typeof SHIELD_TRACKS)[number];
 export type GameEvent =
   | { type: 'kill'; x: number; y: number; kind: EnemyKind }
   /** A ball or boulder hit the shield. parry: a heave power hit. trick: an edge-zone trick shot. */
-  | { type: 'deflect'; x: number; y: number; parry: boolean; trick: boolean }
+  | { type: 'deflect'; x: number; y: number; parry: boolean; trick: boolean; perfect?: boolean }
   /** A ball left the shield at (x, y) with this velocity: the render shows the outgoing angle. */
   | { type: 'shieldBounce'; x: number; y: number; vx: number; vy: number }
   /** A heave smashed through an orc line from x0 to x1. */
@@ -218,7 +218,7 @@ export type GameEvent =
   | { type: 'floorDown'; x: number; y: number; floorsLeft: number }
   | { type: 'heave'; x: number }
   /** A heave pressed just before contact: the ball is empowered (a Perfect Return). */
-  | { type: 'perfect'; x: number; y: number }
+  | { type: 'perfect'; x: number; y: number; at: number; ball: number }
   /** The keep's call to arms. */
   | { type: 'power'; kind: PowerKind }
   /** A ball bounced off a tree line (side: -1 left, 1 right), or off one of the field's structures. */
@@ -329,7 +329,7 @@ export class Game {
   events: GameEvent[] = [];
 
   /** The paddle. targetX is where the mouse is; x chases it at the speed cap. */
-  shield = { x: 0, targetX: 0, vx: 0, heaveAt: -99, readyAt: 0 };
+  shield = { x: 0, targetX: 0, vx: 0, heaveAt: -99, readyAt: 0, bashAt: -99, bashReadyAt: 0 };
   tower: SiegeTower | null = null;
   /** Barrel blasts waiting to go off (chain reactions run through this queue). */
   private blasts: { x: number; y: number; at: number; mult: number; ball: number }[] = [];
@@ -463,8 +463,13 @@ export class Game {
   heave(): boolean {
     if (this.phase !== 'battle' && this.phase !== 'preview') return false;
     const released = this.releaseStuck();
-    if (!this.canHeave) return released;
     const s = this.shield;
+    // The bash: every fresh press (never a held one, the input layer drops key repeats) arms a Perfect Return
+    // for the window, then rests for bashCooldown. Pressing during the rest does nothing, so it can't refresh early.
+    if (this.time < s.bashReadyAt) return released;
+    s.bashAt = this.time;
+    s.bashReadyAt = this.time + this.cfg.shield.bashCooldown;
+    if (!this.canHeave) return true;
     s.heaveAt = this.time;
     s.readyAt = this.time + this.heaveCooldown();
     this.events.push({ type: 'heave', x: s.x });
@@ -474,6 +479,13 @@ export class Game {
       if (!b.stuck && !b.heaved && b.vy > 0 && this.time - b.hitShieldAt <= this.heaveWindow()) this.powerUp(b);
     }
     return true;
+  }
+
+  /** Dev aid: lobs a practice boulder down at the shield from up the field, to try Perfect Returns without a run. */
+  practiceBall(offset = 0): void {
+    const sy = this.cfg.shield.y;
+    const b = this.addBall('claimed', this.shield.x + offset, sy + 16, 0, -this.cfg.balls.speed);
+    b.primary = false;
   }
 
   /**
@@ -1887,22 +1899,33 @@ export class Game {
     b.perfect = false;
     b.hitShieldAt = this.time;
     b.passing = null;
+    // Judged on the sim clock at contact, so frame rate can't change the result.
     const heaved = this.time - s.heaveAt <= this.heaveWindow();
+    const perfect = this.time - s.bashAt <= this.heaveWindow();
     if (heaved) {
       this.powerUp(b);
-      // A Perfect Return: the press timed just before contact. The first ball to land spends it.
-      b.perfect = true;
       s.heaveAt = -99;
-      this.perfects++;
-      this.events.push({ type: 'perfect', x: b.x, y: this.cfg.shield.y });
     }
-    if (this.stickyCatches > 0 && !heaved) {
+    if (perfect) {
+      // A Perfect Return: a fresh press just before contact. The first ball to land spends it, and a
+      // ball that was already perfect is only refreshed (the flag is set again, nothing multiplies twice).
+      const cap = c.maxSpeed * this.cfg.shield.heaveSpeed;
+      const sp = Math.hypot(b.vx, b.vy) || 1;
+      const out = Math.min(cap, sp * this.cfg.shield.perfectSpeed);
+      b.vx *= out / sp;
+      b.vy *= out / sp;
+      b.perfect = true;
+      s.bashAt = -99;
+      this.perfects++;
+      this.events.push({ type: 'perfect', x: b.x, y: this.cfg.shield.y, at: this.time, ball: b.id });
+    }
+    if (this.stickyCatches > 0 && !heaved && !perfect) {
       this.stickyCatches--;
       b.stuck = true;
       b.stuckOffset = b.x - s.x;
       b.stuckAt = this.time;
     }
-    this.events.push({ type: 'deflect', x: b.x, y: this.cfg.shield.y, parry: heaved, trick });
+    this.events.push({ type: 'deflect', x: b.x, y: this.cfg.shield.y, parry: heaved, trick, perfect });
     this.events.push({ type: 'shieldBounce', x: b.x, y: this.cfg.shield.y, vx: b.vx, vy: b.vy });
   }
 
@@ -2249,9 +2272,9 @@ export class Game {
     const mult = this.ballGoldMult(b);
     const boost = (b.banked ? this.cfg.bumpers.bankDamage : 1) * (b.perfect ? this.cfg.shield.perfectDamage : 1);
     b.banked = false;
-    b.perfect = false;
 
     // A raised shield: front hits do nothing at all, not even to a heave or the Royal Ball.
+    // They do no damage, so a Perfect Return survives the bounce.
     if (e.shielded) {
       const cd = Math.hypot(b.x - e.x, b.y - e.y) || 1;
       if ((b.y - e.y) / cd < -this.cfg.shieldOrc.shieldArc) {
@@ -2266,6 +2289,9 @@ export class Game {
         return;
       }
     }
+
+    // This is the damaging impact: the Perfect Return's 1.5x (in boost) is spent here.
+    b.perfect = false;
 
     if (b.lines > 0 && e.kind !== 'warlord') {
       // Heave power shot: smash through the whole line without bouncing.
