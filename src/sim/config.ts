@@ -253,8 +253,7 @@ export const defaultConfig = {
     towerHalf: 1.5,
     /** The wall walk reaches this far behind the wall's back face. */
     wallSlack: 0.5,
-    /** Range multipliers by ground: each storey of tower adds 25% reach; the courtyard reaches less far. */
-    towerRange: 1.25,
+    /** Range multiplier in the courtyard (tower tops get towers.reach). */
     courtyardRange: 0.8,
     /** Each extra defender of the same kind costs this much more than the last. */
     priceGrowth: 1.25,
@@ -274,8 +273,16 @@ export const defaultConfig = {
     chapel: { healPerSec: 6 },
     forge: { catapultDamage: 1.4 },
   },
-  /** Towers the player builds on the wall walk or stacks on the joints' towers, a storey at a time. */
-  towers: { cost: 50, costGrowth: 1.3, maxStoreys: 3 },
+  /**
+   * Towers: the wall starts level and the player builds them on the wall walk, a storey at a time.
+   * costs[n - 1] is the price of a tower's nth storey, so one tall tower costs what several low ones do.
+   * reach[n - 1] is the range multiplier on top of n storeys (each storey adds less than the last).
+   * Towers draw fire: a rock, bolt or boulder aimed within drawRadius of one turns on it with chance
+   * drawPerStorey x storeys, and one landing within towerHalf + hitGrowth x (storeys - 1) of it hits the
+   * tower, not the wall. Its top storey has storeyHp; at 0 it falls and the next one down takes the hits.
+   * Standing storeys mend when a wave is cleared; fallen ones have to be bought again.
+   */
+  towers: { costs: [40, 70, 120], maxStoreys: 3, reach: [1.3, 1.55, 1.75], storeyHp: 50, hitGrowth: 0.4, drawPerStorey: 0.12, drawRadius: 12 },
   /**
    * Coverage: what each defender can reach decides where it is worth placing.
    * Crossbows shoot straight up a lane (tower tops can angle 15 degrees), archers cover

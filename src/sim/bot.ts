@@ -95,15 +95,17 @@ function randomShop(game: Game, rng: Rng): void {
 
 /**
  * What a sensible player buys, in order, and where it goes (x, y on the castle; the wall
- * walk is y -2 to 0, the courtyard behind it). Crossbows go on the inner tower tops
- * (x -4, 4, -12, 12), where they can angle across lanes at the catapults; archers spread
+ * walk is y -2 to 0, the courtyard behind it). The two inner crossbows go on one-storey
+ * towers it builds (x -4, 4), where they can angle across lanes at the catapults; archers spread
  * between them so their cones cover every section against boulders; soldiers and
  * catapults stand back in the courtyard.
  */
-const BUILD_ORDER: [DefenderKind, number, number][] = [
+const BUILD_ORDER: [DefenderKind | 'tower', number, number][] = [
+  ['tower', -4, -1],
   ['crossbow', -4, -1],
   ['soldiers', 0, -5.5],
   ['archers', 0, -1],
+  ['tower', 4, -1],
   ['crossbow', 4, -1],
   ['archers', -8, -1],
   ['archers', 8, -1],
@@ -119,6 +121,11 @@ const BUILD_ORDER: [DefenderKind, number, number][] = [
 function plannedShop(game: Game): void {
   repairBelow(game, 0.5);
   for (const [kind, x, y] of BUILD_ORDER) {
+    if (kind === 'tower') {
+      // A one-storey tower (the wall starts level), built again if it was knocked down.
+      if (!game.stacks.some((s) => Math.abs(s.x - x) < 0.01) && !game.buildTower(x, y)) return;
+      continue;
+    }
     if (!game.unlocked(kind)) continue;
     if (!placeAt(game, kind, x, y)) return;
   }

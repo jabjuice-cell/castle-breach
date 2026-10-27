@@ -1,7 +1,7 @@
 import { type Config, makeConfig } from './config';
 import {
   type Defender, type DefenderKind, type Levels, type PlacedKind, type Track,
-  type Stack, emptyLevels, groundAt, jointStacks, onWall, stackAt, trackMult, upgradeCost,
+  type Stack, emptyLevels, groundAt, onWall, stackAt, trackMult, upgradeCost,
 } from './defenders';
 import { type Contraption, footprint } from './contraptions';
 import { type Obstacle, contact, needsHeave, nearestOn, plantTrees } from './obstacles';
@@ -299,6 +299,8 @@ export type GameEvent =
   | { type: 'ballLost'; x: number; kind: BallKind }
   | { type: 'caught'; x: number; y: number; kind: CapsuleKind }
   | { type: 'segmentDestroyed'; segment: number }
+  /** A tower's top storey fell; storeys is what is left (0: the tower is gone). */
+  | { type: 'storeyLost'; x: number; storeys: number }
   | { type: 'soldierDown'; x: number; y: number }
   | { type: 'waveStart'; wave: number }
   | { type: 'waveCleared'; wave: number; gold: number }
@@ -344,10 +346,8 @@ export class Game {
   soldiers: Soldier[] = [];
   /** Archers, crossbows and catapults the player has placed. */
   defenders: Defender[] = [];
-  /** Towers on the wall: the joints' own, plus any the player builds or stacks higher. */
-  stacks: Stack[];
-  /** Tower storeys bought this level (each costs more). */
-  storeysBuilt = 0;
+  /** Towers the player has built on the wall (it starts level). */
+  stacks: Stack[] = [];
   private nextDefenderId = 0;
   private nextBallId = 0;
   private nextBlockId = 0;
@@ -375,6 +375,8 @@ export class Game {
   earlyCalls = 0;
   /** Wall damage taken this run, by source, for balance work. */
   wallDamage: Record<string, number> = {};
+  /** Damage towers took this run instead of the wall, by source. */
+  towerDamage: Record<string, number> = {};
   events: GameEvent[] = [];
 
   /** The paddle. targetX is where the mouse is; x chases it at the speed cap. */
@@ -417,7 +419,6 @@ export class Game {
     this.segmentHp = new Array(cfg.wall.segments).fill(cfg.wall.segmentHp);
     this.gold = cfg.economy.warChest;
     this.shieldLevels = { ...cfg.bonuses.shield };
-    this.stacks = jointStacks(cfg);
     // Copies: trees come down during the level, and the next level starts with its own.
     const fixed = (cfg.obstacles.levels[Math.min(level, cfg.obstacles.levels.length - 1)] ?? []).map((o) => ({ ...o }));
     const k = cfg.contraptions;
@@ -855,19 +856,27 @@ export class Game {
     return this.count(kind) > 0;
   }
 
-  /** Range multiplier from where a defender stands: each storey of tower under it adds to its reach. */
+  /** Range multiplier from where a defender stands: each storey of tower under it adds to its reach, less each time. */
   rangeMult(d: Defender): number {
-    const c = this.cfg.castle;
-    if (d.ground === 'tower') return 1 + (c.towerRange - 1) * (stackAt(this.cfg, this.stacks, d.x, d.y)?.storeys ?? 1);
-    return d.ground === 'courtyard' ? c.courtyardRange : 1;
+    if (d.ground === 'tower') {
+      const reach = this.cfg.towers.reach;
+      const n = stackAt(this.cfg, this.stacks, d.x, d.y)?.storeys ?? 1;
+      return reach[Math.min(n, reach.length) - 1];
+    }
+    return d.ground === 'courtyard' ? this.cfg.castle.courtyardRange : 1;
   }
 
   // ---- towers: built on the wall and stacked like blocks ---------------------
 
-  /** Price of the next tower storey. */
-  storeyCost(): number {
-    const t = this.cfg.towers;
-    return Math.round(t.cost * t.costGrowth ** this.storeysBuilt);
+  /** Price of the next storey on a tower (a new tower's first storey without one): the higher, the dearer. */
+  storeyCost(stack: Stack | null = null): number {
+    return this.cfg.towers.costs[stack?.storeys ?? 0] ?? Infinity;
+  }
+
+  /** What building at (x, y) costs: the next storey of the tower there, or a new tower's first. */
+  storeyCostAt(x: number, y: number): number {
+    const plan = this.towerPlan(x, y);
+    return this.storeyCost(plan.ok ? plan.stack : stackAt(this.cfg, this.stacks, x, y) ?? null);
   }
 
   /**
@@ -888,15 +897,49 @@ export class Game {
   /** Builds a tower storey at (x, y): stacks it on the tower there, or starts a new tower. */
   buildTower(x: number, y: number): boolean {
     const plan = this.towerPlan(x, y);
-    const cost = this.storeyCost();
-    if (!this.shopOpen || !plan.ok || this.gold < cost) return false;
+    if (!plan.ok) return false;
+    const cost = this.storeyCost(plan.stack);
+    if (!this.shopOpen || this.gold < cost) return false;
     this.gold -= cost;
-    this.storeysBuilt++;
-    if (plan.stack) plan.stack.storeys++;
-    else this.stacks.push({ x, storeys: 1 });
+    const hp = this.cfg.towers.storeyHp;
+    if (plan.stack) {
+      plan.stack.storeys++;
+      plan.stack.hp = hp;
+    } else this.stacks.push({ x, storeys: 1, hp });
     // Defenders standing there are now up on the tower.
-    for (const d of this.defenders) d.ground = groundAt(this.cfg, d.x, d.y, this.stacks);
+    this.reground();
     return true;
+  }
+
+  /** Re-reads what every defender stands on, after a tower goes up or comes down. */
+  private reground(): void {
+    for (const d of this.defenders) d.ground = groundAt(this.cfg, d.x, d.y, this.stacks);
+  }
+
+  /** The tower a shot landing on the wall at x hits, if any: taller towers are bigger targets. */
+  towerHitAt(x: number): Stack | undefined {
+    const t = this.cfg.towers;
+    return this.stacks.find((s) => Math.abs(x - s.x) <= this.cfg.castle.towerHalf + t.hitGrowth * (s.storeys - 1));
+  }
+
+  /** Damages a tower's top storey; when it gives out, that storey falls and anyone up there is lower down. */
+  private damageTower(s: Stack, amount: number, source: string): void {
+    this.towerDamage[source] = (this.towerDamage[source] ?? 0) + amount;
+    s.hp -= amount;
+    if (s.hp > 0) return;
+    s.storeys--;
+    s.hp = this.cfg.towers.storeyHp;
+    this.events.push({ type: 'storeyLost', x: s.x, storeys: s.storeys });
+    if (s.storeys <= 0) this.stacks.splice(this.stacks.indexOf(s), 1);
+    this.reground();
+  }
+
+  /** Where a shot aimed at tx on the wall actually goes: a tall tower near it may draw it in. */
+  private drawnTo(tx: number): number {
+    const t = this.cfg.towers;
+    let best: Stack | undefined;
+    for (const s of this.stacks) if (Math.abs(s.x - tx) <= t.drawRadius && (!best || s.storeys > best.storeys)) best = s;
+    return best && this.rng.next() < t.drawPerStorey * best.storeys ? best.x : tx;
   }
 
   /** The stretch of wall a soldier company holds: its section plus a spill into each neighbour. */
@@ -1178,6 +1221,8 @@ export class Game {
     const gold = e.clearBase + e.clearPerWave * w;
     this.addGold(gold);
     this.renown += (r.perWaveBase + r.perWave * w) * (1 + (this.earlyBonus.get(w) ?? 0));
+    // Towers still standing mend their top storey.
+    for (const s of this.stacks) s.hp = this.cfg.towers.storeyHp;
     this.events.push({ type: 'waveCleared', wave: w, gold });
   }
 
@@ -1673,7 +1718,8 @@ export class Game {
   /** Throws a rock or boulder at the wall at tx, landing after flight seconds (default: its normal speed). */
   private throwAtWall(x: number, y: number, kind: 'rock' | 'boulder' | 'enemyBolt', tx?: number, flight?: number): void {
     const hw = this.cfg.field.halfWidth;
-    const target = tx ?? (kind === 'boulder' ? this.boulderTarget(x) : Math.max(-hw + 1, Math.min(hw - 1, x + this.rng.range(-8, 8))));
+    const aimed = tx ?? (kind === 'boulder' ? this.boulderTarget(x) : Math.max(-hw + 1, Math.min(hw - 1, x + this.rng.range(-8, 8))));
+    const target = this.stacks.length ? this.drawnTo(aimed) : aimed;
     const dx = target - x;
     const dy = 0 - y;
     const d = Math.hypot(dx, dy);
@@ -1987,7 +2033,9 @@ export class Game {
         } else if (p.y <= 0) {
           const seg = this.segmentAt(p.x);
           this.missed++;
-          this.damageSegment(seg, p.damage, p.x, p.kind);
+          const tower = this.towerHitAt(p.x);
+          if (tower) this.damageTower(tower, p.damage, p.kind);
+          else this.damageSegment(seg, p.damage, p.x, p.kind);
           this.events.push({ type: 'wallHit', x: p.x, y: 0, segment: seg, damage: p.damage });
           alive = false;
         }

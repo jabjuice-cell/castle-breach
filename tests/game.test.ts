@@ -39,6 +39,11 @@ const veteran = (cfg = makeConfig()) => {
   return cfg;
 };
 
+/** Towers on the old joint spots (the wall itself starts level). */
+function towers(game: Game, xs = [-20, -12, -4, 4, 12, 20], storeys = 1) {
+  for (const x of xs) game.stacks.push({ x, storeys, hp: game.cfg.towers.storeyHp });
+}
+
 /** A game in battle with an empty field: no blocks coming and the Royal Ball put away. */
 function battle(seed = 1, cfg = quiet()) {
   const game = new Game(seed, cfg);
@@ -809,6 +814,7 @@ describe('run loop', () => {
 
   it('defenders go exactly where they are put on the castle, clear of each other', () => {
     const game = new Game(1, veteran());
+    towers(game);
     game.gold = 1000;
     expect(game.place('catapult', 0, 20)).toBe(false); // out on the battlefield
     expect(game.place('crossbow', -3.5, -0.5)).toBe(true); // no snapping: it stands where it was put
@@ -827,6 +833,7 @@ describe('run loop', () => {
 
   it('coverage: crossbows shoot up a lane, tower tops angle wider, catapults have a blind spot', () => {
     const game = new Game(1, veteran());
+    towers(game);
     game.gold = 2000;
     game.place('crossbow', -1.8, -1); // a wall spot
     game.place('crossbow', 4, -1); // a tower top
@@ -843,6 +850,7 @@ describe('run loop', () => {
 
   it('aims crossbows, archers and catapults in the setup, further round from a tower top', () => {
     const game = new Game(1, veteran(quiet()));
+    towers(game);
     game.gold = 2000;
     game.place('crossbow', -1.8, -1); // the wall walk
     game.place('crossbow', 4, -1); // a tower top
@@ -866,25 +874,116 @@ describe('run loop', () => {
     expect(game.aim(tower.id, { x: 0, y: 30 })).toBe(false); // not mid-battle
   });
 
-  it('builds towers on the wall and stacks them; each storey adds 25% reach', () => {
+  it('the wall starts level; towers cost 40, 70, 120 and reach 1.3, 1.55, 1.75', () => {
     const game = new Game(1, veteran(quiet()));
     game.gold = 2000;
-    game.place('archers', 0, -1); // the wall walk, between towers
+    expect(game.stacks).toHaveLength(0);
+    game.place('archers', -12, -1); // a former joint: just the wall now
     const squad = game.defenders[0];
+    expect(squad.ground).toBe('wall');
     expect(game.rangeMult(squad)).toBe(1);
-    expect(game.storeyCost()).toBe(50);
-    expect(game.buildTower(0, -1)).toBe(true); // a new tower, under the squad
+    expect(game.storeyCost()).toBe(40);
+    expect(game.buildTower(-12, -1)).toBe(true); // a new tower, under the squad
     expect(squad.ground).toBe('tower');
-    expect(game.rangeMult(squad)).toBeCloseTo(1.25);
-    expect(game.storeyCost()).toBe(65);
-    expect(game.buildTower(0.5, -1)).toBe(true); // stacks on the same tower
-    expect(game.rangeMult(squad)).toBeCloseTo(1.5);
-    expect(game.buildTower(0, -1)).toBe(true);
-    expect(game.towerPlan(0, -1)).toEqual({ ok: false, why: 'As tall as it goes' });
-    expect(game.towerPlan(2, -1).ok).toBe(false); // too close to it and the joint's tower
+    expect(game.rangeMult(squad)).toBeCloseTo(1.3);
+    const stack = game.stacks[0];
+    expect(game.storeyCost(stack)).toBe(70);
+    expect(game.buildTower(-11.5, -1)).toBe(true); // stacks on the same tower
+    expect(game.rangeMult(squad)).toBeCloseTo(1.55);
+    expect(game.storeyCost(stack)).toBe(120);
+    expect(game.buildTower(-12, -1)).toBe(true);
+    expect(game.rangeMult(squad)).toBeCloseTo(1.75);
+    expect(game.storeyCost(stack)).toBe(Infinity);
+    expect(game.towerPlan(-12, -1)).toEqual({ ok: false, why: 'As tall as it goes' });
+    expect(game.towerPlan(-10, -1).ok).toBe(false); // too close to it
     expect(game.towerPlan(10, -6).ok).toBe(false); // the courtyard
-    expect(game.buildTower(-12, -1)).toBe(true); // a joint's tower goes up to two storeys
-    expect(game.stacks.find((t) => t.x === -12)!.storeys).toBe(2);
+    // Other towers start at 40 each: no price growth across the wall.
+    const gold = game.gold;
+    expect(game.buildTower(0, -1)).toBe(true);
+    expect(game.buildTower(12, -1)).toBe(true);
+    expect(gold - game.gold).toBe(80);
+    expect(game.stacks.map((t) => t.storeys)).toEqual([3, 1, 1]);
+  });
+
+  it('the wall starts level: no towers until the player builds them', () => {
+    const cfg = quiet();
+    cfg.unlocks.defenders = ['crossbow', 'mage'];
+    const game = new Game(1, cfg, 0);
+    game.gold = 1000;
+    expect(game.stacks).toHaveLength(0);
+    expect(game.canPlace('mage', 4, -1)).toBe(false);
+    expect(game.buildTower(4, -1)).toBe(true);
+    expect(game.canPlace('mage', 4, -1)).toBe(true);
+  });
+
+  it('enemy shots that land on a tower hit it, not the wall; its top storey falls and the tower shrinks', () => {
+    const game = new Game(1, veteran(quiet()));
+    game.gold = 2000;
+    game.buildTower(0, -1);
+    game.buildTower(0, -1);
+    expect(game.place('crossbow', 0, -1)).toBe(true);
+    const cb = game.defenders[0];
+    expect(game.rangeMult(cb)).toBeCloseTo(1.55);
+    game.endSetup();
+    game.plan.groups = [];
+    game.skipPreview();
+    game.balls = [];
+    game.royalDue = Infinity;
+    game.enemies.push(enemy({ x: 0, y: 60, state: 'stand', hp: 1e9 }));
+    const seg = game.segmentAt(0);
+    const before = game.segmentHp[seg];
+    game.events = [];
+    const shot = () => game.projectiles.push(boulder({ y: 0.5, flight: 1 }));
+    shot();
+    shot();
+    run(game, 0.5);
+    expect(game.segmentHp[seg]).toBe(before);
+    expect(game.stacks[0].storeys).toBe(1);
+    expect(game.events.some((e) => e.type === 'storeyLost')).toBe(true);
+    expect(game.rangeMult(cb)).toBeCloseTo(1.3);
+    shot();
+    shot();
+    run(game, 0.5);
+    expect(game.stacks).toHaveLength(0);
+    expect(cb.ground).toBe('wall');
+    expect(game.segmentHp[seg]).toBe(before);
+  });
+
+  it('a taller tower is a wider target', () => {
+    const game = new Game(1, quiet());
+    towers(game, [0]);
+    expect(game.towerHitAt(1.8)).toBeUndefined();
+    game.stacks[0].storeys = 2;
+    expect(game.towerHitAt(1.8)).toBe(game.stacks[0]);
+  });
+
+  it('tall towers draw fire', () => {
+    const landed = (game: Game) => {
+      let hits = 0;
+      for (let i = 0; i < 200; i++) {
+        game.projectiles = [];
+        (game as any).throwAtWall(-6 + (i % 13), 40, 'rock', 6);
+        const p = game.projectiles[game.projectiles.length - 1];
+        if (Math.abs(p.x + p.vx * (p.y / -p.vy)) < 0.01) hits++;
+      }
+      return hits;
+    };
+    const bare = new Game(1, quiet());
+    expect(landed(bare)).toBe(0);
+    const game = new Game(1, quiet());
+    towers(game, [0], 3);
+    const hits = landed(game);
+    expect(hits).toBeGreaterThan(50);
+    expect(hits).toBeLessThan(94);
+  });
+
+  it('standing towers mend when a wave is cleared', () => {
+    const game = battle();
+    towers(game, [0], 2);
+    game.stacks[0].hp = 7;
+    game.enemies = [];
+    (game as any).clearWave(game.wave);
+    expect(game.stacks[0].hp).toBe(game.cfg.towers.storeyHp);
   });
 
   it('moves defenders for free between waves; mid-battle costs gold and a pack-up', () => {
@@ -1042,6 +1141,7 @@ describe('run loop', () => {
 
   it('the castle catapult lobs fresh Royal Balls up the field', () => {
     const game = new Game(1, veteran(quiet()));
+    towers(game);
     game.gold = 150;
     expect(game.place('catapult', 4, -1)).toBe(true);
     game.endSetup();
@@ -1058,6 +1158,7 @@ describe('run loop', () => {
 
   it('archers loose a whole volley high into the air onto the thickest crowd', () => {
     const game = new Game(1, veteran(makeConfig({ crossbow: { range: -100 }, waves: { orcCatapultsBase: 0, orcCatapultsPerWave: 0 } })));
+    towers(game);
     game.gold = 80;
     expect(game.place('archers', -12, -1)).toBe(true);
     game.endSetup();
@@ -1076,6 +1177,7 @@ describe('run loop', () => {
 
   it('crossbows hunt orc catapults before the crowd', () => {
     const game = new Game(1, makeConfig({ archers: { range: -100 } }));
+    towers(game);
     game.place('crossbow', -4, -1);
     game.endSetup();
     game.plan.groups = [];
@@ -1688,6 +1790,7 @@ describe('the four new defenders', () => {
 
   it('each new kind buys, places and sells back', () => {
     const game = shop();
+    towers(game);
     const spots = { mage: [4, -1], ballista: [-4, -1], oil: [0, -1], spiketrap: [0, 15] } as const;
     for (const kind of ['mage', 'ballista', 'oil', 'spiketrap'] as const) {
       const before = game.gold;
@@ -1714,6 +1817,7 @@ describe('the four new defenders', () => {
 
   it('the mage goes only on a tower top', () => {
     const game = shop();
+    towers(game);
     expect(game.canPlace('mage', 0, -1)).toBe(false); // wall walk between towers
     expect(game.canPlace('mage', 4, -6)).toBe(false); // courtyard
     expect(game.canPlace('mage', 4, -1)).toBe(true);
@@ -1721,6 +1825,7 @@ describe('the four new defenders', () => {
 
   it('a mage blast hurts a whole crowd, less at the edge, and a taller tower reaches further', () => {
     const game = shop();
+    towers(game);
     game.place('mage', 4, -1);
     const d = game.defenders[0];
     expect(game.covers(d, 4, 55)).toBe(false);
@@ -1813,6 +1918,7 @@ describe('the four new defenders', () => {
 
   it('aiming: mage and ballista turn, oil and traps do not', () => {
     const game = shop();
+    towers(game);
     game.place('mage', 4, -1);
     game.place('ballista', -4, -1);
     game.place('oil', 0, -1);
@@ -1836,6 +1942,7 @@ describe('the four new defenders', () => {
     }
     for (const id of ['archers', 'fletching', 'mage', 'ballista', 'masonry', 'oil', 'soldiers', 'spiketrap']) expect(buyMeta(p, id)).toBe(true);
     const game = new Game(1, applyMeta(p.meta, 0), 0);
+    towers(game);
     game.gold = 1000;
     expect(game.place('mage', 4, -1)).toBe(true);
     expect(game.place('crossbow', -4, -1)).toBe(true);

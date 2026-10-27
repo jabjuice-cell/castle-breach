@@ -765,3 +765,139 @@ export function spikeTrapModel(): Vox {
   }
   return v;
 }
+
+// ---- the castle's own defenders, as small voxel figures -----------------------------
+
+const SKIN = '#e8c9a0';
+const STEEL = '#8a8f99';
+
+/** A small royal archer: blue tunic with gold trim, brown hood, a bow in the left hand. Faces -z, about 16 voxels tall. */
+export function archerModel(): Vox {
+  const v = new Vox();
+  v.box(-2, 0, -1, -1, 3, 0, '#5a3a22');
+  v.box(1, 0, -1, 2, 3, 0, '#5a3a22');
+  v.box(-2, 0, -1, -1, 0, -1, '#3a2414');
+  v.box(1, 0, -1, 2, 0, -1, '#3a2414');
+  v.box(-2, 4, -1, 2, 9, 0, PAL.blue);
+  v.box(-2, 4, -1, 2, 4, 0, PAL.gold);
+  v.box(-2, 6, -1, 2, 6, 0, PAL.gold);
+  v.box(-1, 9, -1, 1, 9, 0, PAL.gold);
+  // Arms: the right one by the side, the left one reaching out with the bow.
+  v.box(3, 6, -1, 3, 9, 0, PAL.blue);
+  v.set(3, 5, -1, SKIN);
+  v.box(-3, 7, -2, -3, 9, -1, PAL.blue);
+  v.set(-4, 7, -2, SKIN);
+  v.box(-4, 4, -3, -4, 10, -3, PAL.woodDark);
+  v.set(-4, 3, -2, PAL.woodDark);
+  v.set(-4, 11, -2, PAL.woodDark);
+  v.box(-4, 4, -1, -4, 10, -1, '#e8e0d0');
+  // Head, eyes, hood and cap with a gold feather; a quiver on the back.
+  v.box(-1, 10, -1, 1, 13, 0, SKIN);
+  v.set(-1, 12, -1, '#222');
+  v.set(1, 12, -1, '#222');
+  v.box(-2, 13, -2, 2, 14, 1, '#6b4423');
+  v.box(-1, 15, -1, 1, 15, 0, '#6b4423');
+  v.set(2, 15, 0, PAL.gold);
+  v.box(-1, 9, 1, 1, 12, 1, '#6b4423');
+  v.box(1, 6, 1, 1, 10, 1, PAL.wood);
+  v.set(1, 11, 1, '#ffffff');
+  return v;
+}
+
+/** A footman: steel helmet with a gold plume, blue-and-gold tabard, round shield, spear. Faces -z, about 17 voxels tall. */
+export function soldierModel(): Vox {
+  const v = new Vox();
+  v.box(-2, 0, -1, -1, 4, 0, STEEL);
+  v.box(1, 0, -1, 2, 4, 0, STEEL);
+  v.box(-2, 0, -1, -1, 1, -1, '#3a2414');
+  v.box(1, 0, -1, 2, 1, -1, '#3a2414');
+  v.box(-2, 5, -1, 2, 10, 0, PAL.blue);
+  v.box(0, 5, -1, 0, 10, -1, PAL.gold);
+  v.box(-2, 6, -1, 2, 6, 0, '#3a2a1a');
+  v.box(-3, 7, -1, -3, 10, 0, STEEL);
+  v.box(3, 7, -1, 3, 10, 0, STEEL);
+  // Head, eyes, helmet with cheek guards and a plume.
+  v.box(-1, 11, -1, 1, 13, 0, SKIN);
+  v.set(-1, 12, -1, '#222');
+  v.set(1, 12, -1, '#222');
+  v.box(-2, 11, -1, -2, 13, 0, STEEL);
+  v.box(2, 11, -1, 2, 13, 0, STEEL);
+  v.box(-2, 14, -2, 2, 15, 1, STEEL);
+  v.box(-1, 16, -1, 1, 16, 0, STEEL);
+  v.box(0, 17, -1, 0, 17, 0, PAL.gold);
+  // Round shield on the left arm.
+  for (let x = -7; x <= -1; x++) {
+    for (let y = 4; y <= 10; y++) {
+      const d = Math.hypot(x + 4, y - 7);
+      if (d > 2.6) continue;
+      v.set(x, y, -2, d > 1.8 ? STEEL : d < 0.8 ? PAL.gold : PAL.blue);
+    }
+  }
+  // Spear in the right hand.
+  v.box(4, 0, -1, 4, 20, -1, PAL.wood);
+  v.box(4, 21, -1, 4, 23, -1, '#c8ccd2');
+  v.set(4, 7, -1, SKIN);
+  v.set(4, 8, -1, SKIN);
+  return v;
+}
+
+/** The castle's wooden catapult: wheeled frame, throwing arm with a bucket holding a gold royal ball. Throws toward -z. */
+export function castleCatapultModel(): Vox {
+  const v = new Vox();
+  // Frame: side beams with cross beams, an axle at each end and big wheels.
+  v.box(-4, 3, -8, -3, 4, 8, PAL.wood);
+  v.box(3, 3, -8, 4, 4, 8, PAL.wood);
+  for (const z of [-7, 0, 7]) v.box(-4, 3, z, 4, 4, z, PAL.woodDark);
+  for (const z of [-5, 5]) {
+    v.box(-6, 3, z, 6, 3, z, PAL.woodDark);
+    for (const x of [-6, 5]) {
+      for (let dy = -3; dy <= 3; dy++) {
+        for (let dz = -3; dz <= 3; dz++) {
+          const d = Math.hypot(dy, dz);
+          if (d > 3.3) continue;
+          v.box(x, 3 + dy, z + dz, x + 1, 3 + dy, z + dz, d < 1.1 ? PAL.gold : d > 2.4 ? '#5a3a1a' : '#8a5a2e');
+        }
+      }
+    }
+  }
+  // Two uprights carrying the pivot.
+  v.box(-4, 5, -1, -3, 11, 0, PAL.woodDark);
+  v.box(3, 5, -1, 4, 11, 0, PAL.woodDark);
+  v.box(-4, 10, -1, 4, 10, 0, PAL.iron);
+  // The arm: rising from a counterweight at the back, over the pivot, to the bucket.
+  for (let z = 6; z >= -8; z--) {
+    const y = Math.round(10 - z * 0.5);
+    v.box(-1, y, z, 0, y + 1, z, PAL.wood);
+  }
+  v.box(-2, 3, 5, 1, 6, 7, PAL.iron);
+  v.cyl(0, -9, 2, 13, 13, PAL.woodDark, false);
+  v.cyl(0, -9, 2.4, 14, 14, PAL.woodDark, true);
+  v.blob(0, 16, -9, 2, 2, 2, '#e8b730', () => 0, 0);
+  v.set(-1, 17, -10, '#fff2a8');
+  // A royal pennant on the front beam.
+  v.box(-1, 5, -8, 1, 7, -8, PAL.blue);
+  v.set(0, 6, -8, PAL.gold);
+  return v;
+}
+
+/** A one-storey stone tower with crenellations and the blue-and-gold banner on the front (-z). */
+export function towerModel(): Vox {
+  const v = new Vox();
+  const rnd = seeded(11);
+  const stone = brick(PAL.stone, rnd);
+  v.box(-6, 0, -6, 6, 19, 6, stone);
+  for (let x = -6; x <= 6; x++) {
+    for (let z = -6; z <= 6; z++) {
+      if ((Math.abs(x) !== 6 && Math.abs(z) !== 6) || (x + z + 100) % 4 >= 2) continue;
+      v.box(x, 20, z, x, 21, z, stone);
+    }
+  }
+  v.box(-2, 0, -7, 2, 3, -7, '#3b2618');
+  v.box(-1, 4, -7, 1, 4, -7, '#3b2618');
+  v.box(-2, 9, -7, 2, 16, -7, PAL.blue);
+  v.box(-2, 9, -7, 2, 9, -7, PAL.gold);
+  v.box(-2, 9, -7, -2, 16, -7, PAL.gold);
+  v.box(2, 9, -7, 2, 16, -7, PAL.gold);
+  v.box(0, 12, -7, 0, 14, -7, PAL.gold);
+  return v;
+}

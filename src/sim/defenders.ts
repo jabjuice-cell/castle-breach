@@ -12,22 +12,12 @@ export type PlacedKind = DefenderKind;
 /** What a defender stands on, which changes its reach: tower tops reach further, the courtyard less far. */
 export type Ground = 'wall' | 'tower' | 'courtyard';
 
-/** The x of each tower: one on every joint of the wall, the ends included. */
-export function towerXs(cfg: Config): number[] {
-  const hw = cfg.field.halfWidth;
-  const seg = (hw * 2) / cfg.wall.segments;
-  return Array.from({ length: cfg.wall.segments + 1 }, (_, i) => -hw + i * seg);
-}
-
-/** A tower on the wall: one stands on every joint, and more can be built and stacked up storey by storey. */
+/** A tower the player has built on the wall, stacked up storey by storey. */
 export interface Stack {
   x: number;
   storeys: number;
-}
-
-/** The towers a castle starts with: one storey on each joint. */
-export function jointStacks(cfg: Config): Stack[] {
-  return towerXs(cfg).map((x) => ({ x, storeys: 1 }));
+  /** What the top storey has left before it falls. */
+  hp: number;
 }
 
 /** True if (x, y) is on the wall walk (towers included), not the courtyard behind. */
@@ -42,7 +32,7 @@ export function stackAt(cfg: Config, stacks: Stack[], x: number, y: number): Sta
 }
 
 /** The ground at (x, y): a tower top, the wall walk, or the courtyard behind. */
-export function groundAt(cfg: Config, x: number, y: number, stacks: Stack[] = jointStacks(cfg)): Ground {
+export function groundAt(cfg: Config, x: number, y: number, stacks: Stack[] = []): Ground {
   if (!onWall(cfg, y)) return 'courtyard';
   return stackAt(cfg, stacks, x, y) ? 'tower' : 'wall';
 }

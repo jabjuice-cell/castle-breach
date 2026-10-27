@@ -11,9 +11,6 @@ import enemyBoltUrl from '../assets/fx/enemy-bolt.webp';
 import craterUrl from '../assets/maps/crater.webp';
 import scorchUrl from '../assets/maps/scorch.webp';
 import courtyardUrl from '../assets/maps/courtyard.jpg';
-import archerUrl from '../assets/sprites/defender-archer.webp';
-import defCatapultUrl from '../assets/sprites/defender-catapult.webp';
-import soldierUrl from '../assets/sprites/defender-soldier.webp';
 import catapultUrl from '../assets/sprites/enemy-catapult.webp';
 import chuckerUrl from '../assets/sprites/enemy-chucker.webp';
 import gruntUrl from '../assets/sprites/enemy-grunt.webp';
@@ -42,9 +39,9 @@ const TOWER_DEBRIS = numbered(import.meta.glob<string>('../assets/fx/siege-debri
 const CAPSULE_ART = import.meta.glob<string>('../assets/fx/capsule-*.webp', { eager: true, import: 'default' });
 import { paintGround } from './ground';
 import { Terrain } from './terrain';
-import { ballistaModel, bigBallistaModel, mageModel, oilModel, spikeTrapModel } from './models';
+import { archerModel, ballistaModel, bigBallistaModel, castleCatapultModel, mageModel, oilModel, soldierModel, spikeTrapModel } from './models';
 import { VoxelOrcs } from './orcs';
-import { VoxBatch } from './voxels';
+import { VoxBatch, type Vox } from './voxels';
 import { ShieldModel } from './shield';
 import { ballGeometry, rockGeometry, ROCK_DEBRIS } from './voxelBalls';
 import { World } from './world';
@@ -132,10 +129,10 @@ const SHIELD_LEAN = -0.62;
 /** Orc sprites get a dark outline this thick (share of the art's longest side), so they stand out on grass. */
 const ORC_OUTLINE = 0.045;
 /** The ballista's voxel size: about 3.5 units across its bow. */
-const BALLISTA_VOX = 0.155;
+const BALLISTA_VOX = 0.116;
 /** Voxel size of the newer defenders' placeholder models. */
-const NEW_VOX: Partial<Record<PlacedKind, number>> = { mage: 0.15, ballista: 0.14, oil: 0.16, spiketrap: 0.155 };
-const NEW_MODELS: Partial<Record<PlacedKind, () => ReturnType<typeof ballistaModel>>> = { mage: mageModel, ballista: bigBallistaModel, oil: oilModel, spiketrap: spikeTrapModel };
+const NEW_VOX: Partial<Record<PlacedKind, number>> = { mage: 0.1125, ballista: 0.105, oil: 0.12, spiketrap: 0.116, archers: 0.075, soldiers: 0.07, catapult: 0.14 };
+const NEW_MODELS: Partial<Record<PlacedKind, () => Vox>> = { mage: mageModel, ballista: bigBallistaModel, oil: oilModel, spiketrap: spikeTrapModel, archers: archerModel, soldiers: soldierModel, catapult: castleCatapultModel };
 const SHIELD_LIFT = 0.25;
 /** It is a touch wider than its bounce line, so balls never seem to miss its rim. */
 const SHIELD_OVERHANG = 1.06;
@@ -165,8 +162,8 @@ const KILL_COLOR: Record<EnemyKind, string> = {
 /** Kinds that climb the wall before hacking at it (the rest smash it from the ground). */
 const CLIMBERS = new Set<EnemyKind>(['grunt', 'chucker', 'barrel', 'runner', 'rider', 'shieldOrc', 'drummer']);
 
-/** The castle's shape. Towers stand on the wall joints; defenders on them stand higher. */
-const WALL_H = 3;
+/** The castle's shape: a level wall; towers the player builds stand higher. */
+const WALL_H = 4;
 /** The gatehouse in the middle of the wall: half its width, and how far it rises above the wall. */
 const GATE_HALF = 2.6;
 const GATE_RISE = 1.5;
@@ -180,14 +177,14 @@ const WALL_VOX = 0.25;
  */
 function gateDoor(x: number, y: number): string | null {
   const ax = Math.abs(x);
-  // The arch: full width up to 2.5 high, narrowing over the top.
-  const half = y < 2.5 ? 1.5 : y < 2.85 ? 1.2 : y < 3.15 ? 0.85 : y < 3.4 ? 0.45 : 0;
+  // The arch: full width up to 3 high, narrowing over the top.
+  const half = y < 3 ? 1.5 : y < 3.35 ? 1.2 : y < 3.65 ? 0.85 : y < 3.9 ? 0.45 : 0;
   if (ax < half) {
-    if ((y > 0.5 && y < 0.75) || (y > 2.0 && y < 2.25)) return (Math.round(x / WALL_VOX) % 3 === 0) ? '#6a6660' : '#2b2420';
+    if ((y > 0.5 && y < 0.75) || (y > 2.5 && y < 2.75)) return (Math.round(x / WALL_VOX) % 3 === 0) ? '#6a6660' : '#2b2420';
     if (ax < 0.13) return '#3b2618';
     return (Math.floor(x / 0.5) + (y > 1.25 ? 1 : 0)) % 2 ? '#7a4a24' : '#8d5a2c';
   }
-  if (ax < half + 0.5 && y < 4) return (Math.floor(y / 0.5) + Math.floor(x / 0.5)) % 2 ? '#56544f' : '#4a4844';
+  if (ax < half + 0.5 && y < 4.5) return (Math.floor(y / 0.5) + Math.floor(x / 0.5)) % 2 ? '#56544f' : '#4a4844';
   return null;
 }
 
@@ -210,18 +207,14 @@ function masonry(ix: number, iy: number, salt: number): THREE.Color {
   else if (iy % 2 === 0) c.multiplyScalar(0.88);
   return c;
 }
-const TOWER_H = 4.5;
 const TOWER_HALF = 1.5;
 const TOWER_Z = 1;
 /** Each storey the player stacks on a tower adds this much height. */
-const STOREY_H = 2.5;
-/** How high the top of a tower of n storeys is. */
-const towerTop = (storeys: number) => TOWER_H + (storeys - 1) * STOREY_H;
+const STOREY_H = 2.25;
+/** How high the top of a tower of n storeys is: it rises from the ground, one storey above the level wall per storey. */
+const towerTop = (storeys: number) => WALL_H + storeys * STOREY_H;
 /** How a squad of archers stands: columns x rows around its spot. */
 const SQUAD_COLS = 6;
-/** Half-heights of the archer and soldier sprites: they come in crowds, so a little smaller than a grunt. */
-const ARCHER_SIZE = 0.8;
-const SOLDIER_SIZE = 0.85;
 /** A soldier company's banner group where it was placed (the rest muster at the wall). */
 const COMPANY = [[0, 0], [-0.7, 0.3], [0.7, 0.3], [-0.35, -0.4], [0.35, -0.4]];
 const SQUAD_SPACING = 0.75;
@@ -305,7 +298,6 @@ export class BattleScene {
   private voxelPos: THREE.Vector3[] = [];
   private voxelColor: THREE.Color[] = [];
   private segments: VoxelGroup[] = [];
-  private towerX: number[] = [];
   private stackMesh: THREE.InstancedMesh | null = null;
   /** The coming wave, mustered beyond the top of the field while it waits (drawn only, not in the sim). */
   private horde: Enemy[] = [];
@@ -345,9 +337,6 @@ export class BattleScene {
   private ballista = new VoxBatch().add(ballistaModel(), BALLISTA_VOX, new THREE.Vector3()).geometries().solid!;
   /** Lit and glowing geometry for the mage, ballista, cauldron and spike trap, built on first use. */
   private newGeo = new Map<PlacedKind, { solid: THREE.BufferGeometry | null; glow: THREE.BufferGeometry | null }>();
-  private catapultArt = imageSprite(defCatapultUrl, aspects['defender-catapult']);
-  private soldierArt = imageSprite(soldierUrl, aspects['defender-soldier']);
-  private archerArt = imageSprite(archerUrl, aspects['defender-archer']);
   /** The see-through defender that follows the mouse while placing or moving one, by kind. */
   private ghosts = new Map<PlacedKind, THREE.Group>();
   private ghostShown: { kind: PlacedKind; ok: boolean } | null = null;
@@ -507,9 +496,17 @@ export class BattleScene {
     for (const kind of ENEMY_KINDS) this.sprites[kind] = makeSprites(art[kind], SIZE[kind], kind === 'grunt' ? MAX_ENEMIES : 800);
     this.warlordSprites = WARLORD_STAGES.map((st) => makeSprites(imageSprite(st.url, 1, ORC_OUTLINE), SIZE.warlord * 1.15, 4));
     this.voxelOrcs = new VoxelOrcs(this.scene, (kind) => (kind === 'grunt' ? MAX_ENEMIES : 800));
-    // Soldiers and archers come in big crowds, so they are drawn a little smaller than a grunt.
-    this.soldierSprites = makeSprites(this.soldierArt, SOLDIER_SIZE, 400);
-    this.archerSprites = makeSprites(this.archerArt, ARCHER_SIZE, MAX_ARCHERS);
+    // Soldiers and archers come in big crowds: small voxel figures, one instanced mesh each.
+    const crowd = (kind: PlacedKind, max: number) => {
+      const mesh = new THREE.InstancedMesh(this.figureGeo(kind).solid!, new THREE.MeshLambertMaterial({ vertexColors: true }), max);
+      mesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(max * 3).fill(1), 3);
+      mesh.frustumCulled = false;
+      mesh.count = 0;
+      this.scene.add(mesh);
+      return mesh;
+    };
+    this.soldierSprites = crowd('soldiers', 400);
+    this.archerSprites = crowd('archers', MAX_ARCHERS);
 
     const shadowGeo = new THREE.PlaneGeometry(1.3, 0.8);
     shadowGeo.rotateX(-Math.PI / 2);
@@ -567,9 +564,9 @@ export class BattleScene {
     // to the orcs, so from the castle we see its back. Balls are drawn over it, so none hide behind it.
     this.shieldModel = new ShieldModel();
     this.scene.add(this.shieldModel.group);
-    const bearerGeo = new THREE.PlaneGeometry(2 * SOLDIER_SIZE * this.soldierArt.aspect * 1.15, 2 * SOLDIER_SIZE * 1.15).translate(0, SOLDIER_SIZE * 1.15, 0);
+    const bearerGeo = this.figureGeo('soldiers').solid!;
     for (let i = 0; i < 2; i++) {
-      const b = new THREE.Mesh(bearerGeo, new THREE.MeshBasicMaterial({ map: this.soldierArt.texture, alphaTest: 0.5 }));
+      const b = new THREE.Mesh(bearerGeo, new THREE.MeshLambertMaterial({ vertexColors: true }));
       this.bearers.push(b);
       this.scene.add(b);
     }
@@ -891,8 +888,8 @@ export class BattleScene {
   }
 
   /**
-   * A defender's figure, as billboards that face the camera: the crossbow tower or
-   * catapult, a squad of archers in ranks, or a soldier company's banner group.
+   * A defender's figure, in voxels: the crossbow, catapult and the rest, a squad of
+   * archers in ranks, or a soldier company's banner group.
    * A ghost is see-through and drawn over everything, so it shows wherever the mouse is.
    */
   private buildFigure(kind: PlacedKind, ghost: boolean): THREE.Group {
@@ -907,48 +904,39 @@ export class BattleScene {
       group.add(m);
       return group;
     }
-    if (NEW_MODELS[kind]) {
-      let geo = this.newGeo.get(kind);
-      if (!geo) {
-        geo = new VoxBatch().add(NEW_MODELS[kind]!(), NEW_VOX[kind]!, new THREE.Vector3()).geometries();
-        this.newGeo.set(kind, geo);
-      }
+    // Voxel figures: one model, or a squad of archers in ranks, or a soldier company's banner group.
+    const geo = this.figureGeo(kind);
+    const n = this.game.cfg.archers.archers;
+    const rows = Math.ceil(n / SQUAD_COLS);
+    const at: number[][] = kind === 'archers'
+      ? Array.from({ length: n }, (_, i) => [(i % SQUAD_COLS - (SQUAD_COLS - 1) / 2) * SQUAD_SPACING + (Math.floor(i / SQUAD_COLS) % 2) * 0.2, (Math.floor(i / SQUAD_COLS) - (rows - 1) / 2) * SQUAD_SPACING * 0.8])
+      : kind === 'soldiers' ? COMPANY : [[0, 0]];
+    for (const [dx, dz] of at) {
       // The lit part first: the ghost tint reads children[0]. The glow (orb, embers) shines unlit.
       for (const [part, g] of [['solid', geo.solid], ['glow', geo.glow]] as const) {
         if (!g) continue;
         const opts = { vertexColors: true, ...(ghost ? { transparent: true, depthTest: false, depthWrite: false } : {}) };
         const m = new THREE.Mesh(g, part === 'solid' ? new THREE.MeshLambertMaterial(opts) : new THREE.MeshBasicMaterial(opts));
         m.name = 'model';
+        m.position.set(dx, 0, dz);
         m.renderOrder = ghost ? 10 : 0;
         group.add(m);
       }
-      return group;
-    }
-    const art = kind === 'catapult' ? this.catapultArt : kind === 'archers' ? this.archerArt : this.soldierArt;
-    const h = kind === 'catapult' ? 4 : 2 * (kind === 'archers' ? ARCHER_SIZE : SOLDIER_SIZE);
-    const geo = new THREE.PlaneGeometry(h * art.aspect, h).translate(0, h / 2, 0);
-    const mat = ghost
-      ? new THREE.MeshBasicMaterial({ map: art.texture, transparent: true, alphaTest: 0.3, depthTest: false, depthWrite: false })
-      : new THREE.MeshBasicMaterial({ map: art.texture, alphaTest: 0.5 });
-    const at: number[][] = kind === 'archers'
-      ? Array.from({ length: this.game.cfg.archers.archers }, (_, i) => {
-        const rows = Math.ceil(this.game.cfg.archers.archers / SQUAD_COLS);
-        const col = i % SQUAD_COLS;
-        const row = Math.floor(i / SQUAD_COLS);
-        return [(col - (SQUAD_COLS - 1) / 2) * SQUAD_SPACING + (row % 2) * 0.2, (row - (rows - 1) / 2) * SQUAD_SPACING * 0.8];
-      })
-      : kind === 'soldiers' ? COMPANY : [[0, 0]];
-    for (const [dx, dz] of at) {
-      const m = new THREE.Mesh(geo, mat);
-      m.name = 'billboard';
-      m.position.set(dx, 0, dz);
-      m.renderOrder = ghost ? 10 : 0;
-      group.add(m);
     }
     return group;
   }
 
-  /** Keeps the ghost's billboards facing the camera, pulsing, and tinted by whether it fits. */
+  /** The lit and glowing geometry of a voxel defender's model, built on first use. */
+  private figureGeo(kind: PlacedKind) {
+    let geo = this.newGeo.get(kind);
+    if (!geo) {
+      geo = new VoxBatch().add(NEW_MODELS[kind]!(), NEW_VOX[kind]!, new THREE.Vector3()).geometries();
+      this.newGeo.set(kind, geo);
+    }
+    return geo;
+  }
+
+  /** Pulses the ghost and tints it by whether it fits. */
   private updateGhost(time: number) {
     const shown = this.ghostShown;
     if (!shown) return;
@@ -958,7 +946,6 @@ export class BattleScene {
       mat.color.set(shown.ok ? '#c8ffc8' : '#ff7a6a');
       mat.opacity = shown.ok ? 0.75 + Math.sin(time * 6) * 0.15 : 0.6;
     }
-    for (const child of ghost.children) if (child.name === 'billboard') child.quaternion.copy(this.camera.quaternion);
   }
 
   handleEvents(events: GameEvent[]) {
@@ -1241,13 +1228,22 @@ export class BattleScene {
           fw.burst(ev.x, 0.9, -ev.y, { count: 5, colors: ['#ffffff', '#ffd34a'], speed: 5, life: 0.25, size: 0.3, gravity: 4 });
           if (this.effects.length < 30 && Math.random() < 0.3) this.spawnEffect('impact', ev.x, -ev.y, 0.2, 0.9);
           break;
+        case 'storeyLost': {
+          // A storey is knocked off a tower: stone and dust fly from where its top was.
+          const top = towerTop(ev.storeys + 1);
+          for (let i = 0; i < 6; i++) this.burst(ev.x + (Math.random() - 0.5) * 2.5, top, TOWER_Z, 3, STONE[i % STONE.length], 10);
+          this.rockBurst(ev.x, top, TOWER_Z, 10, 9);
+          for (let i = 0; i < 4; i++) this.puff(ev.x + (Math.random() - 0.5) * 3, top - Math.random(), TOWER_Z, 3, '#d8ccb0', 1);
+          this.shake = Math.max(this.shake, 0.4);
+          break;
+        }
         case 'wallHit': {
           // Rock on stone: blocks of the wall fly, more and further for a bigger hit, with a puff of dust.
           const k = Math.min(1, ev.damage / 25);
-          for (let i = 0; i < 3 + k * 4; i++) this.burst(ev.x + (Math.random() - 0.5) * 1.5, 2.5, 0.3, 2 + Math.round(k * 2), STONE[i % STONE.length], 6 + k * 10);
-          this.rockBurst(ev.x, 2.2, 0.3, 4 + Math.round(k * 8), 7 + k * 8);
-          fw.burst(ev.x, 2, -0.2, { count: 10 + k * 40, colors: ['#e8d8b0', '#ffb43a', '#ffffff'], speed: 6 + k * 8, life: 0.45, size: 0.4, up: 0.5 });
-          for (let i = 0; i < 1 + k * 4; i++) this.puff(ev.x + (Math.random() - 0.5) * 2, 2 + Math.random(), 0.5, 2 + k * 2.5, '#d8ccb0', 0.8 + k * 0.6);
+          for (let i = 0; i < 3 + k * 4; i++) this.burst(ev.x + (Math.random() - 0.5) * 1.5, WALL_H * 0.8, 0.3, 2 + Math.round(k * 2), STONE[i % STONE.length], 6 + k * 10);
+          this.rockBurst(ev.x, WALL_H * 0.7, 0.3, 4 + Math.round(k * 8), 7 + k * 8);
+          fw.burst(ev.x, WALL_H * 0.65, -0.2, { count: 10 + k * 40, colors: ['#e8d8b0', '#ffb43a', '#ffffff'], speed: 6 + k * 8, life: 0.45, size: 0.4, up: 0.5 });
+          for (let i = 0; i < 1 + k * 4; i++) this.puff(ev.x + (Math.random() - 0.5) * 2, WALL_H * 0.65 + Math.random(), 0.5, 2 + k * 2.5, '#d8ccb0', 0.8 + k * 0.6);
           if (this.effects.length < 40) this.spawnEffect('impact', ev.x, 0.5, 0.25, 1.6 + k * 1.6);
           if (ev.damage >= 3) this.shake = Math.max(this.shake, 0.15 + k * 0.45);
           if (k >= 0.8) this.flash(0.15, '#ffb43a');
@@ -1258,10 +1254,10 @@ export class BattleScene {
           const sx = -g.cfg.field.halfWidth + (ev.segment + 0.5) * g.segmentWidth();
           this.spawnEffect('fireball', sx, 0.5, 0.8, 7);
           this.spawnEffect('explosion', sx, 0.5, 0.7, 6);
-          for (let i = 0; i < 16; i++) this.burst(sx + (Math.random() - 0.5) * g.segmentWidth(), 1.5 + Math.random() * 1.5, 0.5, 4, STONE[i % STONE.length], 18);
-          fw.burst(sx, 2, 0, { count: 260, colors: FIRE, speed: 22, life: 1.2, size: 0.7, up: 0.6, gravity: 8, twinkle: true });
+          for (let i = 0; i < 16; i++) this.burst(sx + (Math.random() - 0.5) * g.segmentWidth(), WALL_H * 0.5 + Math.random() * 1.5, 0.5, 4, STONE[i % STONE.length], 18);
+          fw.burst(sx, WALL_H * 0.65, 0, { count: 260, colors: FIRE, speed: 22, life: 1.2, size: 0.7, up: 0.6, gravity: 8, twinkle: true });
           fw.burst(sx, 0.5, 0, { count: 120, colors: ['#e8d8b0', '#c8b898', '#ffffff'], speed: 26, life: 0.6, size: 0.6, ring: true, gravity: 0, drag: 4 });
-          for (let i = 0; i < 14; i++) this.puff(sx + (Math.random() - 0.5) * g.segmentWidth(), 1 + Math.random() * 3, Math.random() * 2, 4 + Math.random() * 4, '#5a524a', 2.5);
+          for (let i = 0; i < 14; i++) this.puff(sx + (Math.random() - 0.5) * g.segmentWidth(), 1 + Math.random() * WALL_H, Math.random() * 2, 4 + Math.random() * 4, '#5a524a', 2.5);
           this.flash(0.8, '#ff5a3c');
           this.shake = Math.max(this.shake, 1.4);
           break;
@@ -1414,7 +1410,7 @@ export class BattleScene {
     this.bearers.forEach((b, i) => {
       const side = i ? 1 : -1;
       b.position.set(g.shield.x + side * w * 0.2, Math.abs(Math.sin(this.time * 9 + i)) * Math.min(1, Math.abs(drag) * 4) * 0.15, -g.cfg.shield.y + 1.1 - shove * 1.2);
-      b.quaternion.copy(this.camera.quaternion).multiply(tmpQ2.setFromAxisAngle(FORWARD, -side * 0.12 - shove * 0.2 * side));
+      b.quaternion.setFromAxisAngle(FORWARD, -side * 0.12 - shove * 0.2 * side);
     });
     this.shieldShadow.position.x = g.shield.x;
     this.shieldShadow.position.z = -g.cfg.shield.y + 0.6;
@@ -1770,7 +1766,7 @@ export class BattleScene {
 
   /**
    * A grey stone wall of small voxels, one crumbling group per section, with crenellations,
-   * a gatehouse in the middle and a tower on every joint. The stones are laid in courses
+   * a gatehouse in the middle. The wall starts level; the player builds the towers. The stones are laid in courses
    * with darker mortar, a little moss at the foot.
    */
   private buildCastle() {
@@ -1826,7 +1822,7 @@ export class BattleScene {
             const y = (iy + 0.5) * V;
             const door = house && face && gateDoor(cx, y);
             // Arrow slits along the outer face.
-            const slit = iz === 0 && iy >= 6 && iy <= 8 && gx % 14 === 7;
+            const slit = iz === 0 && iy >= 8 && iy <= 10 && gx % 14 === 7;
             cells.push({
               p: new THREE.Vector3(cx, y, (iz + 0.5) * V),
               c: door ? new THREE.Color(door) : slit ? new THREE.Color('#2a2622') : stoneAt(gx, iy, iz, top, house ? 5 : 1),
@@ -1845,18 +1841,6 @@ export class BattleScene {
       this.segments.push(addGroup(cells));
     }
 
-    // Towers on every joint: hollow grey shells, crenellated tops and a royal banner on the front.
-    const towers: Cell[] = [];
-    this.towerX = [];
-    const n = Math.round((TOWER_HALF * 2) / V);
-    const th = Math.round(TOWER_H / V);
-    for (let t = 0; t <= cfg.wall.segments; t++) {
-      const tx = -hw + t * segW;
-      this.towerX.push(tx);
-      this.towerCells(towers, tx, 0, th, n, t);
-    }
-    addGroup(towers);
-
     this.voxels = new THREE.InstancedMesh(new THREE.BoxGeometry(V, V, V), new THREE.MeshLambertMaterial(), this.voxelPos.length);
     this.voxels.frustumCulled = false;
     for (let i = 0; i < this.voxelPos.length; i++) {
@@ -1867,21 +1851,22 @@ export class BattleScene {
   }
 
   /**
-   * One tower's stones, from row `from` up to `th` (in wall voxels), n stones square, centred on x:
+   * One tower's stones, from the ground up to row `th` (in wall voxels), n stones square, centred on x:
    * a hollow shell with a floor at the top, merlons round it, and the royal banner on the front.
-   * Stacked storeys get a darker band at each storey line.
+   * A darker band marks each storey line above the wall.
    */
-  private towerCells(out: { p: THREE.Vector3; c: THREE.Color }[], tx: number, from: number, th: number, n: number, salt: number, bands = false) {
+  private towerCells(out: { p: THREE.Vector3; c: THREE.Color }[], tx: number, th: number, n: number, salt: number) {
     const V = WALL_VOX;
     const x0 = tx - TOWER_HALF;
     const z0 = TOWER_Z - TOWER_HALF;
     const storey = Math.round(STOREY_H / V);
+    const base = Math.round(WALL_H / V);
     for (let ix = 0; ix < n; ix++) {
       for (let iz = 0; iz < n; iz++) {
         const edge = ix === 0 || iz === 0 || ix === n - 1 || iz === n - 1;
         const p = (iy: number) => new THREE.Vector3(x0 + (ix + 0.5) * V, (iy + 0.5) * V, z0 + (iz + 0.5) * V);
         const around = iz === 0 || iz === n - 1 ? ix : iz;
-        for (let iy = from; iy < th; iy++) {
+        for (let iy = 0; iy < th; iy++) {
           if (!edge && iy < th - 1) continue;
           // A blue-and-gold banner hangs on the front face.
           const banner = iz === 0 && ix >= 3 && ix <= n - 4 && iy >= th - 11 && iy <= th - 3;
@@ -1890,7 +1875,7 @@ export class BattleScene {
           const c = banner ? new THREE.Color(trim || crest ? '#e8b730' : '#2a4fb0')
             : !edge ? new THREE.Color('#9a968e')
             : iy < 3 ? masonry(around + salt * 7, iy, salt).multiplyScalar(0.8)
-            : bands && (th - iy) % storey === 0 ? masonry(around, iy, salt).multiplyScalar(0.75)
+            : iy >= base && (iy - base) % storey === 0 ? masonry(around, iy, salt).multiplyScalar(0.75)
             : masonry(around + salt * 7, iy, salt + 11).multiplyScalar(1.06);
           out.push({ p: p(iy), c });
         }
@@ -1900,8 +1885,8 @@ export class BattleScene {
   }
 
   /**
-   * The towers the player has built or stacked higher: the same grey shells, rebuilt
-   * whenever one goes up. A joint's own tower is part of the wall; only its new storeys are drawn here.
+   * The towers the player has built, 1-3 storeys, each rising from the ground: the same grey
+   * shells, rebuilt whenever one goes up or loses a storey.
    */
   private updateStacks() {
     const stacks = this.game.stacks;
@@ -1916,13 +1901,7 @@ export class BattleScene {
     const V = WALL_VOX;
     const cells: { p: THREE.Vector3; c: THREE.Color }[] = [];
     const n = Math.round((TOWER_HALF * 2) / V);
-    stacks.forEach((st, i) => {
-      const joint = this.towerX.some((tx) => Math.abs(tx - st.x) < 0.01);
-      if (joint && st.storeys <= 1) return;
-      // New storeys start above the joint tower's battlements; a new tower rises from the ground.
-      const from = joint ? Math.round(TOWER_H / V) + 2 : 0;
-      this.towerCells(cells, st.x, from, Math.round(towerTop(st.storeys) / V), n, 40 + i, true);
-    });
+    stacks.forEach((st, i) => this.towerCells(cells, st.x, Math.round(towerTop(st.storeys) / V), n, 40 + i));
     if (!cells.length) return;
     const mesh = new THREE.InstancedMesh(new THREE.BoxGeometry(V, V, V), new THREE.MeshLambertMaterial(), cells.length);
     cells.forEach((c, i) => {
@@ -2007,7 +1986,7 @@ export class BattleScene {
 
   // ---- defenders -------------------------------------------------------------
 
-  /** A placed defender's model. Archer squads are drawn with the instanced archer sprites instead. */
+  /** A placed defender's model. Archer squads are drawn with the instanced archer figures instead. */
   private buildDefender(kind: PlacedKind): THREE.Group | null {
     return kind === 'archers' ? null : this.buildFigure(kind, false);
   }
@@ -2021,7 +2000,6 @@ export class BattleScene {
   private updateDefenders() {
     const g = this.game;
     const seen = new Set<number>();
-    const camQ = this.camera.quaternion;
     let archers = 0;
     for (const d of g.defenders) {
       seen.add(d.id);
@@ -2034,11 +2012,8 @@ export class BattleScene {
       const since = g.time - d.firedAt;
       if (entry.obj) {
         entry.obj.position.copy(this.defenderBase(d));
-        for (const child of entry.obj.children) {
-          if (child.name === 'billboard') child.quaternion.copy(camQ);
-          // The ballista swings round to where it is aimed (straight up its lane if it isn't).
-          else if (child.name === 'model') child.rotation.y = -(d.heading ?? 0);
-        }
+        // The ballista swings round to where it is aimed (straight up its lane if it isn't).
+        for (const child of entry.obj.children) if (child.name === 'model') child.rotation.y = -(d.heading ?? 0);
         // Recoil when it fires: a quick squash that springs back.
         const kick = since >= 0 && since < 0.3 ? Math.sin((since / 0.3) * Math.PI) : 0;
         entry.obj.scale.set(1 + kick * 0.08, 1 - kick * 0.1, 1);
@@ -2054,7 +2029,7 @@ export class BattleScene {
         const z = -d.y + (row - (rows - 1) / 2) * SQUAD_SPACING * 0.8;
         const draw = since >= 0 && since < 0.5 ? Math.sin((since / 0.5) * Math.PI) : 0;
         tmpV.set(x, this.standHeight(x, z) + draw * 0.15, z);
-        tmpQ.copy(camQ).multiply(tmpQ2.setFromAxisAngle(FORWARD, Math.sin(this.time * 2 + i) * 0.03));
+        tmpQ.setFromAxisAngle(UP, -(d.heading ?? 0));
         this.archerSprites.setMatrixAt(archers, tmpM.compose(tmpV, tmpQ, tmpS.set(1, 1 + draw * 0.06, 1)));
         archers++;
       }
@@ -2069,14 +2044,13 @@ export class BattleScene {
   }
 
   private updateSoldiers(time: number) {
-    const camQ = this.camera.quaternion;
     let n = 0;
     for (const s of this.game.soldiers) {
       if (s.hp <= 0 || n >= this.soldierSprites.instanceMatrix.count) continue;
       // Marching in place, with a little jab when they're stuck in.
       const jab = Math.abs(Math.sin(time * 7 + s.postX)) * 0.08;
       tmpV.set(s.x, this.groundHeight(s.x, -s.y) + jab, -s.y);
-      tmpQ.copy(camQ).multiply(tmpQ2.setFromAxisAngle(FORWARD, Math.sin(time * 3 + s.postX) * 0.04));
+      tmpQ.setFromAxisAngle(FORWARD, Math.sin(time * 3 + s.postX) * 0.04);
       this.soldierSprites.setMatrixAt(n, tmpM.compose(tmpV, tmpQ, tmpS.set(1, 1, 1)));
       const hurt = s.hp < s.maxHp * 0.5 ? 0.7 : 1;
       this.soldierSprites.setColorAt(n, tmpC.setRGB(1, hurt, hurt));
@@ -2166,8 +2140,8 @@ export class BattleScene {
       const c = this.game.cfg[e.kind];
       const climbs = CLIMBERS.has(e.kind);
       const climb =
-        climbs && e.state === 'climb' ? (1 - e.timer / c.climbSeconds) * 3 + Math.sin(time * 12 + e.phase * 9) * 0.1
-        : climbs && e.state === 'wall' ? 3 + Math.abs(Math.sin(time * 6 + e.phase * 9)) * 0.25
+        climbs && e.state === 'climb' ? (1 - e.timer / c.climbSeconds) * WALL_H + Math.sin(time * 12 + e.phase * 9) * 0.1
+        : climbs && e.state === 'wall' ? WALL_H + Math.abs(Math.sin(time * 6 + e.phase * 9)) * 0.25
         : 0;
       const pound = !climbs && (e.state === 'wall' || e.state === 'fight') ? Math.abs(Math.sin(time * 5 + e.phase * 9)) * 0.3 : 0;
       const brawl = e.state === 'fight' ? Math.abs(Math.sin(time * 10 + e.phase * 9)) * 0.15 : 0;
@@ -2277,7 +2251,7 @@ export class BattleScene {
         // Volley arrows go up high and come down steeply; each points along its flight.
         const t = Math.min(1, p.travelled / p.flight);
         const apex = 0.3 * p.flight + 3;
-        const h = 3 + apex * 4 * t * (1 - t) - 2.4 * t;
+        const h = WALL_H + apex * 4 * t * (1 - t) - 2.4 * t;
         const slope = (apex * 4 * (1 - 2 * t) - 2.4) / Math.max(1, p.flight);
         const sp = Math.hypot(p.vx, p.vy) || 1;
         tmpD.set(p.vx / sp, slope, -p.vy / sp).normalize();

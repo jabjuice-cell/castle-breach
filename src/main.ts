@@ -16,6 +16,7 @@ import queenAngryUrl from './assets/characters/queen-angry.webp';
 import { queenAdvice, queenCross, queenVerdict } from './queen';
 import { BattleScene, CAPSULE_LOOK, type PlanPreview, QUALITIES, type Quality } from './render/scene';
 import { Sounds } from './render/sound';
+import { defenderPortraits } from './render/portraits';
 import { BUILDINGS } from './render/world';
 import { DEFENDER_KINDS, type DefenderKind, type Ground, type PlacedKind, SPECIAL_NAMES, type Track, USEFUL_TRACKS, groundAt, stackAt } from './sim/defenders';
 import { BUILDING_KINDS, type PowerKind, Game, STEP } from './sim/game';
@@ -214,7 +215,7 @@ function whyNot(kind: PlacedKind, x: number, y: number): string {
 
 /** What standing at (x, y) does for a defender, for the label that follows the ghost. */
 const GROUND_NOTE: Record<Ground, string> = {
-  tower: 'Tower top: +25% range',
+  tower: 'Tower top: +30% range',
   wall: 'Wall walk',
   courtyard: 'Courtyard: safe, but 20% less range',
 };
@@ -550,10 +551,11 @@ function updatePlaceTag(kind: PlacedKind | undefined, ok: boolean, ignoreId: num
   }
   tag.hidden = false;
   const storeys = stackAt(game.cfg, game.stacks, input.x, input.y)?.storeys ?? 1;
+  const bonus = Math.round((game.cfg.towers.reach[storeys - 1] - 1) * 100);
   const ground = groundAt(game.cfg, input.x, input.y, game.stacks);
   const note = kind === 'spiketrap' ? 'Spike trap: hurts and slows marchers, bounces the ball'
     : kind === 'oil' ? 'Pours on orcs climbing this stretch of wall'
-    : ground === 'tower' && storeys > 1 ? `Tower top, ${storeys} storeys: +${storeys * 25}% range` : GROUND_NOTE[ground];
+    : ground === 'tower' && storeys > 1 ? `Tower top, ${storeys} storeys: +${bonus}% range` : GROUND_NOTE[ground];
   const text = ok ? note : game.canPlace(kind, input.x, input.y, ignoreId) ? 'Not enough gold' : whyNot(kind, input.x, input.y);
   if (tag.textContent !== text) tag.textContent = text;
   tag.classList.toggle('bad', !ok);
@@ -797,6 +799,13 @@ function cardStats(k: DefenderKind): string {
   }
 }
 
+/** Voxel portraits of the defenders (and a tower), drawn once, for the shop cards. */
+let portraits: Record<string, string> | null = null;
+function portrait(kind: DefenderKind | 'tower'): string {
+  const url = (portraits ??= defenderPortraits())[kind];
+  return url ? `<img class="portrait" src="${url}" alt="">` : '';
+}
+
 const costBtn = (action: string, label: string, cost: number, disabled = false) =>
   `<button type="button" data-action="${action}" ${disabled || cost > game.gold ? 'disabled' : ''}>${label} <span class="cost">${Number.isFinite(cost) ? `${cost}g` : ''}</span></button>`;
 
@@ -805,17 +814,17 @@ function trayHtml(): string {
   const gold = Math.floor(game.gold);
   const setup = game.phase === 'setup';
   const buy = DEFENDER_KINDS.map((k) => {
-    if (!game.unlocked(k)) return `<button type="button" class="locked" disabled title="${DEFENDER_INFO[k].blurb}"><b>${DEFENDER_INFO[k].name}</b><small>🔒 Unlock in the town</small></button>`;
+    if (!game.unlocked(k)) return `<button type="button" class="locked" disabled title="${DEFENDER_INFO[k].blurb}">${portrait(k)}<b>${DEFENDER_INFO[k].name}</b><small>🔒 Unlock in the town</small></button>`;
     const cost = game.defenderCost(k);
-    return `<button type="button" data-action="place:${k}" class="${placing === k ? 'on' : ''}" title="${DEFENDER_INFO[k].blurb}" ${cost > gold ? 'disabled' : ''}><b>${DEFENDER_INFO[k].name}</b><small>${cost} gold${game.count(k) ? ` · ${game.count(k)} placed` : ''}</small>${cardStats(k) ? `<small>${cardStats(k)}</small>` : ''}</button>`;
+    return `<button type="button" data-action="place:${k}" class="${placing === k ? 'on' : ''}" title="${DEFENDER_INFO[k].blurb}" ${cost > gold ? 'disabled' : ''}>${portrait(k)}<b>${DEFENDER_INFO[k].name}</b><small>${cost} gold${game.count(k) ? ` · ${game.count(k)} placed` : ''}</small>${cardStats(k) ? `<small>${cardStats(k)}</small>` : ''}</button>`;
   }).join('');
   const storey = game.storeyCost();
-  const tower = `<button type="button" data-action="tower" class="${building ? 'on' : ''}" ${storey > gold ? 'disabled' : ''}><b>Tower storey</b><small>${storey} gold · on the wall, or on top of a tower</small></button>`;
+  const tower = `<button type="button" data-action="tower" class="${building ? 'on' : ''}" ${storey > gold ? 'disabled' : ''}>${portrait('tower')}<b>Tower storey</b><small>${game.cfg.towers.costs.join(' / ')} gold, by height</small><small>Tall: more reach, draws fire</small></button>`;
   const again = setup && progress.lastLoadout.length && !game.defenders.length
     ? `<button type="button" class="again" data-action="again">Put back last level's defenders</button>`
     : '';
   const tip = building
-    ? 'Click the wall walk to build a tower, or a tower to stack another storey on it (up to 3). Each storey adds 25% reach to whoever stands on top.'
+    ? `Click the wall walk to build a tower, or a tower to stack another storey on it (up to 3). Whoever stands on top reaches ${game.cfg.towers.reach.map((r) => `+${Math.round((r - 1) * 100)}%`).join(', ')} further. Tall towers draw the orcs' fire and lose storeys; several low ones spread it.`
     : placing
     ? `${placing === 'spiketrap' ? 'Click the path up the field to set the trap.' : placing === 'mage' ? 'Click a tower top to put the mage down.' : placing === 'oil' ? 'Click the wall walk or a tower to put the cauldron down.' : 'Click the castle to put it down: the wall, a tower top or the courtyard.'} Right click or Esc to cancel.`
     : setup
@@ -842,7 +851,7 @@ function popHtml(d: { id: number; kind: DefenderKind }): string {
   const aim = game.aimable(def)
     ? `<div class="track"><span>Aim<small>${def.heading === null ? 'straight ahead' : `${Math.round(Math.abs(def.heading) * 57.3)}° ${def.heading < 0 ? 'left' : 'right'}`}</small></span><span><button type="button" data-action="aim:${d.id}">Aim</button>${def.heading !== null ? ` <button type="button" data-action="unaim:${d.id}">Straight</button>` : ''}</span></div>`
     : '';
-  return `<h3>${DEFENDER_INFO[kind].name}</h3><small>Upgrades apply to all your ${plural}.</small>${aim}${tracks}
+  return `<h3>${portrait(kind)}${DEFENDER_INFO[kind].name}</h3><small>Upgrades apply to all your ${plural}.</small>${aim}${tracks}
     <footer><button type="button" data-action="sell:${d.id}">Sell for ${game.sellValue(d.id)}g</button><button type="button" data-action="close">Done</button></footer>`;
 }
 
@@ -1114,11 +1123,13 @@ function updateGhost() {
   if (building) {
     view.hideGhost();
     const plan = game.towerPlan(input.x, input.y);
-    const ok = plan.ok && game.gold >= game.storeyCost();
+    const cost = game.storeyCostAt(input.x, input.y);
+    const ok = plan.ok && game.gold >= cost;
     const tag = hud.placeTag;
     tag.hidden = false;
     tag.classList.toggle('bad', !ok);
-    const text = !plan.ok ? plan.why : !ok ? 'Not enough gold' : plan.stack ? `Raise to ${plan.stack.storeys + 1} storeys: +${(plan.stack.storeys + 1) * 25}% reach on top` : 'Build a tower here';
+    const reach = (n: number) => Math.round((game.cfg.towers.reach[n - 1] - 1) * 100);
+    const text = !plan.ok ? plan.why : !ok ? `Not enough gold (${cost})` : plan.stack ? `Raise to ${plan.stack.storeys + 1} storeys, ${cost} gold: +${reach(plan.stack.storeys + 1)}% reach on top` : `Build a tower here, ${cost} gold: +${reach(1)}% reach on top`;
     if (tag.textContent !== text) tag.textContent = text;
     const p = view.project(input.x, input.y, view.standHeight(input.x, -input.y) + 1);
     tag.style.left = `${p.x}px`;

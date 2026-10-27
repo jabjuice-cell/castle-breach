@@ -104,6 +104,10 @@
       #tray .buy { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 8px; }
       #tray .buy button { display: flex; flex-direction: column; align-items: flex-start; text-align: left; white-space: normal; padding: 5px 8px; }
       #tray .buy button.on { background: var(--gold); }
+      #tray .buy button:has(.portrait) { display: grid; grid-template-columns: 36px 1fr; column-gap: 7px; align-items: start; }
+      #tray .buy button > :not(.portrait) { grid-column: 2; }
+      .portrait { width: 36px; height: 36px; grid-row: 1 / span 3; border-radius: 6px; background: radial-gradient(circle at 50% 40%, #fff6dc, #d9c08a); image-rendering: auto; }
+      h3 > .portrait { width: 44px; height: 44px; vertical-align: middle; margin-right: 8px; }
       #tray .buy button.locked { opacity: 0.45; }
       #tray .tip { margin: 8px 0 0; font-size: 12px; line-height: 1.35; opacity: 0.8; }
       #tray .again { width: 100%; margin-top: 6px; }
