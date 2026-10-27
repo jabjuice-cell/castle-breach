@@ -31,10 +31,13 @@ function playLevel(make: () => Bot, seed: number, progress: Progress) {
   return game;
 }
 
+/** Unlocks the bots can't use, so the town doesn't waste their Renown on them. */
+const BOT_BLIND = ['mage', 'ballista', 'oil', 'spiketrap'];
+
 /** The town: buys the cheapest upgrade it can, over and over. */
 function shop(p: Progress) {
   for (;;) {
-    const options = META_UPGRADES.filter((u) => u.id !== 'plating' && metaCost(p.meta, u.id) <= p.renown && !metaLocked(p.meta, u.id));
+    const options = META_UPGRADES.filter((u) => u.id !== 'plating' && !BOT_BLIND.includes(u.id) && metaCost(p.meta, u.id) <= p.renown && !metaLocked(p.meta, u.id));
     if (!options.length) return;
     options.sort((a, b) => metaCost(p.meta, a.id) - metaCost(p.meta, b.id));
     buyMeta(p, options[0].id);

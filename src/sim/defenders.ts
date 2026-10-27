@@ -2,10 +2,10 @@ import type { Config } from './config';
 
 /** Defenders the player buys in the setup or between waves and places on the castle grounds. */
 
-export const DEFENDER_KINDS = ['crossbow', 'archers', 'catapult', 'soldiers'] as const;
+export const DEFENDER_KINDS = ['crossbow', 'archers', 'catapult', 'soldiers', 'mage', 'ballista', 'oil', 'spiketrap'] as const;
 export type DefenderKind = (typeof DEFENDER_KINDS)[number];
 
-/** Defenders go anywhere on the castle grounds. Soldiers hold the foot of the wall below theirs. */
+/** Most defenders go on the castle grounds (mages on tower tops, oil on the wall walk); spike traps go on the field. Soldiers hold the foot of the wall below theirs. */
 export const PLACED_KINDS = DEFENDER_KINDS;
 export type PlacedKind = DefenderKind;
 
@@ -56,6 +56,10 @@ export const USEFUL_TRACKS: Record<DefenderKind, readonly Track[]> = {
   archers: TRACKS,
   catapult: ['rate'],
   soldiers: ['damage', 'special'],
+  mage: TRACKS,
+  ballista: TRACKS,
+  oil: TRACKS,
+  spiketrap: ['damage', 'special'],
 };
 
 export const SPECIAL_NAMES: Record<DefenderKind, string> = {
@@ -63,6 +67,10 @@ export const SPECIAL_NAMES: Record<DefenderKind, string> = {
   archers: 'Fire arrows',
   catapult: 'Splash',
   soldiers: 'Shield wall',
+  mage: 'Arcane blast',
+  ballista: 'Pierce',
+  oil: 'Burning oil',
+  spiketrap: 'Barbs',
 };
 
 export interface Defender {

@@ -1661,3 +1661,184 @@ describe('battalion spacing', () => {
     }
   });
 });
+
+describe('the four new defenders', () => {
+  const ALL = ['crossbow', 'archers', 'catapult', 'soldiers', 'mage', 'ballista', 'oil', 'spiketrap'];
+
+  /** A setup game with every defender unlocked and plenty of gold. */
+  function shop() {
+    const cfg = quiet();
+    cfg.unlocks.defenders = [...ALL];
+    const game = new Game(1, cfg, 0);
+    game.gold = 5000;
+    return game;
+  }
+
+  /** Ends the setup into an empty battle, with a far-off decoy so the wave does not end. */
+  function fight(game: Game) {
+    game.endSetup();
+    game.plan.groups = [];
+    game.skipPreview();
+    game.balls = [];
+    game.royalDue = Infinity;
+    game.enemies.push(enemy({ x: -19.5, y: 66, state: 'stand', hp: 1e9 }));
+  }
+
+  const grunt = (over: Partial<Enemy>) => enemy({ state: 'stand', hp: 500, maxHp: 500, ...over });
+
+  it('each new kind buys, places and sells back', () => {
+    const game = shop();
+    const spots = { mage: [4, -1], ballista: [-4, -1], oil: [0, -1], spiketrap: [0, 15] } as const;
+    for (const kind of ['mage', 'ballista', 'oil', 'spiketrap'] as const) {
+      const before = game.gold;
+      const [x, y] = spots[kind];
+      expect(game.defenderCost(kind)).toBe(game.cfg[kind].cost);
+      expect(game.place(kind, x, y)).toBe(true);
+      expect(game.gold).toBe(before - game.cfg[kind].cost);
+      const d = game.defenders[game.defenders.length - 1];
+      expect(game.sell(d.id)).toBe(true);
+      expect(game.gold).toBe(before);
+    }
+    expect(game.defenders).toHaveLength(0);
+  });
+
+  it('traps and oil move and restore with a saved load-out', () => {
+    const game = shop();
+    game.place('spiketrap', 0, 15);
+    game.place('oil', 0, -1);
+    expect(game.move(game.defenders[0].id, 5, 20)).toBe(true);
+    expect(game.move(game.defenders[0].id, 5, -1)).toBe(false);
+    expect(game.move(game.defenders[1].id, 6, 20)).toBe(false);
+    expect(shop().restoreLoadout(game.loadout())).toBe(2);
+  });
+
+  it('the mage goes only on a tower top', () => {
+    const game = shop();
+    expect(game.canPlace('mage', 0, -1)).toBe(false); // wall walk between towers
+    expect(game.canPlace('mage', 4, -6)).toBe(false); // courtyard
+    expect(game.canPlace('mage', 4, -1)).toBe(true);
+  });
+
+  it('a mage blast hurts a whole crowd, less at the edge, and a taller tower reaches further', () => {
+    const game = shop();
+    game.place('mage', 4, -1);
+    const d = game.defenders[0];
+    expect(game.covers(d, 4, 55)).toBe(false);
+    expect(game.buildTower(4, -1)).toBe(true);
+    expect(game.covers(d, 4, 55)).toBe(true);
+    fight(game);
+    const mid = [0, 1, 2, 3].map((i) => grunt({ x: 4 + (i - 1.5) * 0.4, y: 40 }));
+    const rim = grunt({ x: 4 + game.mageRadius() * 0.95, y: 40 });
+    const out = grunt({ x: 4 + game.mageRadius() + 4, y: 40 });
+    game.enemies.push(...mid, rim, out);
+    game.events = [];
+    run(game, 0.1);
+    for (const e of mid) expect(e.hp).toBeLessThan(500);
+    expect(rim.hp).toBeLessThan(500);
+    expect(500 - rim.hp).toBeLessThan(500 - mid[1].hp);
+    expect(out.hp).toBe(500);
+    expect(game.events.some((e) => e.type === 'mageBlast')).toBe(true);
+  });
+
+  it('the ballista bolt pierces every orc in its lane and hits formations harder', () => {
+    const game = shop();
+    game.place('ballista', -4, -1);
+    fight(game);
+    const line = [10, 18, 26, 34, 42, 50, 58].map((y) => grunt({ x: -4, y }));
+    line[1].shielded = true;
+    const off = grunt({ x: 2, y: 30 });
+    game.enemies.push(...line, off);
+    run(game, 3);
+    for (const e of line) expect(e.hp).toBeLessThan(500);
+    expect(off.hp).toBe(500);
+    // The shielded orc, further down the lane, still lost more than the one in front of it.
+    expect(500 - line[1].hp).toBeGreaterThan(500 - line[0].hp);
+  });
+
+  it('oil scalds orcs on the wall in its stretch, and ignores marchers and other stretches', () => {
+    const game = shop();
+    expect(game.canPlace('oil', 0, -6)).toBe(false);
+    expect(game.canPlace('oil', 4, -1)).toBe(true); // tower tops are fine
+    game.place('oil', 0, -1);
+    fight(game);
+    const a = grunt({ x: 1, y: 0.5, state: 'wall' });
+    const b = grunt({ x: -2, y: 0.5, state: 'climb' });
+    const marching = grunt({ x: 0, y: 2, state: 'march' });
+    const far = grunt({ x: 9, y: 0.5, state: 'wall' });
+    game.enemies.push(marching);
+    game.events = [];
+    run(game, 0.1);
+    expect(game.events.some((e) => e.type === 'oilPour')).toBe(false);
+    game.enemies.push(a, b, far);
+    run(game, 0.1);
+    expect(a.hp).toBeLessThan(500 - game.cfg.oil.damage * 0.9);
+    expect(b.hp).toBeLessThan(500 - game.cfg.oil.damage * 0.9);
+    expect(a.burn).toBeGreaterThan(0);
+    expect(marching.hp).toBe(500);
+    expect(far.hp).toBe(500);
+    expect(game.events.some((e) => e.type === 'oilPour')).toBe(true);
+  });
+
+  it('spike traps go on the field only, and cut and slow orcs marching over them', () => {
+    const game = shop();
+    expect(game.canPlace('spiketrap', 0, -1)).toBe(false);
+    expect(game.canPlace('spiketrap', 0, 4)).toBe(false);
+    expect(game.canPlace('spiketrap', 0, 40)).toBe(false);
+    expect(game.canPlace('spiketrap', 30, 15)).toBe(false);
+    expect(game.place('spiketrap', 0, 15)).toBe(true);
+    expect(game.canPlace('spiketrap', 1, 15)).toBe(false); // on top of the first
+    fight(game);
+    const caught = enemy({ x: 0, y: 15.4, hp: 100, maxHp: 100 });
+    const free = enemy({ x: 10, y: 15.4, hp: 100, maxHp: 100 });
+    game.enemies.push(caught, free);
+    run(game, 0.5);
+    expect(caught.hp).toBeLessThan(100);
+    expect(free.hp).toBe(100);
+    expect(15.4 - caught.y).toBeLessThan((15.4 - free.y) * 0.7);
+  });
+
+  it('the royal ball bounces off a spike trap, banks, and leaves it standing', () => {
+    const game = shop();
+    game.place('spiketrap', 0, 15);
+    fight(game);
+    const b = ball(game, { kind: 'royal', x: 0.2, y: 18, vx: 0, vy: -20 });
+    game.events = [];
+    run(game, 0.4);
+    expect(b.vy).toBeGreaterThan(0);
+    expect(b.banked).toBe(true);
+    expect(b.combo).toBeGreaterThan(0);
+    expect(game.events.some((e) => e.type === 'spikeHit')).toBe(true);
+    expect(game.count('spiketrap')).toBe(1);
+  });
+
+  it('aiming: mage and ballista turn, oil and traps do not', () => {
+    const game = shop();
+    game.place('mage', 4, -1);
+    game.place('ballista', -4, -1);
+    game.place('oil', 0, -1);
+    game.place('spiketrap', 0, 15);
+    expect(game.defenders.map((d) => game.aimable(d))).toEqual([true, true, false, false]);
+    expect(game.aim(game.defenders[1].id, { x: -2, y: 40 })).toBe(true);
+    expect(game.covers(game.defenders[1], -2.5, 40)).toBe(true);
+    expect(game.covers(game.defenders[1], -4, 40)).toBe(false);
+  });
+
+  it('the town unlocks them in order, and the old four are unchanged', () => {
+    expect(applyMeta({}, 0).unlocks.defenders).toEqual(['crossbow']);
+    expect(applyMeta({ archers: 1, soldiers: 1, catapult: 1 }, 0).unlocks.defenders).toEqual(['crossbow', 'archers', 'soldiers', 'catapult']);
+    const all = { mage: 1, ballista: 1, oil: 1, spiketrap: 1 };
+    expect(applyMeta(all, 0).unlocks.defenders).toEqual(['crossbow', 'mage', 'ballista', 'oil', 'spiketrap']);
+    const p = newProgress();
+    p.renown = 1000;
+    for (const id of ['mage', 'ballista', 'oil', 'spiketrap']) {
+      expect(metaLocked(p.meta, id)).not.toBe('');
+      expect(buyMeta(p, id)).toBe(false);
+    }
+    for (const id of ['archers', 'fletching', 'mage', 'ballista', 'masonry', 'oil', 'soldiers', 'spiketrap']) expect(buyMeta(p, id)).toBe(true);
+    const game = new Game(1, applyMeta(p.meta, 0), 0);
+    game.gold = 1000;
+    expect(game.place('mage', 4, -1)).toBe(true);
+    expect(game.place('crossbow', -4, -1)).toBe(true);
+    expect(game.place('catapult', 0, -6)).toBe(false); // not bought
+  });
+});

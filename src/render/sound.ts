@@ -415,6 +415,67 @@ export class Sounds {
     return buf;
   }
 
+  /** A mage's blast: a rising arcane zap into a low, shimmering thump. */
+  mage() {
+    const ctx = this.ctx;
+    if (!ctx || this.muted) return;
+    const now = ctx.currentTime;
+    const out = ctx.createGain();
+    out.gain.value = 0.35;
+    out.connect(ctx.destination);
+    const o = ctx.createOscillator();
+    o.type = 'sawtooth';
+    o.frequency.setValueAtTime(240, now);
+    o.frequency.exponentialRampToValueAtTime(1400, now + 0.18);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.25, now);
+    g.gain.exponentialRampToValueAtTime(0.001, now + 0.25);
+    o.connect(g).connect(out);
+    o.start(now);
+    o.stop(now + 0.3);
+    this.thud(now + 0.18, out, 150, 45, 0.3, 1);
+    this.tone(880, now + 0.18, 0.4, 0.12, 'sine');
+  }
+
+  /** The ballista loosed: a deep twang of the arms and a whoosh. */
+  ballista() {
+    const ctx = this.ctx;
+    if (!ctx || this.muted) return;
+    const now = ctx.currentTime;
+    const out = ctx.createGain();
+    out.gain.value = 0.5;
+    out.connect(ctx.destination);
+    this.thud(now, out, 120, 40, 0.25, 1);
+    this.smack(now, out, 700, 0.12, 0.8);
+    this.tone(95, now, 0.5, 0.3, 'triangle');
+  }
+
+  /** Boiling oil sloshing down the wall: a hiss and a bubbling splash. */
+  oil() {
+    const ctx = this.ctx;
+    if (!ctx || this.muted) return;
+    const now = ctx.currentTime;
+    const noise = ctx.createBufferSource();
+    noise.buffer = this.noise(0.8, 1);
+    const band = ctx.createBiquadFilter();
+    band.type = 'highpass';
+    band.frequency.value = 2500;
+    const g = ctx.createGain();
+    g.gain.value = 0.3;
+    noise.connect(band).connect(g).connect(ctx.destination);
+    noise.start(now);
+    for (let i = 0; i < 6; i++) this.tone(180 + Math.random() * 220, now + 0.1 + Math.random() * 0.5, 0.06, 0.08, 'sine');
+  }
+
+  /** A ball glancing off a spike trap: a sharp metallic tick. */
+  spike() {
+    const ctx = this.ctx;
+    if (!ctx || this.muted) return;
+    const now = ctx.currentTime;
+    this.tone(1800, now, 0.06, 0.12, 'square');
+    this.tone(1200, now + 0.02, 0.1, 0.08, 'triangle');
+  }
+
   /** A wooden thunk when a defender is set down. */
   thunk() {
     const ctx = this.ctx;

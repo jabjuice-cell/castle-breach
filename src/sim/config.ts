@@ -284,6 +284,10 @@ export const defaultConfig = {
   coverage: {
     crossbowLane: 1.25,
     crossbowTowerAngle: 0.262,
+    /** The ballista's lane is narrow. */
+    ballistaLane: 0.9,
+    /** An aimed mage tower only blasts this far either side of its aim. */
+    mageAimSpread: 0.6,
     archerCone: 0.785,
     archerReach: 0.6,
     catapultMin: 13.3,
@@ -320,6 +324,22 @@ export const defaultConfig = {
    * to orcs on the wall elsewhere (so where they start matters). The fallen return each wave.
    */
   soldiers: { cost: 60, count: 40, footprint: 1.5, hp: 30, dps: 6, reach: 1.1, y: 2.6, guard: 4.5, heavyGuard: 2.5, speed: 4, walk: 1.2 },
+  /** Mage tower (tower tops only): blasts the densest crowd in range; damage falls to edgeShare at the rim of the blast. */
+  mage: { cost: 120, interval: 5, damage: 45, radius: 4, radiusPerLevel: 0.25, edgeShare: 0.5, knockback: 4, range: 40, footprint: 1.4 },
+  /** Ballista: one huge bolt that pierces the whole lane. formationMult hits drummed formations and shields; plankHits is what it does to a siege tower. */
+  ballista: {
+    cost: 130, interval: 6, boltSpeed: 50, damage: 90, pierce: 99, pierceFalloff: 0.04, falloffStep: 0.005, knockback: 8, range: 130,
+    formationMult: 2, plankHits: 3, hitRadius: 0.9, footprint: 1.4,
+  },
+  /** Boiling oil (wall walk only): pours on orcs climbing or hacking at the stretch of wall within halfWidth, reaching reach out from the wall. */
+  oil: {
+    cost: 90, interval: 6, damage: 70, halfWidth: 2.6, reach: 3, burn: 6, burnSeconds: 3,
+    burnStep: 2, burnSecondsStep: 0.5, footprint: 1.3,
+  },
+  /** Spike trap (on the field between minY and maxY): marching orcs inside it take dps and walk at slow speed; barbs make it slower and bleed. */
+  spiketrap: {
+    cost: 40, footprint: 1.1, minY: 8, maxY: 34, dps: 6, slow: 0.5, slowStep: 0.04, slowMin: 0.2, bleed: 3, bleedSeconds: 1,
+  },
   upgrades: {
     /** Each track's first level costs this share of the defender's price. */
     baseCostShare: 0.4,

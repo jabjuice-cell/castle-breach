@@ -19,6 +19,7 @@ import { Sounds } from './render/sound';
 import { BUILDINGS } from './render/world';
 import { DEFENDER_KINDS, type DefenderKind, type Ground, type PlacedKind, SPECIAL_NAMES, type Track, USEFUL_TRACKS, groundAt, stackAt } from './sim/defenders';
 import { BUILDING_KINDS, type PowerKind, Game, STEP } from './sim/game';
+import { contact } from './sim/obstacles';
 import { Tutorial } from './sim/tutorial';
 import { META_GROUPS, META_UPGRADES, type MetaGroup, type Progress, applyMeta, buyMeta, metaCost, metaDepth, metaLocked, newProgress } from './sim/meta';
 import { ENEMY_KINDS, type EnemyKind } from './sim/waves';
@@ -198,7 +199,16 @@ function tryPlace(kind: PlacedKind) {
 function whyNot(kind: PlacedKind, x: number, y: number): string {
   const c = game.cfg.castle;
   const hw = game.cfg.field.halfWidth - c.edge;
+  if (kind === 'spiketrap') {
+    const t = game.cfg.spiketrap;
+    if (x < -hw || x > hw || y < t.minY || y > t.maxY) return 'Traps go on the path, up the field from the wall';
+    if (game.obstacles.some((o) => !o.down && contact(o, x, y, t.footprint))) return 'Something is in the way: traps need clear ground';
+    return 'Too close to another defender or a bumper';
+  }
   if (x < -hw || x > hw || y < c.minY || y > c.maxY) return 'Put it on the castle: the wall, a tower top or the courtyard';
+  const ground = groundAt(game.cfg, x, y, game.stacks);
+  if (kind === 'mage' && ground !== 'tower') return 'Mages stand on towers';
+  if (kind === 'oil' && ground === 'courtyard') return 'Oil goes on the wall';
   return `Too close to another defender${kind === 'archers' ? ': a squad of archers needs room' : ''}`;
 }
 
@@ -404,6 +414,10 @@ const DEFENDER_INFO: Record<DefenderKind, { name: string; blurb: string }> = {
   archers: { name: 'Archers', blurb: 'Thirty bowmen. Their cone shoots boulders out of the sky and rains volleys on the crowd. Leave a section without them and it is a blind spot.' },
   catapult: { name: 'Catapult', blurb: 'Lobs extra gold balls far up the field, but can\'t reach anything close to the wall.' },
   soldiers: { name: 'Soldier company', blurb: 'Forty soldiers hold the foot of the wall in their section and a little either side.' },
+  mage: { name: 'Mage tower', blurb: 'Tower tops only. Blasts the thickest crowd in range; taller towers reach further.' },
+  ballista: { name: 'Ballista', blurb: 'Slow, huge range. One great bolt skewers everything in its lane.' },
+  oil: { name: 'Boiling oil', blurb: 'Wall walk only. Pours on orcs climbing or hacking at the wall below.' },
+  spiketrap: { name: 'Spike trap', blurb: 'Set on the field. Hurts and slows marching orcs; the ball bounces off it.' },
 };
 
 const TRACK_NAMES: Record<Track, string> = { damage: 'Damage', rate: 'Rate of fire', special: '' };
@@ -537,11 +551,13 @@ function updatePlaceTag(kind: PlacedKind | undefined, ok: boolean, ignoreId: num
   tag.hidden = false;
   const storeys = stackAt(game.cfg, game.stacks, input.x, input.y)?.storeys ?? 1;
   const ground = groundAt(game.cfg, input.x, input.y, game.stacks);
-  const note = ground === 'tower' && storeys > 1 ? `Tower top, ${storeys} storeys: +${storeys * 25}% range` : GROUND_NOTE[ground];
+  const note = kind === 'spiketrap' ? 'Spike trap: hurts and slows marchers, bounces the ball'
+    : kind === 'oil' ? 'Pours on orcs climbing this stretch of wall'
+    : ground === 'tower' && storeys > 1 ? `Tower top, ${storeys} storeys: +${storeys * 25}% range` : GROUND_NOTE[ground];
   const text = ok ? note : game.canPlace(kind, input.x, input.y, ignoreId) ? 'Not enough gold' : whyNot(kind, input.x, input.y);
   if (tag.textContent !== text) tag.textContent = text;
   tag.classList.toggle('bad', !ok);
-  const p = view.project(input.x, input.y, view.standHeight(input.x, -input.y) + (kind === 'crossbow' ? 5 : 3.2));
+  const p = view.project(input.x, input.y, view.standHeight(input.x, -input.y) + (kind === 'crossbow' || kind === 'ballista' ? 5 : kind === 'spiketrap' ? 1.5 : 3.2));
   tag.style.left = `${p.x}px`;
   tag.style.top = `${p.y}px`;
 }
@@ -762,7 +778,23 @@ function trackEffect(kind: DefenderKind, track: Track): string {
   if (track !== 'special') return `+${Math.round((game.mult(kind, track) - 1) * 100)}%`;
   if (kind === 'crossbow') return `pierces ${game.crossbowPierce()}`;
   if (kind === 'archers') return lv ? `burns ${game.arrowBurn().toFixed(1)}/s` : 'not lit';
+  if (kind === 'mage') return `blast radius ${game.mageRadius().toFixed(1)}`;
+  if (kind === 'ballista') return `loses ${(game.ballistaFalloff() * 100).toFixed(0)}% per orc`;
+  if (kind === 'oil') return `burns ${game.cfg.oil.burn + game.cfg.oil.burnStep * lv}/s for ${game.cfg.oil.burnSeconds + game.cfg.oil.burnSecondsStep * lv}s`;
+  if (kind === 'spiketrap') return `slows to ${Math.round(Math.max(game.cfg.spiketrap.slowMin, game.cfg.spiketrap.slow - game.cfg.spiketrap.slowStep * lv) * 100)}%`;
   return `${Math.round(game.soldierHp())} HP each`;
+}
+
+/** The stat line on a shop card for the newer defenders. */
+function cardStats(k: DefenderKind): string {
+  const c = game.cfg;
+  switch (k) {
+    case 'mage': return `${c.mage.damage} dmg blast, radius ${c.mage.radius}, every ${c.mage.interval}s`;
+    case 'ballista': return `${c.ballista.damage} dmg, pierces all, every ${c.ballista.interval}s`;
+    case 'oil': return `${c.oil.damage} dmg + burn, every ${c.oil.interval}s`;
+    case 'spiketrap': return `${c.spiketrap.dps}/s, slows to ${Math.round(c.spiketrap.slow * 100)}%`;
+    default: return '';
+  }
 }
 
 const costBtn = (action: string, label: string, cost: number, disabled = false) =>
@@ -773,9 +805,9 @@ function trayHtml(): string {
   const gold = Math.floor(game.gold);
   const setup = game.phase === 'setup';
   const buy = DEFENDER_KINDS.map((k) => {
-    if (!game.unlocked(k)) return `<button type="button" class="locked" disabled><b>${DEFENDER_INFO[k].name}</b><small>🔒 Unlock in the town</small></button>`;
+    if (!game.unlocked(k)) return `<button type="button" class="locked" disabled title="${DEFENDER_INFO[k].blurb}"><b>${DEFENDER_INFO[k].name}</b><small>🔒 Unlock in the town</small></button>`;
     const cost = game.defenderCost(k);
-    return `<button type="button" data-action="place:${k}" class="${placing === k ? 'on' : ''}" ${cost > gold ? 'disabled' : ''}><b>${DEFENDER_INFO[k].name}</b><small>${cost} gold${game.count(k) ? ` · ${game.count(k)} placed` : ''}</small></button>`;
+    return `<button type="button" data-action="place:${k}" class="${placing === k ? 'on' : ''}" title="${DEFENDER_INFO[k].blurb}" ${cost > gold ? 'disabled' : ''}><b>${DEFENDER_INFO[k].name}</b><small>${cost} gold${game.count(k) ? ` · ${game.count(k)} placed` : ''}</small>${cardStats(k) ? `<small>${cardStats(k)}</small>` : ''}</button>`;
   }).join('');
   const storey = game.storeyCost();
   const tower = `<button type="button" data-action="tower" class="${building ? 'on' : ''}" ${storey > gold ? 'disabled' : ''}><b>Tower storey</b><small>${storey} gold · on the wall, or on top of a tower</small></button>`;
@@ -785,7 +817,7 @@ function trayHtml(): string {
   const tip = building
     ? 'Click the wall walk to build a tower, or a tower to stack another storey on it (up to 3). Each storey adds 25% reach to whoever stands on top.'
     : placing
-    ? 'Click the castle to put it down: the wall, a tower top or the courtyard. Right click or Esc to cancel.'
+    ? `${placing === 'spiketrap' ? 'Click the path up the field to set the trap.' : placing === 'mage' ? 'Click a tower top to put the mage down.' : placing === 'oil' ? 'Click the wall walk or a tower to put the cauldron down.' : 'Click the castle to put it down: the wall, a tower top or the courtyard.'} Right click or Esc to cancel.`
     : setup
       ? 'Spend your war chest on defenders and put them anywhere on the castle. Click one to upgrade or sell it (full refund until the battle starts); drag it to move it.'
       : 'Between waves: click a defender to upgrade it, a wall\'s Repair tag to patch it, or buy more. The next wave won\'t wait.';
@@ -805,7 +837,7 @@ function popHtml(d: { id: number; kind: DefenderKind }): string {
       return `<div class="track"><span>${name} <i>Lv ${game.levels[kind][t]}</i><small>${trackEffect(kind, t)}</small></span>${costBtn(`up:${kind}:${t}`, 'Upgrade', game.upgradeCost(kind, t))}</div>`;
     })
     .join('');
-  const plural = { crossbow: 'crossbows', archers: 'archer squads', catapult: 'catapults', soldiers: 'companies' }[kind];
+  const plural = { crossbow: 'crossbows', archers: 'archer squads', catapult: 'catapults', soldiers: 'companies', mage: 'mage towers', ballista: 'ballistas', oil: 'cauldrons', spiketrap: 'spike traps' }[kind];
   const def = game.defenders.find((o) => o.id === d.id)!;
   const aim = game.aimable(def)
     ? `<div class="track"><span>Aim<small>${def.heading === null ? 'straight ahead' : `${Math.round(Math.abs(def.heading) * 57.3)}° ${def.heading < 0 ? 'left' : 'right'}`}</small></span><span><button type="button" data-action="aim:${d.id}">Aim</button>${def.heading !== null ? ` <button type="button" data-action="unaim:${d.id}">Straight</button>` : ''}</span></div>`
@@ -1287,6 +1319,18 @@ function frame(now: number) {
           break;
         case 'waveCleared':
           toast(`Wave ${ev.wave} beaten back, +${ev.gold} gold`);
+          break;
+        case 'mageBlast':
+          sounds.mage();
+          break;
+        case 'ballistaFired':
+          sounds.ballista();
+          break;
+        case 'oilPour':
+          sounds.oil();
+          break;
+        case 'spikeHit':
+          sounds.spike();
           break;
         case 'power':
           sounds.horn();

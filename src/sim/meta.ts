@@ -25,6 +25,10 @@ export const META_UPGRADES: MetaUpgrade[] = [
   { id: 'archers', group: 'defence', name: 'Archery butts', blurb: 'Unlocks archers: thirty bowmen who shoot boulders out of the sky.', costs: [20] },
   { id: 'soldiers', group: 'defence', name: 'Barracks', blurb: 'Unlocks soldier companies to hold the foot of the wall.', costs: [30] },
   { id: 'catapult', group: 'defence', name: 'Siege workshop', blurb: 'Unlocks the castle catapult, which lobs extra Royal Balls.', costs: [60] },
+  { id: 'mage', group: 'defence', name: 'Mage college', blurb: 'Unlocks mage towers: blast the thickest crowd from a tower top.', costs: [70] },
+  { id: 'ballista', group: 'defence', name: 'Ballista works', blurb: 'Unlocks the ballista: one huge bolt that skewers a whole lane.', costs: [80] },
+  { id: 'oil', group: 'defence', name: 'Oil cauldrons', blurb: 'Unlocks boiling oil to pour on orcs climbing the wall.', costs: [60] },
+  { id: 'spiketrap', group: 'defence', name: "Sapper's yard", blurb: 'Unlocks spike traps that hurt and slow orcs on the field, and bounce the Royal Ball.', costs: [30] },
   { id: 'fletching', group: 'defence', name: 'Fletchers', blurb: '+15% damage for every defender, per level.', costs: [40, 90, 200] },
   { id: 'drill', group: 'defence', name: 'Drill yard', blurb: 'Defenders shoot 12% faster, per level.', costs: [50, 110, 240] },
   // Wall: tougher, nastier to climb and cheaper to patch.
@@ -58,6 +62,10 @@ export const META_UPGRADES: MetaUpgrade[] = [
 const PREREQS: Record<string, [id: string, level: number][]> = {
   catapult: [['archers', 1]],
   fletching: [['archers', 1]],
+  mage: [['archers', 1]],
+  ballista: [['fletching', 1]],
+  oil: [['masonry', 1]],
+  spiketrap: [['soldiers', 1]],
   drill: [['fletching', 1]],
   doctrine: [['fletching', 3], ['drill', 2]],
   spikes: [['masonry', 1]],
@@ -140,7 +148,7 @@ export const SHIELD_META = ['width', 'window', 'power', 'recovery', 'plating'] a
 export function applyMeta(meta: MetaLevels, level: number, base: Config = makeConfig()): Config {
   const cfg = structuredClone(base);
   const lv = (id: string) => meta[id] ?? 0;
-  cfg.unlocks.defenders = ['crossbow', ...(['archers', 'soldiers', 'catapult'] as const).filter((k) => lv(k) > 0)];
+  cfg.unlocks.defenders = ['crossbow', ...(['archers', 'soldiers', 'catapult', 'mage', 'ballista', 'oil', 'spiketrap'] as const).filter((k) => lv(k) > 0)];
   cfg.unlocks.buildings = ['keep', ...(['tavern', 'alchemist', 'blacksmith', 'chapel', 'forge'] as const).filter((k) => lv(k) > 0)];
   cfg.bonuses.damage *= 1 + 0.15 * lv('fletching');
   cfg.bonuses.rate *= 1 + 0.12 * lv('drill');

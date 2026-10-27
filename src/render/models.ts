@@ -682,3 +682,86 @@ export function rampModel(size: number, hw: number, hh: number, seed: number): V
   v.box(1, 9, -D, 3, 12, -D, '#a02a2a');
   return v;
 }
+
+// ---- the four newer defenders (placeholder voxel art) ----------------------------
+
+/** A mage: blue robe and pointed hat, a staff topped with a glowing orb (the orb is glow voxels). Faces -z. */
+export function mageModel(): Vox {
+  const v = new Vox();
+  // Robe: a cone widening to the hem, a belt, arms, head and a floppy hat.
+  v.cone(0, 0, 4, 0, 9, '#3a3fa8');
+  v.cyl(0, 0, 4, 0, 0, '#262a78', false);
+  v.cyl(0, 0, 2.2, 9, 12, '#3a3fa8', false);
+  v.cyl(0, 0, 2.3, 7, 7, PAL.gold, false);
+  v.box(-3, 9, -1, -3, 11, 0, '#3a3fa8');
+  v.box(3, 9, -2, 3, 11, -1, '#3a3fa8');
+  v.cyl(0, 0, 1.8, 13, 15, '#e8c9a0', false);
+  v.set(-1, 14, -2, '#222');
+  v.set(1, 14, -2, '#222');
+  v.cyl(0, 0, 2, 16, 16, '#4a2a8a', false);
+  v.cone(0, 0, 3.2, 16, 7, '#4a2a8a');
+  v.set(0, 21, 0, PAL.gold);
+  // Beard.
+  v.box(-1, 11, -2, 1, 12, -2, '#e8e8e8');
+  // The staff in the right hand, with the orb on top.
+  v.box(4, 0, -2, 4, 19, -2, PAL.woodDark);
+  v.glowNext = true;
+  v.blob(4, 22, -2, 2, 2, 2, '#c07aff', () => 0, 0);
+  v.set(4, 22, -2, '#ffffff');
+  v.glowNext = false;
+  return v;
+}
+
+/** The siege ballista: the giant crossbow lifted on a wheeled wooden stand. Points along -z. */
+export function bigBallistaModel(): Vox {
+  const v = new Vox();
+  const lift = 5;
+  ballistaModel().each((x, y, z, c) => v.set(x, y + lift, z, c.c));
+  // Four stout legs braced on a base frame, and two cart wheels.
+  for (const [x, z] of [[-6, -5], [6, -5], [-6, 5], [6, 5]]) v.box(x, 0, z, x, lift, z, PAL.woodDark);
+  v.box(-6, 1, -5, 6, 1, -5, PAL.wood);
+  v.box(-6, 1, 5, 6, 1, 5, PAL.wood);
+  v.box(-6, 2, -5, -6, 2, 5, PAL.wood);
+  v.box(6, 2, -5, 6, 2, 5, PAL.wood);
+  for (const x of [-8, 8]) v.cyl(x, 0, 3.2, 3, 3, '#4a2e18', false);
+  return v;
+}
+
+/** A boiling-oil cauldron on an iron tripod over embers, with a spout tipping toward the wall face (-z). */
+export function oilModel(): Vox {
+  const v = new Vox();
+  // Stone hearth with glowing embers.
+  v.cyl(0, 0, 5, 0, 1, PAL.stoneDark, false);
+  v.glowNext = true;
+  v.cyl(0, 0, 3, 1, 1, '#ff7a2a', false);
+  v.glowNext = false;
+  // Cauldron body, rim, and the bubbling oil.
+  v.cyl(0, 0, 4.5, 3, 7, '#26282c', true);
+  v.cyl(0, 0, 3.5, 2, 2, '#26282c', false);
+  v.cyl(0, 0, 5, 8, 8, '#3a3d44', false);
+  v.glowNext = true;
+  v.cyl(0, 0, 4, 7, 7, '#ff9a2a', false);
+  v.set(1, 8, 1, '#ffd34a');
+  v.set(-2, 8, 0, '#ffd34a');
+  v.glowNext = false;
+  // Spout lip pointing at the wall face, and a pole to tip it.
+  v.box(-1, 6, -7, 1, 8, -5, '#26282c');
+  v.box(-1, 5, -7, 1, 5, -6, '#26282c');
+  v.box(5, 4, 0, 9, 4, 0, PAL.woodDark);
+  return v;
+}
+
+/** A flat iron plate bristling with spikes, built to sit on the grass (about 7 voxels radius). */
+export function spikeTrapModel(): Vox {
+  const v = new Vox();
+  v.cyl(0, 0, 7, 0, 0, (x, _y, z) => ((x + z) % 2 ? '#5a5d64' : '#4a4d54'), false);
+  v.cyl(0, 0, 7, 1, 1, '#6f737b', true);
+  for (let x = -5; x <= 5; x += 2) {
+    for (let z = -5; z <= 5; z += 2) {
+      if (Math.hypot(x, z) > 5.4) continue;
+      v.box(x, 1, z, x, 2, z, '#c8ccd2');
+      v.set(x, 3, z, '#ffffff');
+    }
+  }
+  return v;
+}

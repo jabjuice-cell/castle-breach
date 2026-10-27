@@ -152,6 +152,9 @@ export interface Projectile {
   burn?: number;
   /** Catapult stones: splash radius where they land. */
   splash?: number;
+  /** A ballista bolt: wider, heavier, smashes siege tower planks. falloff is the damage lost per orc pierced. */
+  big?: boolean;
+  falloff?: number;
 }
 
 /** royal: the gold ball served each wave (and the castle catapult's). claimed: a blocked boulder. pebble: a blocked rock. */
@@ -274,6 +277,14 @@ export type GameEvent =
   /** A light orc the slam killed, sent flying (velocity in field units per second, up the field). */
   | { type: 'flung'; x: number; y: number; kind: EnemyKind; vx: number; vy: number }
   | { type: 'boltFired'; x: number; y: number }
+  /** A ballista loosed its great bolt. */
+  | { type: 'ballistaFired'; x: number; y: number; aimX: number; aimY: number }
+  /** A mage tower blasted the ground at (x, y) from (fromX, fromY). */
+  | { type: 'mageBlast'; x: number; y: number; fromX: number; fromY: number; radius: number }
+  /** Boiling oil poured down the wall at (x, y), width wide. */
+  | { type: 'oilPour'; x: number; y: number; width: number }
+  /** A ball glanced off a spike trap (defender id). */
+  | { type: 'spikeHit'; x: number; y: number; id: number }
   | { type: 'volley'; x: number; y: number; arrows: number }
   /** combo: the ball's combo after this hit (only for ball hits). */
   | { type: 'hit'; x: number; y: number; combo?: number }
@@ -712,8 +723,18 @@ export class Game {
   canPlace(kind: PlacedKind, x: number, y: number, ignoreId = -1): boolean {
     const c = this.cfg.castle;
     const hw = this.cfg.field.halfWidth - c.edge;
-    if (x < -hw || x > hw || y < c.minY || y > c.maxY) return false;
     const r = this.cfg[kind].footprint;
+    if (kind === 'spiketrap') {
+      const t = this.cfg.spiketrap;
+      if (x < -hw || x > hw || y < t.minY || y > t.maxY) return false;
+      if (this.obstacles.some((o) => !o.down && contact(o, x, y, r))) return false;
+      if (this.shapes.some((o) => contact(o, x, y, r))) return false;
+    } else {
+      if (x < -hw || x > hw || y < c.minY || y > c.maxY) return false;
+      const ground = groundAt(this.cfg, x, y, this.stacks);
+      if (kind === 'mage' && ground !== 'tower') return false;
+      if (kind === 'oil' && ground === 'courtyard') return false;
+    }
     return this.defenders.every((d) => d.id === ignoreId || Math.hypot(d.x - x, d.y - y) >= r + this.cfg[d.kind].footprint);
   }
 
@@ -793,7 +814,7 @@ export class Game {
 
   /** Whether a defender kind can be aimed (soldiers can't: they hold their stretch of wall). */
   aimable(d: Defender): boolean {
-    return d.kind !== 'soldiers';
+    return d.kind !== 'soldiers' && d.kind !== 'oil' && d.kind !== 'spiketrap';
   }
 
   /**
@@ -915,6 +936,19 @@ export class Game {
         const [lo, hi] = this.soldierRange(d);
         return x >= lo && x <= hi && y <= this.cfg.soldiers.y + this.cfg.soldiers.guard;
       }
+      case 'mage':
+        return dy > 0 && Math.hypot(dx, dy) <= this.cfg.mage.range * this.rangeMult(d) && (h === null || off <= c.mageAimSpread);
+      case 'ballista':
+        if (dy <= 0) return false;
+        if (h !== null) {
+          const along = dx * Math.sin(h) + dy * Math.cos(h);
+          return along > 0 && Math.abs(dx * Math.cos(h) - dy * Math.sin(h)) <= c.ballistaLane;
+        }
+        return Math.abs(dx) <= c.ballistaLane;
+      case 'oil':
+        return Math.abs(dx) <= this.cfg.oil.halfWidth && y >= 0 && y <= this.cfg.oil.reach;
+      case 'spiketrap':
+        return Math.hypot(dx, dy) <= this.cfg.spiketrap.footprint;
     }
   }
 
@@ -993,6 +1027,40 @@ export class Game {
     if (this.phase !== 'battle' || !this.hasBuilding('chapel')) return;
     const max = this.cfg.wall.segmentHp;
     this.segmentHp = this.segmentHp.map((hp) => (hp > 0 && hp < max ? Math.min(max, hp + this.cfg.buildings.chapel.healPerSec * dt) : hp));
+  }
+
+  private get hasTraps(): boolean {
+    return this.defenders.some((d) => d.kind === 'spiketrap');
+  }
+
+  /** An orc in a spike trap takes damage; with barbs the wounds keep bleeding after it leaves. */
+  private trapHurt(e: Enemy, dt: number): void {
+    const t = this.cfg.spiketrap;
+    const barbs = this.levels.spiketrap.special;
+    e.hp -= t.dps * this.mult('spiketrap', 'damage') * dt;
+    if (barbs > 0) {
+      e.burn = Math.max(e.burn, t.bleed * barbs);
+      e.burnTime = Math.max(e.burnTime, t.bleedSeconds * barbs);
+    }
+  }
+
+  /** A ballista bolt's damage lost per orc pierced, shrinking with the Pierce track. */
+  ballistaFalloff(): number {
+    const b = this.cfg.ballista;
+    return Math.max(0, b.pierceFalloff - b.falloffStep * this.levels.ballista.special);
+  }
+
+  /** The mage blast's radius, grown by the Arcane blast track. */
+  mageRadius(): number {
+    return this.cfg.mage.radius + this.cfg.mage.radiusPerLevel * this.levels.mage.special;
+  }
+
+  /** Speed multiplier a spike trap gives an orc standing at (x, y): 1 clear of every trap. */
+  trapSlow(x: number, y: number): number {
+    const t = this.cfg.spiketrap;
+    if (y > t.maxY + t.footprint) return 1;
+    const slow = Math.max(t.slowMin, t.slow - t.slowStep * this.levels.spiketrap.special);
+    return this.defenders.some((d) => d.kind === 'spiketrap' && Math.hypot(d.x - x, d.y - y) <= t.footprint) ? slow : 1;
   }
 
   crossbowPierce(): number {
@@ -1260,7 +1328,9 @@ export class Game {
       const lost = 1 - b.members.length / b.start;
       const boost = 1 + m.shrinkBoost * Math.min(1, lost / (1 - m.shrinkAt));
       const rally = Math.max(...b.members.map((e) => e.rally));
-      b.y -= b.speed * (1 + m.growthPerWave) ** Math.max(0, this.wave - 1) * boost * rally * dt;
+      // Spike traps slow a block in step with the share of it caught in them.
+      const slow = this.hasTraps ? b.members.reduce((n, e) => n + this.trapSlow(e.x, e.y), 0) / b.members.length : 1;
+      b.y -= b.speed * (1 + m.growthPerWave) ** Math.max(0, this.wave - 1) * boost * rally * slow * dt;
       if (b.zig) b.x = b.homeX + Math.sin(this.time * this.cfg.rider.zigRate + b.phase) * (this.cfg.rider.zigSpeed / this.cfg.rider.zigRate);
       this.keepInField(b);
     }
@@ -1383,6 +1453,10 @@ export class Game {
         e.hp -= e.burn * dt;
       }
 
+      // Orcs marching through a spike trap are cut and slowed.
+      const trap = this.hasTraps && e.state === 'march' ? this.trapSlow(e.x, e.y) : 1;
+      if (trap < 1) this.trapHurt(e, dt);
+
       switch (e.state) {
         case 'march': {
           if (e.stagger > 0) {
@@ -1478,6 +1552,8 @@ export class Game {
           break;
       }
 
+      mx *= trap;
+      my *= trap;
       e.x += (mx + e.vx) * dt + px * separation * dt;
       e.y += (my + e.vy) * dt + py * separation * dt;
       const decay = Math.exp(-friction * dt);
@@ -1647,7 +1723,93 @@ export class Game {
       if (d.kind === 'crossbow') this.fireCrossbow(d);
       else if (d.kind === 'archers') this.fireVolley(d);
       else if (d.kind === 'catapult') this.fireCatapult(d);
+      else if (d.kind === 'mage') this.fireMage(d);
+      else if (d.kind === 'ballista') this.fireBallista(d);
+      else if (d.kind === 'oil') this.fireOil(d);
     }
+  }
+
+  /** The mage blasts the thickest crowd it covers: damage falls off toward the rim of the blast. */
+  private fireMage(def: Defender): void {
+    const m = this.cfg.mage;
+    const crowd = this.densestCrowd(def);
+    if (!crowd) return;
+    def.timer = m.interval / this.mult('mage', 'rate');
+    def.firedAt = this.time;
+    def.aimX = crowd.x;
+    def.aimY = crowd.y;
+    const radius = this.mageRadius();
+    const damage = m.damage * this.mult('mage', 'damage');
+    this.within(crowd.x, crowd.y, radius + MAX_RADIUS, (e) => {
+      const dx = e.x - crowd.x;
+      const dy = e.y - crowd.y;
+      const d = Math.hypot(dx, dy);
+      if (e.hp <= 0 || d > radius + this.cfg[e.kind].radius * 0.5) return;
+      e.hp -= damage * (1 - (1 - m.edgeShare) * Math.min(1, d / radius));
+      const kb = m.knockback / this.cfg[e.kind].mass;
+      e.vx += (dx / (d || 1)) * kb;
+      e.vy += (dy / (d || 1)) * kb;
+      this.events.push({ type: 'hit', x: e.x, y: e.y });
+    });
+    this.events.push({ type: 'mageBlast', x: crowd.x, y: crowd.y, fromX: def.x, fromY: def.y, radius });
+  }
+
+  /** The ballista looses at the siege tower if it is in the lane, otherwise along the line with the most orcs in it. */
+  private fireBallista(def: Defender): void {
+    const b = this.cfg.ballista;
+    const lane = this.cfg.coverage.ballistaLane;
+    const covered = this.enemies.filter((e) => e.hp > 0 && this.covers(def, e.x, e.y));
+    const tw = this.tower;
+    let aim: { x: number; y: number } | undefined = tw && this.covers(def, tw.x, tw.y + 1) ? { x: tw.x, y: tw.y + 1 } : undefined;
+    if (!aim) {
+      let best = 0;
+      for (const t of covered) {
+        const dx = t.x - def.x;
+        const dy = t.y - def.y;
+        const len = Math.hypot(dx, dy) || 1;
+        let n = 0;
+        for (const e of covered) {
+          const along = ((e.x - def.x) * dx + (e.y - def.y) * dy) / len;
+          if (along > 0 && Math.abs((e.x - def.x) * dy - (e.y - def.y) * dx) / len <= lane) n++;
+        }
+        if (n > best) {
+          best = n;
+          aim = t;
+        }
+      }
+    }
+    if (!aim) return;
+    def.timer = b.interval / this.mult('ballista', 'rate');
+    def.firedAt = this.time;
+    def.aimX = aim.x;
+    def.aimY = aim.y;
+    const dx = aim.x - def.x;
+    const dy = aim.y - def.y;
+    const d = Math.hypot(dx, dy) || 1;
+    this.projectiles.push({
+      kind: 'bolt', x: def.x, y: def.y, vx: (dx / d) * b.boltSpeed, vy: (dy / d) * b.boltSpeed,
+      friendly: true, travelled: 0, flight: b.range, damage: b.damage * this.mult('ballista', 'damage'),
+      hitsLeft: b.pierce, hit: new Set(), big: true, falloff: this.ballistaFalloff(),
+    });
+    this.events.push({ type: 'ballistaFired', x: def.x, y: def.y, aimX: aim.x, aimY: aim.y });
+  }
+
+  /** Boiling oil: only orcs on the wall or climbing it, in the stretch below the cauldron. */
+  private fireOil(def: Defender): void {
+    const o = this.cfg.oil;
+    const victims = this.enemies.filter((e) => e.hp > 0 && (e.state === 'wall' || e.state === 'climb') && this.covers(def, e.x, e.y));
+    if (victims.length === 0) return;
+    def.timer = o.interval / this.mult('oil', 'rate');
+    def.firedAt = this.time;
+    const lv = this.levels.oil.special;
+    const damage = o.damage * this.mult('oil', 'damage');
+    for (const e of victims) {
+      e.hp -= damage;
+      e.burn = Math.max(e.burn, o.burn + o.burnStep * lv);
+      e.burnTime = Math.max(e.burnTime, o.burnSeconds + o.burnSecondsStep * lv);
+      this.events.push({ type: 'hit', x: e.x, y: e.y });
+    }
+    this.events.push({ type: 'oilPour', x: def.x, y: def.y, width: o.halfWidth * 2 });
   }
 
   private fireCrossbow(def: Defender): void {
@@ -1835,18 +1997,18 @@ export class Game {
           alive = false;
         }
       } else {
-        const r = 0.6;
+        const r = p.big ? this.cfg.ballista.hitRadius : 0.6;
         this.within(p.x, p.y, r + MAX_RADIUS, (e) => {
           if (e.hp <= 0 || p.hit.has(e) || Math.hypot(e.x - p.x, e.y - p.y) > r + this.cfg[e.kind].radius * 0.6) return;
           p.hit.add(e);
-          e.hp -= p.damage;
+          e.hp -= p.damage * (p.big && (e.shielded || e.block?.drummed) ? this.cfg.ballista.formationMult : 1);
           const sp = Math.hypot(p.vx, p.vy) || 1;
-          const kb = this.cfg.crossbow.knockback / this.cfg[e.kind].mass;
+          const kb = (p.big ? this.cfg.ballista.knockback : this.cfg.crossbow.knockback) / this.cfg[e.kind].mass;
           e.vx += (p.vx / sp) * kb;
           e.vy += (p.vy / sp) * kb;
           if (e.state === 'wall' || e.state === 'climb') e.state = 'march';
           this.events.push({ type: 'hit', x: e.x, y: e.y });
-          p.damage *= 1 - this.cfg.crossbow.pierceFalloff;
+          p.damage *= 1 - (p.falloff ?? this.cfg.crossbow.pierceFalloff);
           p.hitsLeft--;
           return p.hitsLeft <= 0;
         });
@@ -1855,7 +2017,7 @@ export class Game {
         const tw = this.tower;
         const st = this.cfg.siegeTower;
         if (alive && p.kind === 'bolt' && tw && Math.abs(p.x - tw.x) <= st.halfWidth && p.y >= tw.y && p.y <= tw.y + st.depth) {
-          this.hitPlank(0, p.x, 1);
+          this.hitPlank(0, p.x, p.big ? this.cfg.ballista.plankHits : 1);
           alive = false;
         }
         if (p.travelled > p.flight || Math.abs(p.x) > hw + 5 || p.y > this.cfg.field.spawnY + 10) alive = false;
@@ -2097,6 +2259,7 @@ export class Game {
         if (this.tower) this.ballVsTower(b);
         if (this.obstacles.length) this.ballVsObstacles(b);
         if (this.contraptions.length) this.ballVsContraptions(b);
+        this.ballVsTraps(b);
         this.ballVsOrcs(b);
       }
       if (alive) keep.push(b);
@@ -2225,6 +2388,29 @@ export class Game {
         this.ringBell(b, index);
       }
     });
+  }
+
+  /** Spike traps are round posts to the ball: it glances off, counts as a bank, and the trap stays. */
+  private ballVsTraps(b: Ball): void {
+    const r = this.cfg.balls.radius;
+    for (const d of this.defenders) {
+      if (d.kind !== 'spiketrap') continue;
+      const dx = b.x - d.x;
+      const dy = b.y - d.y;
+      const dist = Math.hypot(dx, dy);
+      const reach = r + this.cfg.spiketrap.footprint;
+      if (dist >= reach || dist === 0) continue;
+      const nx = dx / dist;
+      const ny = dy / dist;
+      if (b.vx * nx + b.vy * ny >= 0) continue;
+      this.reflect(b, nx, ny);
+      b.x = d.x + nx * (reach + 0.01);
+      b.y = d.y + ny * (reach + 0.01);
+      b.banked = true;
+      this.addCombo(b, this.cfg.bumpers.bankCombo);
+      this.events.push({ type: 'spikeHit', x: b.x, y: b.y, id: d.id });
+      return;
+    }
   }
 
   private ringBell(b: Ball, index: number): void {

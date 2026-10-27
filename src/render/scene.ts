@@ -42,7 +42,7 @@ const TOWER_DEBRIS = numbered(import.meta.glob<string>('../assets/fx/siege-debri
 const CAPSULE_ART = import.meta.glob<string>('../assets/fx/capsule-*.webp', { eager: true, import: 'default' });
 import { paintGround } from './ground';
 import { Terrain } from './terrain';
-import { ballistaModel } from './models';
+import { ballistaModel, bigBallistaModel, mageModel, oilModel, spikeTrapModel } from './models';
 import { VoxelOrcs } from './orcs';
 import { VoxBatch } from './voxels';
 import { ShieldModel } from './shield';
@@ -90,6 +90,8 @@ const GOLD = ['#fff6c8', '#ffd34a', '#ffb43a'];
 const STEEL = ['#ffffff', '#d8f4ff', '#9cc8ff'];
 const ORANGE = ['#ffd08a', '#ff9a2a', '#ff7a1a'];
 const FIRE = ['#fff2a8', '#ffb43a', '#ff6a2a', '#e2331f'];
+const ARCANE = ['#ffffff', '#e2baff', '#b06aff', '#6a3ad8'];
+const OIL = ['#fff2a8', '#ffb43a', '#ff7a2a', '#3a2a1a'];
 const WOOD = ['#c8945a', '#8a5a2e', '#f2d29a'];
 const ROYAL = ['#2a4fb0', '#6a8cff', '#ffd34a', '#ffffff'];
 const PARTY = ['#ff5a8a', '#ffd34a', '#5ad8ff', '#8aff6a', '#c08aff', '#ffffff'];
@@ -122,6 +124,7 @@ const OVERLAY_CELL = 0.5;
 const OVERLAY_MIN_Y = -2;
 const COVER_COLORS: Record<PlacedKind, [number, number, number]> = {
   crossbow: [255, 120, 60], archers: [110, 255, 90], catapult: [190, 130, 255], soldiers: [80, 170, 255],
+  mage: [200, 90, 255], ballista: [255, 200, 60], oil: [255, 150, 30], spiketrap: [220, 220, 220],
 };
 
 /** The shield stands in front of the wall, its top leaning out at the orcs as its bearers brace it (radians from upright), lifted a little off the ground. */
@@ -130,6 +133,9 @@ const SHIELD_LEAN = -0.62;
 const ORC_OUTLINE = 0.045;
 /** The ballista's voxel size: about 3.5 units across its bow. */
 const BALLISTA_VOX = 0.155;
+/** Voxel size of the newer defenders' placeholder models. */
+const NEW_VOX: Partial<Record<PlacedKind, number>> = { mage: 0.15, ballista: 0.14, oil: 0.16, spiketrap: 0.155 };
+const NEW_MODELS: Partial<Record<PlacedKind, () => ReturnType<typeof ballistaModel>>> = { mage: mageModel, ballista: bigBallistaModel, oil: oilModel, spiketrap: spikeTrapModel };
 const SHIELD_LIFT = 0.25;
 /** It is a touch wider than its bounce line, so balls never seem to miss its rim. */
 const SHIELD_OVERHANG = 1.06;
@@ -337,6 +343,8 @@ export class BattleScene {
   };
   /** The giant crossbow is a voxel ballista, so it sits properly on the wall walk or a tower top. */
   private ballista = new VoxBatch().add(ballistaModel(), BALLISTA_VOX, new THREE.Vector3()).geometries().solid!;
+  /** Lit and glowing geometry for the mage, ballista, cauldron and spike trap, built on first use. */
+  private newGeo = new Map<PlacedKind, { solid: THREE.BufferGeometry | null; glow: THREE.BufferGeometry | null }>();
   private catapultArt = imageSprite(defCatapultUrl, aspects['defender-catapult']);
   private soldierArt = imageSprite(soldierUrl, aspects['defender-soldier']);
   private archerArt = imageSprite(archerUrl, aspects['defender-archer']);
@@ -823,8 +831,11 @@ export class BattleScene {
     const g = this.game;
     const c = g.cfg.coverage;
     const h = d.heading ?? 0;
-    const reach = d.kind === 'archers' ? g.cfg.field.topY * c.archerReach * g.rangeMult(d) : d.kind === 'catapult' ? c.catapultMax * g.rangeMult(d) : g.cfg.field.topY;
-    const key = `${d.kind}${d.x},${d.y},${h.toFixed(3)},${reach.toFixed(2)}`;
+    const reach = d.kind === 'archers' ? g.cfg.field.topY * c.archerReach * g.rangeMult(d)
+      : d.kind === 'catapult' ? c.catapultMax * g.rangeMult(d)
+        : d.kind === 'mage' ? g.cfg.mage.range * g.rangeMult(d) : g.cfg.field.topY;
+    const blast = d.kind === 'mage' ? g.mageRadius() : 0;
+    const key = `${d.kind}${d.x},${d.y},${h.toFixed(3)},${reach.toFixed(2)},${blast.toFixed(2)}`;
     if (!this.aimMesh) {
       this.aimMesh = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial({ color: '#ffd34a', transparent: true, opacity: 0.45, depthWrite: false, depthTest: false, side: THREE.DoubleSide }));
       this.aimMesh.renderOrder = 3;
@@ -833,13 +844,25 @@ export class BattleScene {
     this.aimMesh.visible = true;
     if (key === this.aimKey) return;
     this.aimKey = key;
-    // The shape in sim space, as (x, y) points around the defender; the crossbow's lane is a long strip.
+    // The shape in sim space, as (x, y) points around the defender; the crossbow's and ballista's lane is a long strip.
     const pts: [number, number][] = [];
     const dir = (a: number, r: number): [number, number] => [d.x + Math.sin(a) * r, d.y + Math.cos(a) * r];
-    if (d.kind === 'crossbow') {
-      const w = c.crossbowLane;
-      const along = (r: number, side: number): [number, number] => [d.x + Math.sin(h) * r + Math.cos(h) * w * side, d.y + Math.cos(h) * r - Math.sin(h) * w * side];
+    const shapes: THREE.Shape[] = [];
+    const lane = d.kind === 'crossbow' ? c.crossbowLane : d.kind === 'ballista' ? c.ballistaLane : 0;
+    if (lane) {
+      const along = (r: number, side: number): [number, number] => [d.x + Math.sin(h) * r + Math.cos(h) * lane * side, d.y + Math.cos(h) * r - Math.sin(h) * lane * side];
       pts.push(along(1, -1), along(reach, -1), along(reach, 1), along(1, 1));
+    } else if (d.kind === 'oil') {
+      // The stretch of wall it pours on: its width either side, out as far as the foot of the wall.
+      const o = g.cfg.oil;
+      pts.push([d.x - o.halfWidth, 0], [d.x + o.halfWidth, 0], [d.x + o.halfWidth, o.reach], [d.x - o.halfWidth, o.reach]);
+    } else if (d.kind === 'spiketrap') {
+      for (let i = 0; i < 24; i++) pts.push(dir((i / 24) * Math.PI * 2, g.cfg.spiketrap.footprint));
+    } else if (d.kind === 'mage') {
+      // A sector: anywhere ahead within range, or within the aim cone once aimed.
+      const half = d.heading === null ? Math.PI / 2 : c.mageAimSpread;
+      pts.push([d.x, d.y]);
+      for (let i = 0; i <= 20; i++) pts.push(dir(h - half + (i / 20) * half * 2, reach));
     } else {
       const half = d.kind === 'archers' ? c.archerCone : d.heading === null ? 1.2 : c.catapultAimSpread;
       const inner = d.kind === 'catapult' ? c.catapultMin : 1;
@@ -848,8 +871,19 @@ export class BattleScene {
     }
     // Clip to the field, then lay it flat just above the ground.
     const hw = g.cfg.field.halfWidth;
-    const shape = new THREE.Shape(pts.map(([x, y]) => new THREE.Vector2(Math.max(-hw, Math.min(hw, x)), Math.min(g.cfg.field.topY, y))));
-    const geo = new THREE.ShapeGeometry(shape);
+    const clip = ([x, y]: [number, number]) => new THREE.Vector2(Math.max(-hw, Math.min(hw, x)), Math.min(g.cfg.field.topY, y));
+    shapes.push(new THREE.Shape(pts.map(clip)));
+    if (blast && d.heading !== null) {
+      // Where an aimed mage's blast lands: a ring of its blast radius at the middle of its reach.
+      const [cx, cy] = dir(h, reach * 0.6);
+      const ring = new THREE.Shape();
+      ring.absarc(cx, cy, blast, 0, Math.PI * 2, false);
+      const hole = new THREE.Path();
+      hole.absarc(cx, cy, Math.max(0.1, blast - 0.35), 0, Math.PI * 2, true);
+      ring.holes.push(hole);
+      shapes.push(ring);
+    }
+    const geo = new THREE.ShapeGeometry(shapes);
     geo.rotateX(-Math.PI / 2);
     geo.translate(0, 0.2, 0);
     this.aimMesh.geometry.dispose();
@@ -871,6 +905,23 @@ export class BattleScene {
       m.name = 'model';
       m.renderOrder = ghost ? 10 : 0;
       group.add(m);
+      return group;
+    }
+    if (NEW_MODELS[kind]) {
+      let geo = this.newGeo.get(kind);
+      if (!geo) {
+        geo = new VoxBatch().add(NEW_MODELS[kind]!(), NEW_VOX[kind]!, new THREE.Vector3()).geometries();
+        this.newGeo.set(kind, geo);
+      }
+      // The lit part first: the ghost tint reads children[0]. The glow (orb, embers) shines unlit.
+      for (const [part, g] of [['solid', geo.solid], ['glow', geo.glow]] as const) {
+        if (!g) continue;
+        const opts = { vertexColors: true, ...(ghost ? { transparent: true, depthTest: false, depthWrite: false } : {}) };
+        const m = new THREE.Mesh(g, part === 'solid' ? new THREE.MeshLambertMaterial(opts) : new THREE.MeshBasicMaterial(opts));
+        m.name = 'model';
+        m.renderOrder = ghost ? 10 : 0;
+        group.add(m);
+      }
       return group;
     }
     const art = kind === 'catapult' ? this.catapultArt : kind === 'archers' ? this.archerArt : this.soldierArt;
@@ -902,9 +953,11 @@ export class BattleScene {
     const shown = this.ghostShown;
     if (!shown) return;
     const ghost = this.ghosts.get(shown.kind)!;
-    const mat = (ghost.children[0] as THREE.Mesh).material as THREE.MeshBasicMaterial;
-    mat.color.set(shown.ok ? '#c8ffc8' : '#ff7a6a');
-    mat.opacity = shown.ok ? 0.75 + Math.sin(time * 6) * 0.15 : 0.6;
+    for (const child of ghost.children) {
+      const mat = (child as THREE.Mesh).material as THREE.MeshBasicMaterial;
+      mat.color.set(shown.ok ? '#c8ffc8' : '#ff7a6a');
+      mat.opacity = shown.ok ? 0.75 + Math.sin(time * 6) * 0.15 : 0.6;
+    }
     for (const child of ghost.children) if (child.name === 'billboard') child.quaternion.copy(this.camera.quaternion);
   }
 
@@ -1112,6 +1165,48 @@ export class BattleScene {
           fw.burst(ev.x, TOWER_PLANK_Y, -ev.y, { count: 80, colors: [...WOOD, ...GOLD], speed: 12, life: 0.9, size: 0.45, up: 0.5, twinkle: true });
           this.flash(0.3, '#ffd34a');
           this.shake = Math.max(this.shake, 0.8);
+          break;
+        case 'mageBlast': {
+          // A violet bolt streaks from the caster, then a ring and flash where it lands.
+          const top = this.standHeight(ev.fromX, -ev.fromY) + 3.5;
+          for (let i = 1; i <= 8; i++) {
+            const t = i / 8;
+            fw.burst(ev.fromX + (ev.x - ev.fromX) * t, top * (1 - t) + 0.8 * t, -(ev.fromY + (ev.y - ev.fromY) * t), { count: 6, colors: ARCANE, speed: 1.5, life: 0.3, size: 0.45, gravity: 0, drag: 4 });
+          }
+          this.spawnEffect('ring', ev.x, -ev.y, 0.5, ev.radius);
+          this.spawnEffect('flash', ev.x, -ev.y, 0.2);
+          fw.burst(ev.x, 0.8, -ev.y, { count: 70, colors: ARCANE, speed: 12, life: 0.6, size: 0.5, up: 0.4, twinkle: true });
+          fw.burst(ev.x, 0.4, -ev.y, { count: 60, colors: ARCANE, speed: ev.radius * 3.2, life: 0.4, size: 0.4, ring: true, gravity: 0, drag: 5 });
+          fw.burst(ev.fromX, top, -ev.fromY, { count: 16, colors: ARCANE, speed: 5, life: 0.4, size: 0.4 });
+          this.flash(0.12, '#c07aff');
+          this.shake = Math.max(this.shake, 0.2);
+          break;
+        }
+        case 'ballistaFired': {
+          // A heavy thunk of the arms: smoke and splinters at the muzzle.
+          const top = this.standHeight(ev.x, -ev.y) + 2.5;
+          fw.burst(ev.x, top, -ev.y - 1, { count: 30, colors: [...WOOD, ...STEEL], speed: 9, life: 0.4, size: 0.4, gravity: 8 });
+          this.puff(ev.x, top, -ev.y - 1, 2.4, '#d8ccb0', 0.9);
+          this.shake = Math.max(this.shake, 0.25);
+          break;
+        }
+        case 'oilPour': {
+          // A stream of oil down the wall face, then a hot splash with steam at the foot.
+          const top = this.standHeight(ev.x, -ev.y);
+          const w = ev.width / 2;
+          for (let i = 0; i < 14; i++) {
+            const x = ev.x + (Math.random() * 2 - 1) * w;
+            fw.burst(x, top - Math.random() * top, -(ev.y + 0.4), { count: 5, colors: OIL, speed: 1.5, life: 0.5, size: 0.4, gravity: 12 });
+          }
+          fw.burst(ev.x, 0.6, -2, { count: 90, colors: OIL, speed: 9, life: 0.7, size: 0.5, up: 0.5, gravity: 9, twinkle: true });
+          for (let i = 0; i < 6; i++) this.puff(ev.x + (Math.random() * 2 - 1) * w, 0.8 + Math.random() * 1.5, -(1 + Math.random() * 2), 3 + Math.random() * 2, '#e8e0d0', 1.6);
+          this.spawnEffect('ring', ev.x, -1.5, 0.45, ev.width * 0.6);
+          this.flash(0.1, '#ff9a2a');
+          break;
+        }
+        case 'spikeHit':
+          fw.burst(ev.x, 0.6, -ev.y, { count: 14, colors: STEEL, speed: 7, life: 0.3, size: 0.3, up: 0.5, gravity: 8 });
+          this.sparks(ev.x, 0.6, -ev.y, 6);
           break;
         case 'bounce':
           if (Math.random() < 0.6) fw.burst(ev.x, 0.9, -ev.y, { count: 8, colors: STEEL, speed: 6, life: 0.3, size: 0.3, gravity: 6 });
@@ -2194,7 +2289,7 @@ export class BattleScene {
         if ((orc ? eb : b) >= mesh.instanceMatrix.count) continue;
         const sp = Math.hypot(p.vx, p.vy) || 1;
         tmpQ.setFromUnitVectors(AHEAD, tmpD.set(p.vx / sp, 0, -p.vy / sp));
-        mesh.setMatrixAt(orc ? eb++ : b++, tmpM.compose(tmpV.set(p.x, 1.8, -p.y), tmpQ, tmpS.set(1, 1, 1)));
+        mesh.setMatrixAt(orc ? eb++ : b++, tmpM.compose(tmpV.set(p.x, 1.8, -p.y), tmpQ, p.big ? tmpS.set(2.2, 2.2, 2.2) : tmpS.set(1, 1, 1)));
         // Orc bolts streak red, so they read as a threat at a glance.
         if (p.kind === 'enemyBolt') this.fireworks.burst(p.x, 1.8, -p.y, { count: 2, colors: ['#ff5a3c', '#ffb43a'], speed: 0.4, life: 0.22, size: 0.4, gravity: 0, drag: 6 });
       }

@@ -1,4 +1,4 @@
-import { type DefenderKind, PLACED_KINDS, type PlacedKind, USEFUL_TRACKS } from './defenders';
+import { type DefenderKind, type PlacedKind, USEFUL_TRACKS } from './defenders';
 import type { Game } from './game';
 import { Rng } from './rng';
 
@@ -30,8 +30,11 @@ function casualPlaces(game: Game): { x: number; y: number }[] {
   return out;
 }
 
+/** The bots only know the original four defenders. */
+const BOT_KINDS = ['crossbow', 'archers', 'catapult', 'soldiers'] as const;
+
 function ownedKinds(game: Game): DefenderKind[] {
-  return (['crossbow', 'archers', 'catapult', 'soldiers'] as const).filter((k) => game.owns(k));
+  return BOT_KINDS.filter((k) => game.owns(k));
 }
 
 function upgrades(game: Game): Purchase[] {
@@ -67,7 +70,7 @@ function cheapestShop(game: Game): void {
   const places = casualPlaces(game);
   buyCheapest(game, () => {
     const list = upgrades(game);
-    for (const kind of PLACED_KINDS) {
+    for (const kind of BOT_KINDS) {
       if (!game.unlocked(kind)) continue;
       const at = places.find((p) => game.canPlace(kind, p.x, p.y));
       if (at) list.push({ cost: game.defenderCost(kind), buy: () => game.place(kind, at.x, at.y) });
@@ -82,7 +85,7 @@ function randomShop(game: Game, rng: Rng): void {
   const c = game.cfg.castle;
   const hw = game.cfg.field.halfWidth - c.edge;
   for (let tries = 0; tries < 80; tries++) {
-    const kinds = PLACED_KINDS.filter((k) => game.unlocked(k));
+    const kinds = BOT_KINDS.filter((k) => game.unlocked(k));
     const kind = kinds[rng.int(0, kinds.length - 1)];
     if (game.gold < game.defenderCost(kind)) break;
     game.place(kind, rng.range(-hw, hw), rng.range(c.minY, c.maxY));
