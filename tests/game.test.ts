@@ -1949,3 +1949,144 @@ describe('the four new defenders', () => {
     expect(game.place('catapult', 0, -6)).toBe(false); // not bought
   });
 });
+
+describe('war council shaping', () => {
+  /** A quiet game in setup with an empty field, contraptions on and a hand-placed layout. */
+  function council(layout: Contraption[] = []) {
+    const cfg = quiet();
+    cfg.obstacles.levels = [[]];
+    cfg.contraptions.enabled = true;
+    cfg.contraptions.levels = [layout];
+    return new Game(1, cfg);
+  }
+  /** Ends the setup and starts a battle with a dummy enemy so the wave does not end. */
+  function fight(game: Game) {
+    game.endSetup();
+    game.plan.groups = [];
+    game.skipPreview();
+    game.balls = [];
+    game.royalDue = Infinity;
+    game.enemies.push(enemy({ x: 0, y: 60, state: 'stand', hp: 1e9 }));
+  }
+
+  it('respects per-level limits, bounds and spacing; removing frees a slot', () => {
+    const game = council();
+    expect(game.shapeLeft('barricade')).toBe(2);
+    expect(game.placeTerrain('barricade', -10, 30)).toBe(true);
+    expect(game.placeTerrain('barricade', -10, 40)).toBe(false); // same x: would line up
+    expect(game.placeTerrain('barricade', 0, 5)).toBe(false); // below minY
+    expect(game.placeTerrain('barricade', 19.5, 30)).toBe(false); // off the edge
+    expect(game.placeTerrain('barricade', 10, 30, 0.4)).toBe(true);
+    expect(game.shapeLeft('barricade')).toBe(0);
+    expect(game.placeTerrain('barricade', 0, 30)).toBe(false); // limit
+    expect(game.placeTerrain('rubble', -9.5, 30)).toBe(false); // on top of a barricade
+    expect(game.placeTerrain('rubble', 0, 30)).toBe(true);
+    expect(game.removeTerrain(0)).toBe(true);
+    expect(game.removeTerrain(0)).toBe(false);
+    expect(game.shapeLeft('barricade')).toBe(1);
+    expect(game.placeTerrain('barricade', -10, 30)).toBe(true);
+    expect(game.obstacles[0].removed).toBe(true);
+    expect(game.obstacles).toHaveLength(4);
+    expect(game.removeTerrain(99)).toBe(false);
+    expect(game.events.filter((e) => e.type === 'terrainPlaced')).toHaveLength(4);
+    fight(game);
+    expect(game.placeTerrain('rubble', 5, 30)).toBe(false); // shop shut
+    expect(game.shapeLeft('rubble')).toBe(0);
+  });
+
+  it('a barricade takes 3 ball hits, then is down; rebuilt after the wave, not if removed', () => {
+    const game = council();
+    game.placeTerrain('barricade', 0, 30);
+    game.placeTerrain('rubble', 10, 30);
+    game.removeTerrain(1);
+    fight(game);
+    for (let i = 0; i < 3; i++) {
+      const b = ball(game, { id: 1000 + i, x: 0, y: 28, vx: 0, vy: 20 });
+      game.events = [];
+      run(game, 0.2);
+      expect(b.vy).toBeLessThan(0);
+      expect(game.obstacles[0].down === true).toBe(i === 2);
+      expect(game.events.some((e) => e.type === 'treeDown')).toBe(i === 2);
+      expect(game.events.some((e) => e.type === 'obstacle')).toBe(i < 2);
+    }
+    game.enemies = [];
+    game.events = [];
+    run(game, 3);
+    expect(game.phase).toBe('preview');
+    expect(game.obstacles[0].down).toBe(false);
+    expect(game.obstacles[0].hits).toBe(3);
+    expect(game.obstacles[1].down).toBe(true);
+    expect(game.events.filter((e) => e.type === 'terrainRebuilt')).toHaveLength(1);
+  });
+
+  it('moves bumpers and ramps, not bells, and rejects bad spots', () => {
+    const game = council([{ kind: 'bumper', x: -8, y: 30 }, { kind: 'bell', x: 12, y: 40, group: 0 }, { kind: 'ramp', x: 8, y: 20, hw: 2, hh: 1.5, angle: 0 }]);
+    expect(game.moveContraption(1, 12, 45)).toBe(false); // bell
+    expect(game.moveContraption(0, 1, 30)).toBe(false); // road clear
+    expect(game.moveContraption(0, -8, 5)).toBe(false);
+    expect(game.moveContraption(0, 12, 40)).toBe(false); // on the bell
+    expect(game.moveContraption(0, 8, 21)).toBe(false); // on the ramp
+    expect(game.canMoveContraption(0, -8, 50)).toBe(true);
+    const v = game.shapeVersion;
+    expect(game.moveContraption(0, -8, 50)).toBe(true);
+    expect(game.shapeVersion).toBeGreaterThan(v);
+    expect(game.contraptions[0].y).toBe(50);
+    expect(game.moveContraption(2, -14, 20)).toBe(true);
+    fight(game);
+    // The old spot is empty; the ball bounces at the new one.
+    const gone = ball(game, { x: -8, y: 26, vx: 0, vy: 20 });
+    run(game, 0.2);
+    expect(gone.vy).toBeGreaterThan(0);
+    const b = ball(game, { id: 1000, x: -8, y: 46, vx: 0, vy: 20 });
+    game.events = [];
+    run(game, 0.3);
+    expect(b.vy).toBeLessThan(0);
+    expect(game.events.some((e) => e.type === 'bumper' && e.index === 0)).toBe(true);
+  });
+
+  it('route previews reach the wall, bend round placed barricades, show cover, and stay stable', () => {
+    const game = council();
+    const first = game.routePreview();
+    expect(first.length).toBeGreaterThan(0);
+    expect(game.routePreview()).toBe(first); // cached
+    expect(first.every((r) => r.pts[r.pts.length - 1].y < 1.5)).toBe(true);
+    const foot = first.find((r) => r.kind === 'foot')!;
+    const at = foot.pts.find((p) => p.y <= 30)!;
+    expect(foot.pts.every((p) => Math.abs(p.x - at.x) < 3)).toBe(true);
+    expect(game.placeTerrain('barricade', at.x, at.y - 0.5)).toBe(true);
+    const bent = game.routePreview().find((r) => r.kind === 'foot' && r.lane === foot.lane)!;
+    expect(bent).not.toBe(foot);
+    expect(Math.max(...bent.pts.map((p) => Math.abs(p.x - at.x)))).toBeGreaterThan(1.2);
+    expect(bent.pts[bent.pts.length - 1].y).toBeLessThan(1.5);
+    // A defender placed over the route shows up as cover.
+    expect(bent.pts.every((p) => p.cover.length === 0)).toBe(true);
+    const end = bent.pts[bent.pts.length - 1];
+    expect(game.place('crossbow', end.x, -3)).toBe(true);
+    const id = game.defenders[0].id;
+    expect(game.routePreview().find((r) => r.lane === foot.lane && r.kind === 'foot')!.pts.some((p) => p.cover.includes(id))).toBe(true);
+    // Pure: the same preview twice, and it never touches the run.
+    const a = JSON.stringify(game.routePreview());
+    (game as unknown as { routeCache: null }).routeCache = null;
+    expect(JSON.stringify(game.routePreview())).toBe(a);
+    const x = council();
+    x.routePreview();
+    const y = council();
+    for (const g of [x, y]) { g.endSetup(); g.skipPreview(); run(g, 5); }
+    expect(x.enemies.map((e) => [e.x, e.y])).toEqual(y.enemies.map((e) => [e.x, e.y]));
+  });
+
+  it('battleReady fires once from endSetup; defenders announce placing and moving', () => {
+    const game = council();
+    game.gold = 1000;
+    game.place('crossbow', -4, -3);
+    const id = game.defenders[0].id;
+    game.move(id, 4, -3);
+    expect(game.events.filter((e) => e.type === 'defenderPlaced')).toEqual([
+      { type: 'defenderPlaced', id, kind: 'crossbow', x: -4, y: -3, moved: false },
+      { type: 'defenderPlaced', id, kind: 'crossbow', x: 4, y: -3, moved: true },
+    ]);
+    game.endSetup();
+    game.endSetup();
+    expect(game.events.filter((e) => e.type === 'battleReady')).toHaveLength(1);
+  });
+});

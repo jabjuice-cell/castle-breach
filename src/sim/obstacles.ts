@@ -7,7 +7,7 @@
  * (radians, turning x toward y).
  */
 
-export type ObstacleLook = 'boulder' | 'milestone' | 'mill' | 'well' | 'fence' | 'stone' | 'ruin' | 'spikes' | 'tree';
+export type ObstacleLook = 'boulder' | 'milestone' | 'mill' | 'well' | 'fence' | 'stone' | 'ruin' | 'spikes' | 'tree' | 'barricade' | 'rubble';
 
 export interface Obstacle {
   look: ObstacleLook;
@@ -20,6 +20,12 @@ export interface Obstacle {
   /** Goes down to one hit from a ball (a tree), and is then gone for the rest of the level. Every obstacle breaks, but see needsHeave. */
   breakable?: boolean;
   down?: boolean;
+  /** Player-placed terrain (War Council): takes maxHits ball hits before it goes down. */
+  placed?: boolean;
+  hits?: number;
+  maxHits?: number;
+  /** A placed piece the player took back: kept in the list (the render keys by index) but gone for good. */
+  removed?: boolean;
 }
 
 /** Stone structures only break to a heaved (charged) ball; the rest go down to any hit. */

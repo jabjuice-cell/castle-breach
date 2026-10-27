@@ -33,6 +33,19 @@ export const defaultConfig = {
     ramp: { distance: 14, splashRadius: 3.5, damage: 30, knockback: 12, combo: 1 },
   },
   /**
+   * War Council shaping: between waves the player places barricades and rubble (limits per level) and
+   * moves bumpers and ramps anywhere between minY and maxY. Pieces keep edge off the side trees and
+   * minGap (along x) clear of each other so they never wall off the road. Bumpers and ramps keep
+   * |x| >= keepClearX. Downed pieces stand again after each wave when rebuild is on.
+   */
+  shaping: {
+    enabled: true, minY: 10, maxY: 58, edge: 0.5, minGap: 1.5, keepClearX: 2,
+    barricade: { hw: 1.6, hh: 0.35, hits: 3, cost: 0 },
+    rubble: { r: 0.9, hits: 2 },
+    levels: [{ barricade: 2, rubble: 2 }, { barricade: 3, rubble: 3 }, { barricade: 4, rubble: 4 }] as { barricade: number; rubble: number }[],
+    rebuild: true,
+  },
+  /**
    * Trees dotted over the middle of the field, count per level. A ball smashes one in a single
    * hit (it still bounces off); orcs go round them. They keep off the road down the middle.
    */

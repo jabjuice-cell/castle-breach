@@ -307,7 +307,25 @@ export type GameEvent =
   | { type: 'calledEarly'; wave: number; gold: number }
   | { type: 'bossKilled'; x: number; y: number }
   | { type: 'lost'; segment: number }
-  | { type: 'won' };
+  | { type: 'won' }
+  /** War Council: the player set down a barricade or rubble (obstacle index). */
+  | { type: 'terrainPlaced'; kind: TerrainKind; x: number; y: number; index: number }
+  | { type: 'terrainRemoved'; index: number }
+  | { type: 'contraptionMoved'; index: number; x: number; y: number }
+  /** Placed terrain that fell in the wave stands again. */
+  | { type: 'terrainRebuilt' }
+  /** The setup is over and the first wave's preview begins. */
+  | { type: 'battleReady' }
+  | { type: 'defenderPlaced'; id: number; kind: PlacedKind; x: number; y: number; moved: boolean };
+
+export type TerrainKind = 'barricade' | 'rubble';
+
+/** The way one wave class marches, drawn before the wave comes. cover: ids of defenders that reach each point. */
+export interface RoutePreview {
+  kind: 'foot' | 'rider' | 'runner' | 'heavy';
+  lane: number;
+  pts: { x: number; y: number; cover: number[] }[];
+}
 
 /**
  * setup: before the level's first wave, buying and placing the load-out (the game is paused).
@@ -402,6 +420,9 @@ export class Game {
   /** The pinball fixtures on this level's field, and each one's outline (same index). */
   readonly contraptions: Contraption[];
   private readonly shapes: Obstacle[];
+  /** Bumped on any terrain or contraption change (or rebuild) so the render can redraw. */
+  shapeVersion = 0;
+  private routeCache: { key: string; routes: RoutePreview[] } | null = null;
   /** When each bell was rung (-1: not ringing), by contraption index, and when each ringing set resets (by group). */
   readonly bellRung: number[];
   private bellReset = new Map<number, number>();
@@ -676,6 +697,7 @@ export class Game {
     if (this.phase === 'battle') {
       this.clearWave(this.wave);
       this.plan = planWave(this.wave + 1, this.seed, this.cfg);
+      this.rebuildTerrain();
     }
     const r = this.cfg.renown;
     this.earlyBonus.set(this.plan.number, Math.min(r.earlyCap, r.earlyPerSecond * seconds));
@@ -746,8 +768,158 @@ export class Game {
     if (!this.canPlace(kind, x, y)) return false;
     this.gold -= cost;
     this.addDefender(kind, x, y, cost);
+    this.events.push({ type: 'defenderPlaced', id: this.defenders[this.defenders.length - 1].id, kind, x, y, moved: false });
     if (kind === 'soldiers') this.musterSoldiers();
     return true;
+  }
+
+  // ---- War Council: shaping the field ----------------------------------------
+
+  private get placedTerrain(): Obstacle[] {
+    return this.obstacles.filter((o) => o.placed && !o.removed);
+  }
+
+  /** How many more of a kind the level allows (0 when the shop is shut). */
+  shapeLeft(kind: TerrainKind): number {
+    const s = this.cfg.shaping;
+    if (!s.enabled || !this.shopOpen) return 0;
+    const lim = s.levels[Math.min(this.level, s.levels.length - 1)]?.[kind] ?? 0;
+    return Math.max(0, lim - this.placedTerrain.filter((o) => o.look === kind).length);
+  }
+
+  private terrainShape(kind: TerrainKind, x: number, y: number, angle: number): Obstacle {
+    const s = this.cfg.shaping;
+    return kind === 'barricade'
+      ? { look: 'barricade', x, y, hw: s.barricade.hw, hh: s.barricade.hh, angle }
+      : { look: 'rubble', x, y, r: s.rubble.r };
+  }
+
+  private static reach(o: Obstacle): number {
+    return o.r ?? Math.hypot(o.hw ?? 1, o.hh ?? 1);
+  }
+
+  /** Whether a piece fits at its spot: in bounds and clear of everything standing (skipShape: the contraption being moved). */
+  private shapeFits(o: Obstacle, skipShape = -1): boolean {
+    const s = this.cfg.shaping;
+    const reach = Game.reach(o);
+    if (Math.abs(o.x) + reach > this.cfg.field.halfWidth - s.edge || o.y < s.minY || o.y > s.maxY) return false;
+    const blocks = (p: Obstacle) => Math.hypot(p.x - o.x, p.y - o.y) < Game.reach(p) + reach;
+    if (this.obstacles.some((p) => !p.removed && (!p.down || p.placed) && blocks(p))) return false;
+    if (this.shapes.some((p, i) => i !== skipShape && blocks(p))) return false;
+    return this.defenders.every((d) => d.kind !== 'spiketrap' || Math.hypot(d.x - o.x, d.y - o.y) >= this.cfg.spiketrap.footprint + reach);
+  }
+
+  /** Pure check for a ghost: could this piece go down here now? */
+  canPlaceTerrain(kind: TerrainKind, x: number, y: number, angle = 0): boolean {
+    if (this.shapeLeft(kind) <= 0) return false;
+    const o = this.terrainShape(kind, x, y, angle);
+    if (!this.shapeFits(o)) return false;
+    // Never a continuous line: keep clear of every other placed piece along x.
+    const gap = this.cfg.shaping.minGap;
+    return this.placedTerrain.every((p) => Math.abs(p.x - x) >= Game.reach(p) + Game.reach(o) + gap);
+  }
+
+  placeTerrain(kind: TerrainKind, x: number, y: number, angle = 0): boolean {
+    if (!this.canPlaceTerrain(kind, x, y, angle)) return false;
+    const o = this.terrainShape(kind, x, y, angle);
+    o.placed = true;
+    o.hits = o.maxHits = this.cfg.shaping[kind].hits;
+    this.obstacles.push(o);
+    this.shapeVersion++;
+    this.events.push({ type: 'terrainPlaced', kind, x, y, index: this.obstacles.length - 1 });
+    return true;
+  }
+
+  /** Takes a placed piece back (its slot stays in the list, marked removed, so indices hold). */
+  removeTerrain(index: number): boolean {
+    const o = this.obstacles[index];
+    if (!this.shopOpen || !o || !o.placed || o.removed) return false;
+    o.removed = o.down = true;
+    this.shapeVersion++;
+    this.events.push({ type: 'terrainRemoved', index });
+    return true;
+  }
+
+  canMoveContraption(index: number, x: number, y: number): boolean {
+    const c = this.contraptions[index];
+    const s = this.cfg.shaping;
+    if (!s.enabled || !this.shopOpen || !c || c.kind === 'bell' || Math.abs(x) < s.keepClearX) return false;
+    return this.shapeFits({ ...this.shapes[index], x, y }, index);
+  }
+
+  moveContraption(index: number, x: number, y: number): boolean {
+    if (!this.canMoveContraption(index, x, y)) return false;
+    const c = this.contraptions[index];
+    c.x = this.shapes[index].x = x;
+    c.y = this.shapes[index].y = y;
+    this.shapeVersion++;
+    this.events.push({ type: 'contraptionMoved', index, x, y });
+    return true;
+  }
+
+  /** After a wave, placed pieces that fell stand again (unless the player took them back). */
+  private rebuildTerrain(): void {
+    if (!this.cfg.shaping.rebuild) return;
+    let any = false;
+    for (const o of this.obstacles) {
+      if (!o.placed || o.removed || !o.down) continue;
+      o.down = false;
+      o.hits = o.maxHits;
+      any = true;
+    }
+    if (!any) return;
+    this.shapeVersion++;
+    this.events.push({ type: 'terrainRebuilt' });
+  }
+
+  /**
+   * Where each class in the coming wave will march, with the same push-out as the real orcs, so
+   * placed terrain bends the routes. Pure: no events, no rng. Cached until the field, wave or defenders change.
+   */
+  routePreview(): RoutePreview[] {
+    const key = [this.shapeVersion, this.plan.number, this.obstacles.filter((o) => !o.down).length,
+      ...this.defenders.map((d) => `${d.id},${d.x},${d.y},${d.heading}`)].join('|');
+    if (this.routeCache?.key === key) return this.routeCache.routes;
+    const routes: RoutePreview[] = [];
+    const seen = new Set<string>();
+    const hw = this.cfg.field.halfWidth;
+    for (const g of this.plan.groups) {
+      const ks = g.members.map((m) => m.kind);
+      const kind = ks.includes('ogre') || ks.includes('warlord') ? 'heavy' : ks.includes('rider') ? 'rider' : ks.includes('runner') ? 'runner' : 'foot';
+      const id = `${kind}${g.lane}`;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      const radius = Math.max(...ks.map((k) => this.cfg[k].radius));
+      const pts: RoutePreview['pts'] = [];
+      let x = g.x;
+      let y = this.cfg.field.spawnY;
+      // Fine steps (a barricade is thinner than a coarse one), a point every 1.5 units.
+      for (let n = 0; n < 2000; n++, y -= 0.3) {
+        for (const o of this.obstacles) {
+          if (o.down) continue;
+          const hit = contact(o, x, y, radius);
+          if (!hit) continue;
+          x += hit.nx * hit.depth;
+          y += hit.ny * hit.depth;
+          // Pinned against a broad face: slide round it.
+          if (hit.ny > 0.5) x += (x >= o.x ? 1 : -1) * 0.16;
+        }
+        this.shapes.forEach((o, i) => {
+          if (this.contraptions[i].kind === 'ramp') return;
+          const hit = contact(o, x, y, radius);
+          if (!hit) return;
+          x += hit.nx * hit.depth;
+          y += hit.ny * hit.depth;
+        });
+        x = Math.max(-hw + 0.3, Math.min(hw - 0.3, x));
+        const py = Math.max(0, y);
+        if (n % 5 === 0 || py <= 0) pts.push({ x, y: py, cover: this.defenders.filter((d) => this.covers(d, x, py)).map((d) => d.id) });
+        if (y <= 0) break;
+      }
+      routes.push({ kind, lane: g.lane, pts });
+    }
+    this.routeCache = { key, routes };
+    return routes;
   }
 
   /** Gold back for selling a defender: all of it in the setup, half once the level is under way. */
@@ -804,6 +976,7 @@ export class Game {
     d.aimX = d.heading === null ? x : x + Math.sin(d.heading) * 30;
     d.aimY = d.heading === null ? 30 : y + Math.cos(d.heading) * 30;
     if (this.phase === 'battle') d.timer = Math.max(d.timer, this.cfg.castle.packSeconds);
+    this.events.push({ type: 'defenderPlaced', id, kind: d.kind as PlacedKind, x, y, moved: true });
     if (d.kind === 'soldiers') this.musterSoldiers();
     return true;
   }
@@ -1048,6 +1221,7 @@ export class Game {
     this.musterSoldiers();
     this.phase = 'preview';
     this.phaseTimer = this.cfg.waves.previewSeconds;
+    this.events.push({ type: 'battleReady' });
   }
 
   // ---- defender stats -------------------------------------------------------
@@ -1197,6 +1371,7 @@ export class Game {
         return;
       }
       this.plan = planWave(this.wave + 1, this.seed, this.cfg);
+      this.rebuildTerrain();
       this.phase = 'preview';
       this.phaseTimer = this.cfg.waves.previewSeconds;
     }
@@ -2392,7 +2567,11 @@ export class Game {
       b.y += hit.ny * (hit.depth + 0.01);
       b.banked = true;
       this.addCombo(b, this.cfg.bumpers.bankCombo);
-      if (!needsHeave(o) || b.heaved) {
+      if (o.placed && o.maxHits && (o.hits = (o.hits ?? o.maxHits) - 1) > 0) {
+        this.events.push({ type: 'obstacle', x: b.x - hit.nx * r, y: b.y - hit.ny * r, index });
+        return;
+      }
+      if (o.placed || !needsHeave(o) || b.heaved) {
         // One hit and it comes crashing down (stone needs a heaved ball) and is gone.
         o.down = true;
         this.events.push({ type: 'treeDown', x: o.x, y: o.y, index });
