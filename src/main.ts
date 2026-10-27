@@ -653,7 +653,7 @@ function updateHud(dt: number) {
     const face = queenCross(game) ? queenAngryUrl : queenUrl;
     const portrait = hud.queen.querySelector('img')!;
     if (!portrait.src.endsWith(face)) portrait.src = face;
-    const startHtml = setup ? 'To battle! <kbd>Enter</kbd>' : `${icon('call')}Start now, +${game.earlyCallGold()} gold <kbd>Enter</kbd>`;
+    const startHtml = setup ? 'To battle! <kbd>Enter</kbd>' : `${icon('call')}Ready, +${game.earlyCallGold()} gold <kbd>Enter</kbd>`;
     if (startHtml !== lastStartHtml) hud.startNow.innerHTML = lastStartHtml = startHtml;
   }
 

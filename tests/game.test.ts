@@ -844,6 +844,25 @@ describe('run loop', () => {
     expect(game.enemies.length).toBeGreaterThanOrEqual(1);
   });
 
+  it('starts the 30 s break only once the last enemy is dead, and Ready skips it for gold', () => {
+    const game = battle();
+    (game as unknown as { nextGroup: number }).nextGroup = game.plan.groups.length;
+    game.enemies = [enemy({ y: 40 })];
+    run(game, 40);
+    expect(game.phase).toBe('battle');
+    game.enemies = [];
+    run(game, 0.1);
+    expect(game.phase).toBe('preview');
+    expect(game.phaseTimer).toBeGreaterThan(game.cfg.waves.previewSeconds - 1);
+    expect(game.cfg.waves.previewSeconds).toBe(30);
+    run(game, 10);
+    expect(game.phase).toBe('preview');
+    const gold = game.gold;
+    expect(game.callEarly()).toBe(true);
+    expect(game.phase).toBe('battle');
+    expect(game.gold).toBeGreaterThan(gold);
+  });
+
   it('opens the shop over the battlefield in the lull between waves, and the level ends after five', () => {
     const game = new Game(1, quiet());
     game.endSetup();
