@@ -162,6 +162,8 @@ export const defaultConfig = {
     slamKillMass: 1.5,
     slamDamage: 25,
     slamKnock: 40,
+    /** Render only: shield hits that knock one cluster of blocks off the voxel shield (cleared each wave). */
+    hitsPerChunk: 2,
   },
   balls: {
     radius: 0.45,

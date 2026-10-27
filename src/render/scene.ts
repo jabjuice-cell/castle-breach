@@ -4,14 +4,10 @@ import { type Ball, type Capsule, type CapsuleKind, type Enemy, type Game, type 
 import { ENEMY_KINDS, type EnemyKind, formation } from '../sim/waves';
 import aspects from '../assets/aspects.json';
 import arrowUrl from '../assets/fx/arrow.webp';
-import boulderUrl from '../assets/fx/boulder.webp';
 import explosionUrl from '../assets/fx/explosion.webp';
 import impactUrl from '../assets/fx/impact.webp';
 import fireballUrl from '../assets/fx/fireball.webp';
-import rockUrl from '../assets/fx/rock.webp';
 import enemyBoltUrl from '../assets/fx/enemy-bolt.webp';
-import royalShieldUrl from '../assets/fx/royal-shield.webp';
-import stoneUrl from '../assets/fx/stone.webp';
 import craterUrl from '../assets/maps/crater.webp';
 import scorchUrl from '../assets/maps/scorch.webp';
 import courtyardUrl from '../assets/maps/courtyard.jpg';
@@ -50,6 +46,7 @@ import { ballistaModel } from './models';
 import { VoxelOrcs } from './orcs';
 import { VoxBatch } from './voxels';
 import { ShieldModel } from './shield';
+import { ballGeometry, rockGeometry, ROCK_DEBRIS } from './voxelBalls';
 import { World } from './world';
 import {
   GroundCanvas, type SpriteArt, blobTexture, capsuleTexture, detailTexture, glowTexture, imageSprite, puffTexture, loadImage, setAnisotropy,
@@ -236,6 +233,8 @@ interface Debris {
   rot: THREE.Euler;
   life: number;
   color: THREE.Color;
+  /** Cube scale (default 1): rock chunks are bigger than dust. */
+  size?: number;
 }
 
 interface Rocket {
@@ -280,12 +279,15 @@ const tmpV = new THREE.Vector3();
 const tmpD = new THREE.Vector3();
 const tmpS = new THREE.Vector3();
 const tmpC = new THREE.Color();
+const tmpE = new THREE.Euler();
 const hidden = new THREE.Matrix4().makeScale(0, 0, 0);
 
 export class BattleScene {
   readonly renderer: THREE.WebGLRenderer;
   readonly camera: THREE.PerspectiveCamera;
   private scene = new THREE.Scene();
+  /** Balls and rocks, drawn over everything else (so they stay visible over orcs) with their own depth. */
+  private topScene = new THREE.Scene();
   private quality: Quality;
   private ground!: GroundCanvas;
   private terrain!: Terrain;
@@ -364,6 +366,8 @@ export class BattleScene {
   private puffTex = puffTexture();
   private smoke: { sprite: THREE.Sprite; vel: THREE.Vector3; life: number; max: number; size: number }[] = [];
   private balls: THREE.InstancedMesh;
+  /** Hits the shield has taken this wave: every few knock a cluster of blocks off it. */
+  private shieldHits = 0;
   private halos: THREE.InstancedMesh;
   private barrels: THREE.InstancedMesh;
   private capsuleTex = {} as Record<CapsuleKind, THREE.Texture>;
@@ -440,6 +444,11 @@ export class BattleScene {
     const sun = new THREE.DirectionalLight('#fff1d6', 2);
     sun.position.set(-20, 40, 15);
     this.scene.add(sun);
+    this.topScene.add(new THREE.HemisphereLight('#e8f2ff', '#4a5a30', 1.5));
+    const topSun = new THREE.DirectionalLight('#fff1d6', 2);
+    topSun.position.copy(sun.position);
+    this.topScene.add(topSun);
+    this.renderer.autoClear = false;
 
     this.groundMat = new THREE.MeshLambertMaterial();
     this.addDetail(this.groundMat);
@@ -510,16 +519,16 @@ export class BattleScene {
     this.ballShadows.count = 0;
     this.scene.add(this.ballShadows);
 
-    this.thrown = {
-      rock: makeSprites(imageSprite(rockUrl, aspects.rock), 0.4, 600, true),
-      boulder: makeSprites(imageSprite(boulderUrl, aspects.boulder), 0.9, 300, true),
-      stone: makeSprites(imageSprite(stoneUrl, aspects.stone), 0.6, 200, true),
+    // Thrown rocks are chunky voxel shapes. They are what you're trying to catch, so they draw over everything.
+    const voxelThrown = (kind: 'rock' | 'boulder' | 'stone', height: number, max: number) => {
+      const mesh = new THREE.InstancedMesh(rockGeometry(kind, height), new THREE.MeshLambertMaterial({ vertexColors: true }), max);
+      mesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(max * 3).fill(1), 3);
+      mesh.frustumCulled = false;
+      mesh.count = 0;
+      this.topScene.add(mesh);
+      return mesh;
     };
-    // Incoming boulders and rocks are what you're trying to catch, so the shield never hides them.
-    for (const m of Object.values(this.thrown)) {
-      (m.material as THREE.MeshBasicMaterial).depthTest = false;
-      m.renderOrder = 7;
-    }
+    this.thrown = { rock: voxelThrown('rock', 0.8, 600), boulder: voxelThrown('boulder', 1.8, 300), stone: voxelThrown('stone', 1.2, 200) };
     const arrowArt = imageSprite(arrowUrl, aspects.arrow);
     const makeFlat = (length: number, max: number, art = arrowArt, pointsDown = false) => {
       // Lies flat with the head pointing along -z (away from the castle), whichever way the art points.
@@ -548,7 +557,7 @@ export class BattleScene {
 
     // The royal shield: a real steel shield standing out in front of the wall, its painted face
     // to the orcs, so from the castle we see its back. Balls are drawn over it, so none hide behind it.
-    this.shieldModel = new ShieldModel(imageSprite(royalShieldUrl, aspects['royal-shield']).texture);
+    this.shieldModel = new ShieldModel();
     this.scene.add(this.shieldModel.group);
     const bearerGeo = new THREE.PlaneGeometry(2 * SOLDIER_SIZE * this.soldierArt.aspect * 1.15, 2 * SOLDIER_SIZE * 1.15).translate(0, SOLDIER_SIZE * 1.15, 0);
     for (let i = 0; i < 2; i++) {
@@ -571,18 +580,17 @@ export class BattleScene {
       this.scene.add(mesh);
     }
 
-    // Balls: shiny spheres drawn over the field and the orcs (but under the shield), each with an additive halo.
+    // Balls: chunky voxel spheres (round physics) drawn over the field and the orcs, each with an additive halo.
     const r = game.cfg.balls.radius;
     this.balls = new THREE.InstancedMesh(
-      new THREE.IcosahedronGeometry(r, 3),
-      new THREE.MeshStandardMaterial({ roughness: 0.3, metalness: 0.55, depthTest: false }),
+      ballGeometry(r),
+      new THREE.MeshLambertMaterial({ vertexColors: true }),
       MAX_BALLS,
     );
     this.balls.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(MAX_BALLS * 3).fill(1), 3);
     this.balls.frustumCulled = false;
-    this.balls.renderOrder = 9;
     this.balls.count = 0;
-    this.scene.add(this.balls);
+    this.topScene.add(this.balls);
     const glow = glowTexture();
     this.halos = new THREE.InstancedMesh(
       new THREE.PlaneGeometry(1, 1),
@@ -968,6 +976,7 @@ export class BattleScene {
           this.sparks(ev.x, BALL_Y + 0.4, -sy - 0.3, ev.parry ? 18 : 8);
           this.shieldJolt = ev.parry ? 1 : 0.7;
           this.shieldFlashT = 0;
+          this.shieldHits++;
           this.shake = Math.max(this.shake, ev.parry ? 0.5 : 0.25);
           if (ev.parry) this.flash(0.18, '#fff6c8');
           break;
@@ -1065,10 +1074,15 @@ export class BattleScene {
         case 'bank':
           fw.burst(ev.x, 0.9, -ev.y, { count: 30, colors: ['#ffffff', '#5ad8ff', '#ffd34a'], speed: 9, life: 0.45, size: 0.35, up: 0.3, gravity: 6 });
           break;
+        case 'waveStart':
+          // The bearers patch the shield up between waves.
+          this.shieldHits = 0;
+          break;
         case 'shotDown':
           // Archers shoot a boulder out of the sky: it bursts into rubble mid-air.
           fw.burst(ev.x, 5, -ev.y, { count: 40, colors: ['#ffb43a', '#fff2a8', '#c8b898'], speed: 9, life: 0.6, size: 0.45, gravity: 10 });
           this.burst(ev.x, 5, -ev.y, 6, '#8c8070', 8);
+          this.rockBurst(ev.x, 5, -ev.y, 10, 9);
           break;
         case 'combo': {
           const colors = COMBO_COLORS[ev.combo] ?? GOLD;
@@ -1135,6 +1149,7 @@ export class BattleScene {
           // Rock on stone: blocks of the wall fly, more and further for a bigger hit, with a puff of dust.
           const k = Math.min(1, ev.damage / 25);
           for (let i = 0; i < 3 + k * 4; i++) this.burst(ev.x + (Math.random() - 0.5) * 1.5, 2.5, 0.3, 2 + Math.round(k * 2), STONE[i % STONE.length], 6 + k * 10);
+          this.rockBurst(ev.x, 2.2, 0.3, 4 + Math.round(k * 8), 7 + k * 8);
           fw.burst(ev.x, 2, -0.2, { count: 10 + k * 40, colors: ['#e8d8b0', '#ffb43a', '#ffffff'], speed: 6 + k * 8, life: 0.45, size: 0.4, up: 0.5 });
           for (let i = 0; i < 1 + k * 4; i++) this.puff(ev.x + (Math.random() - 0.5) * 2, 2 + Math.random(), 0.5, 2 + k * 2.5, '#d8ccb0', 0.8 + k * 0.6);
           if (this.effects.length < 40) this.spawnEffect('impact', ev.x, 0.5, 0.25, 1.6 + k * 1.6);
@@ -1238,7 +1253,10 @@ export class BattleScene {
       this.camBase.z - ahead,
     );
     this.camera.lookAt(tmpD.copy(this.camLook).setZ(this.camLook.z - ahead));
+    this.renderer.clear();
     this.renderer.render(this.scene, this.camera);
+    this.renderer.clearDepth();
+    this.renderer.render(this.topScene, this.camera);
   }
 
   // ---- the shield, balls and capsules ---------------------------------------
@@ -1269,6 +1287,24 @@ export class BattleScene {
         if (b.stuck || b.vy >= 0) continue;
         const eta = (b.y - g.cfg.shield.y) / -b.vy;
         if (eta > 0 && eta <= win * 3) cue = Math.max(cue, eta <= win ? 0.9 : 0.35);
+      }
+    }
+    // Hits knock blocks off it, which fly off as debris.
+    const lostNow = this.shieldModel.setWear(Math.floor(this.shieldHits / g.cfg.shield.hitsPerChunk));
+    if (lostNow.length) {
+      m.updateMatrixWorld(true);
+      for (const c of lostNow) {
+        const at = m.localToWorld(new THREE.Vector3(c.x, c.y, c.z));
+        if (this.debris.length >= QUALITY[this.quality].debris) break;
+        this.debris.push({
+          pos: at,
+          vel: new THREE.Vector3((Math.random() - 0.5) * 7, 2 + Math.random() * 5, -2 - Math.random() * 5),
+          spin: new THREE.Vector3(Math.random() * 8, Math.random() * 8, Math.random() * 8),
+          rot: new THREE.Euler(),
+          life: 1 + Math.random() * 0.6,
+          color: c.color,
+          size: w * 0.075 / VOXEL,
+        });
       }
     }
     // Dimmed while it recovers from a heave.
@@ -1321,7 +1357,7 @@ export class BattleScene {
         this.ballShadows.setMatrixAt(sh++, tmpM.compose(tmpV.set(b.x, 0, -b.y), tmpQ.identity(), tmpS.setScalar(1.6 - arc * 0.5)));
       }
       tmpV.set(b.x, y, -b.y);
-      this.balls.setMatrixAt(n, tmpM.compose(tmpV, tmpQ.setFromAxisAngle(FORWARD, this.time * 3 + b.id), tmpS.setScalar(size)));
+      this.balls.setMatrixAt(n, tmpM.compose(tmpV, tmpQ.setFromEuler(tmpE.set(this.time * 2.2 + b.id, this.time * 3 + b.id * 1.7, this.time * 1.3)), tmpS.setScalar(size)));
       this.balls.setColorAt(n++, tmpC.set(color));
       const glow = (b.perfect ? 6.5 : b.heaved && b.lines > 0 ? 6 : b.combo >= 10 ? 5 : 3.5) * r * size;
       this.halos.setMatrixAt(h, tmpM.compose(tmpV, camQ, tmpS.set(glow, glow, 1)));
@@ -2122,7 +2158,6 @@ export class BattleScene {
   }
 
   private updateProjectiles() {
-    const camQ = this.camera.quaternion;
     const counts = { rock: 0, boulder: 0, stone: 0 };
     let b = 0;
     let eb = 0;
@@ -2137,7 +2172,7 @@ export class BattleScene {
         const t = Math.min(1, p.travelled / p.flight);
         const arc = p.kind === 'stone' ? 0.25 : 0.12;
         const h = p.friendly && p.kind !== 'stone' ? 1.2 : 1.2 + 4 * (p.flight * arc) * t * (1 - t);
-        tmpQ.copy(camQ).multiply(tmpQ2.setFromAxisAngle(FORWARD, p.travelled * 0.3));
+        tmpQ.setFromEuler(tmpE.set(p.travelled * 0.45 + p.x, p.travelled * 0.3, p.travelled * 0.2));
         mesh.setMatrixAt(i, tmpM.compose(tmpV.set(p.x, h, -p.y), tmpQ, tmpS.set(1, 1, 1)));
         mesh.setColorAt(i, p.friendly && p.kind !== 'stone' ? tmpC.setRGB(1, 0.9, 0.55) : tmpC.setRGB(1, 1, 1));
       } else if (p.kind === 'arrow') {
@@ -2188,6 +2223,22 @@ export class BattleScene {
         rot: new THREE.Euler(),
         life: 1.2 + Math.random() * 0.8,
         color: new THREE.Color(color),
+      });
+    }
+  }
+
+  /** A rock bursting into voxel chunks: a few big cubes in rock colours. */
+  private rockBurst(x: number, y: number, z: number, n: number, speed: number) {
+    const cap = QUALITY[this.quality].debris;
+    for (let i = 0; i < n && this.debris.length < cap; i++) {
+      this.debris.push({
+        pos: new THREE.Vector3(x + (Math.random() - 0.5) * 0.8, y, z),
+        vel: new THREE.Vector3((Math.random() - 0.5) * speed, Math.random() * speed * 0.9, (Math.random() - 0.3) * speed),
+        spin: new THREE.Vector3(Math.random() * 8, Math.random() * 8, Math.random() * 8),
+        rot: new THREE.Euler(),
+        life: 1.2 + Math.random() * 0.8,
+        color: new THREE.Color(ROCK_DEBRIS[i % ROCK_DEBRIS.length]),
+        size: 1 + Math.random() * 0.9,
       });
     }
   }
@@ -2256,7 +2307,7 @@ export class BattleScene {
     }
     this.debris = alive;
     alive.forEach((d, i) => {
-      const sc = Math.min(1, d.life * 2) * (d.spin.x === 20 ? 0.35 : 1);
+      const sc = Math.min(1, d.life * 2) * (d.spin.x === 20 ? 0.35 : 1) * (d.size ?? 1);
       this.debrisMesh.setMatrixAt(i, tmpM.compose(d.pos, tmpQ.setFromEuler(d.rot), tmpS.set(sc, sc, sc)));
       this.debrisMesh.setColorAt(i, d.color);
     });
