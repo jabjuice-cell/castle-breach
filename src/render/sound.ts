@@ -482,4 +482,50 @@ export class Sounds {
     if (!ctx || this.muted) return;
     this.tone(180, ctx.currentTime, 0.12, 0.3, 'square');
   }
+
+  /**
+   * A short voice-like grunt or shout: a sawtooth with a quick pitch bend through two bandpass
+   * filters (vowel formants). Soldiers bark low and long, archers shout higher and shorter.
+   */
+  voice(kind?: string) {
+    const ctx = this.ctx;
+    if (!ctx || this.muted) return;
+    const now = ctx.currentTime;
+    const soldier = kind === 'soldiers';
+    const archer = kind === 'archers';
+    const base = soldier ? 100 : archer ? 150 : kind === 'mage' ? 175 : kind === 'catapult' || kind === 'ballista' ? 90 : 120;
+    const pitch = base * (0.92 + Math.random() * 0.16);
+    const len = soldier ? 0.34 : archer ? 0.24 : 0.28;
+    const [f1, f2] = soldier ? [520, 950] : archer ? [720, 1700] : [640, 1200];
+    const o = ctx.createOscillator();
+    o.type = 'sawtooth';
+    o.frequency.setValueAtTime(pitch * 0.85, now);
+    o.frequency.exponentialRampToValueAtTime(pitch * 1.25, now + 0.05);
+    o.frequency.exponentialRampToValueAtTime(pitch * 0.7, now + len);
+    const out = ctx.createGain();
+    out.gain.setValueAtTime(0.0001, now);
+    out.gain.exponentialRampToValueAtTime(0.28, now + 0.03);
+    out.gain.exponentialRampToValueAtTime(0.0001, now + len);
+    out.connect(ctx.destination);
+    for (const [freq, level] of [[f1, 1], [f2, 0.6]] as const) {
+      const band = ctx.createBiquadFilter();
+      band.type = 'bandpass';
+      band.frequency.setValueAtTime(freq * 0.9, now);
+      band.frequency.linearRampToValueAtTime(freq * 1.1, now + len);
+      band.Q.value = 6;
+      const g = ctx.createGain();
+      g.gain.value = level;
+      o.connect(band).connect(g).connect(out);
+    }
+    o.start(now);
+    o.stop(now + len + 0.05);
+  }
+
+  /** Wood and stone knocked about: a quick rattle of ticks (taking a barricade or rubble back). */
+  rattle() {
+    const ctx = this.ctx;
+    if (!ctx || this.muted) return;
+    const now = ctx.currentTime;
+    for (let i = 0; i < 6; i++) this.tone(260 + Math.random() * 320, now + i * 0.045, 0.06, 0.1, i % 2 ? 'square' : 'triangle');
+  }
 }

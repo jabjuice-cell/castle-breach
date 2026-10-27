@@ -559,6 +559,29 @@ export function obstacleModel(look: ObstacleLook, size: number, r: number, hw: n
       v.set(0, 6, D + 1, '#e8e0d0');
       break;
     }
+    case 'barricade': {
+      // Crossed stakes lashed to a plank, rotated by the scene to the piece's angle.
+      v.box(-W, 2, -1, W, 2, 1, () => jitter(PAL.wood, 0.12, rnd));
+      v.box(-W, 4, -1, W, 4, 1, () => jitter(PAL.woodDark, 0.12, rnd));
+      for (const cx of [-W + 2, 0, W - 2]) {
+        for (let t = 0; t <= 7; t++) {
+          const dx = Math.round((t - 3.5) * 0.6);
+          const c = t > 5 ? '#3a2a1a' : jitter(PAL.wood, 0.12, rnd);
+          v.set(cx + dx, t, 0, c);
+          v.set(cx - dx, t, 0, c);
+        }
+      }
+      break;
+    }
+    case 'rubble': {
+      // A heap of broken wall stone.
+      v.blob(0, R * 0.35, 0, R, R * 0.55, R, (_, y) => jitter(y > R * 0.4 ? '#a8a49a' : '#8c877c', 0.12, rnd), rnd, 0.35);
+      for (let i = 0; i < 4; i++) {
+        const a = rnd() * 6.28;
+        v.blob(Math.cos(a) * R * 0.6, 1, Math.sin(a) * R * 0.6, 1.3, 1, 1.3, () => jitter('#9a968c', 0.15, rnd), rnd, 0.3);
+      }
+      break;
+    }
     case 'spikes': {
       // An orc barricade: sharpened stakes leaning out.
       for (let x = -W; x <= W; x += 2) {

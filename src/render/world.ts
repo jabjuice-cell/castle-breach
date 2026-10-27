@@ -133,6 +133,12 @@ export class World {
   private fieldTrees = new Map<number, THREE.Object3D>();
   /** The pinball fixtures on the field, by contraption index; the bumpers squash and the bells swing. */
   private fixtures = new THREE.Group();
+  /** Each contraption's group, by contraption index, so it can be moved or dragged. */
+  private fixtureGroups: THREE.Group[] = [];
+  /** A fixture being dragged to a new spot (it follows the mouse, tinted by whether it fits). */
+  private drag: { index: number; ok: boolean } | null = null;
+  /** Placed pieces a ball just hit: seconds of shake left, by obstacle index. */
+  private shaking = new Map<number, number>();
   private fixtureParts: { kind: 'bumper' | 'bell' | 'ramp'; spring?: THREE.Object3D; pivot?: THREE.Object3D; phase: number }[] = [];
   private treeMesh!: THREE.InstancedMesh;
   private treeVoxels: LeafVoxel[] = [];
@@ -487,7 +493,9 @@ export class World {
     this.buildFixtures();
     const r = seeded(4100 + this.game.level * 17 + this.game.seed % 1000);
     const kinds: TreeKind[] = ['oak', 'oak', 'pine', 'birch', 'oak', 'pine'];
+    this.shaking.clear();
     this.game.obstacles.forEach((o, i) => {
+      if (o.removed || (o.placed && o.down)) return;
       if (o.look === 'tree') {
         // Each tree on the field is its own model, so a ball can bring it down.
         const tree = new VoxBatch().add(treeModel(kinds[Math.floor(r() * kinds.length)], Math.floor(r() * 1e6)), FIELD_TREE_VOX, new THREE.Vector3(o.x, 0, -o.y), r() * 6).build();
@@ -495,11 +503,82 @@ export class World {
         this.props.add(tree);
         return;
       }
-      const v = obstacleModel(o.look, PROP_VOX, o.r ?? 1, o.hw ?? 1, o.hh ?? 1, 700 + i + this.game.level * 31);
-      // Each structure is its own model too, so a ball can smash it.
-      const prop = new VoxBatch().add(v, PROP_VOX, new THREE.Vector3(o.x, 0, -o.y), o.angle ?? 0).build();
-      this.fieldTrees.set(i, prop);
-      this.props.add(prop);
+      this.addObstacle(i);
+    });
+  }
+
+  /** Each structure is its own model, so a ball can smash it. Also stands up a piece the player just placed. */
+  addObstacle(i: number): void {
+    const o = this.game.obstacles[i];
+    if (!o || o.look === 'tree' || this.fieldTrees.has(i)) return;
+    const v = obstacleModel(o.look, PROP_VOX, o.r ?? 1, o.hw ?? 1, o.hh ?? 1, 700 + i + this.game.level * 31);
+    const prop = new VoxBatch().add(v, PROP_VOX, new THREE.Vector3(o.x, 0, -o.y), o.angle ?? 0).build();
+    this.fieldTrees.set(i, prop);
+    this.props.add(prop);
+  }
+
+  private dropMesh(index: number): THREE.Object3D | undefined {
+    const m = this.fieldTrees.get(index);
+    if (!m) return undefined;
+    this.fieldTrees.delete(index);
+    this.shaking.delete(index);
+    this.props.remove(m);
+    m.traverse((o) => {
+      if (o instanceof THREE.Mesh) {
+        o.geometry.dispose();
+        (o.material as THREE.Material).dispose();
+      }
+    });
+    return m;
+  }
+
+  /** The player took a placed piece back: its model goes, with a little dust. */
+  removeObstacle(index: number): void {
+    const o = this.game.obstacles[index];
+    if (!this.dropMesh(index) || !o) return;
+    this.fx.puff(o.x, 0.5, -o.y, 2.2, '#b8a888', 0.9);
+    for (let i = 0; i < 3; i++) this.fx.burst(o.x, 0.5, -o.y, 1, o.look === 'rubble' ? '#8c877c' : '#7a4a24', 5);
+  }
+
+  /** Placed pieces that fell in the wave stand again (and any that are missing a model get one). */
+  rebuildTerrain(): void {
+    this.game.obstacles.forEach((o, i) => {
+      if (!o.placed || o.removed || o.down || this.fieldTrees.has(i)) return;
+      this.addObstacle(i);
+      this.fx.puff(o.x, 0.6, -o.y, 2.4, '#c8b898', 1);
+    });
+  }
+
+  /** A bumper or ramp was moved: its model goes to the new spot. */
+  moveFixture(index: number, x: number, y: number): void {
+    this.fixtureGroups[index]?.position.set(x, 0, -y);
+    this.fx.puff(x, 0.4, -y, 2.4, '#c8b898', 0.9);
+    this.fx.burst(x, 0.4, -y, 4, '#9a8f78', 5);
+  }
+
+  /** While dragging: the fixture follows (x, y) tinted green or red; null drops it back where the sim has it. */
+  dragFixture(d: { index: number; x: number; y: number; ok: boolean } | null): void {
+    const prev = this.drag;
+    if (prev && (!d || d.index !== prev.index)) this.placeFixture(prev.index);
+    if (!d) {
+      this.drag = null;
+      return;
+    }
+    this.drag = { index: d.index, ok: d.ok };
+    this.fixtureGroups[d.index]?.position.set(d.x, 0.35, -d.y);
+  }
+
+  private placeFixture(index: number): void {
+    const c = this.game.contraptions[index];
+    const g = this.fixtureGroups[index];
+    if (!c || !g) return;
+    g.position.set(c.x, 0, -c.y);
+    this.tint(g, 0, 0, 0);
+  }
+
+  private tint(g: THREE.Object3D, r: number, gr: number, b: number): void {
+    g.traverse((o) => {
+      if (o instanceof THREE.Mesh && o.material instanceof THREE.MeshLambertMaterial) o.material.emissive.setRGB(r, gr, b);
     });
   }
 
@@ -515,6 +594,8 @@ export class World {
       });
     }
     this.fixtureParts = [];
+    this.fixtureGroups = [];
+    this.drag = null;
     const k = this.game.cfg.contraptions;
     const one = (v: Vox, size: number) => new VoxBatch().add(v, size, new THREE.Vector3()).build();
     const bells = this.game.contraptions.flatMap((c, i) => (c.kind === 'bell' ? [i] : []));
@@ -522,6 +603,7 @@ export class World {
       const g = new THREE.Group();
       g.position.set(c.x, 0, -c.y);
       this.fixtures.add(g);
+      this.fixtureGroups[i] = g;
       if (c.kind === 'bumper') {
         const size = 0.3;
         const R = k.bumper.radius / size;
@@ -575,25 +657,36 @@ export class World {
         p.pivot.rotation.z = amp * Math.sin(g.time * 9 + p.phase);
       }
     });
+    if (this.drag) {
+      const grp = this.fixtureGroups[this.drag.index];
+      if (grp) this.tint(grp, ...(this.drag.ok ? [0.05, 0.4, 0.05] : [0.5, 0.05, 0.03]) as [number, number, number]);
+    }
+  }
+
+  /** Placed pieces a ball hit jitter for a moment. */
+  private animateShakes(dt: number): void {
+    for (const [i, t] of this.shaking) {
+      const m = this.fieldTrees.get(i);
+      const left = t - dt;
+      if (!m || left <= 0) {
+        m?.position.set(0, 0, 0);
+        this.shaking.delete(i);
+        continue;
+      }
+      this.shaking.set(i, left);
+      const k = left / 0.35;
+      m.position.set(Math.sin(left * 90) * 0.12 * k, Math.abs(Math.sin(left * 50)) * 0.08 * k, Math.cos(left * 70) * 0.08 * k);
+    }
   }
 
   /** A ball smashed a tree on the field: it bursts into leaves and splinters and is gone. */
   fellTree(index: number): void {
-    const tree = this.fieldTrees.get(index);
     const o = this.game.obstacles[index];
-    if (!tree || !o) return;
-    this.fieldTrees.delete(index);
-    this.props.remove(tree);
-    tree.traverse((m) => {
-      if (m instanceof THREE.Mesh) {
-        m.geometry.dispose();
-        (m.material as THREE.Material).dispose();
-      }
-    });
+    if (!o || !this.dropMesh(index)) return;
     const x = o.x;
     const z = -o.y;
     const leafy = o.look === 'tree';
-    const stone = o.look === 'boulder' || o.look === 'milestone' || o.look === 'stone' || o.look === 'ruin' || o.look === 'well';
+    const stone = o.look === 'boulder' || o.look === 'milestone' || o.look === 'stone' || o.look === 'ruin' || o.look === 'well' || o.look === 'rubble';
     for (let i = 0; i < 6; i++) this.fx.burst(x + (Math.random() - 0.5) * 2, 2 + Math.random() * 3, z + (Math.random() - 0.5) * 2, 2, leafy ? (i % 3 ? '#5a9a32' : '#7ab83e') : stone ? '#a8a49a' : '#7a4a24', 9);
     this.fx.burst(x, 0.8, z, 6, stone ? '#8c877c' : '#6b4424', 8);
     this.fx.puff(x, 1.5, z, 3, '#8a7a5a', 1.4);
@@ -604,8 +697,13 @@ export class World {
   chipObstacle(index: number, x: number, z: number): void {
     const o = this.game.obstacles[index];
     if (!o) return;
-    const wood = o.look === 'fence' || o.look === 'spikes';
-    for (let i = 0; i < 4; i++) this.fx.burst(x, 0.8, z, 1, wood ? '#7a4a24' : i % 2 ? '#8c877c' : '#a8a49a', 6);
+    const wood = o.look === 'fence' || o.look === 'spikes' || o.look === 'barricade';
+    // A placed piece with hits left also shakes and sheds more chips.
+    if (o.placed) {
+      this.shaking.set(index, 0.35);
+      this.fx.puff(x, 0.6, z, 1.6, wood ? '#a88858' : '#b8b0a0', 0.7);
+    }
+    for (let i = 0; i < (o.placed ? 8 : 4); i++) this.fx.burst(x, 0.8, z, 1, wood ? '#7a4a24' : i % 2 ? '#8c877c' : '#a8a49a', 6);
   }
 
   // ---- townsfolk ------------------------------------------------------------
@@ -644,6 +742,7 @@ export class World {
 
   update(dt: number, time: number): void {
     this.animateFixtures();
+    this.animateShakes(dt);
     // Smoke from the chimneys and campfires.
     for (const c of [...this.chimneys, ...this.campfires]) if (Math.random() < dt * c.rate) this.fx.puff(c.x, c.y, c.z, 1.4, c.color, 2.4);
     // Buildings glow while hovered or just used, and the ones ready to use breathe gently in battle.

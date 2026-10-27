@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { type Defender, type PlacedKind, groundAt } from '../sim/defenders';
-import { type Ball, type Capsule, type CapsuleKind, type Enemy, type Game, type GameEvent } from '../sim/game';
+import { type Ball, type Capsule, type CapsuleKind, type Enemy, type Game, type GameEvent, type RoutePreview, type TerrainKind } from '../sim/game';
 import { ENEMY_KINDS, type EnemyKind, formation } from '../sim/waves';
 import aspects from '../assets/aspects.json';
 import arrowUrl from '../assets/fx/arrow.webp';
@@ -39,7 +39,7 @@ const TOWER_DEBRIS = numbered(import.meta.glob<string>('../assets/fx/siege-debri
 const CAPSULE_ART = import.meta.glob<string>('../assets/fx/capsule-*.webp', { eager: true, import: 'default' });
 import { paintGround } from './ground';
 import { Terrain } from './terrain';
-import { archerModel, ballistaModel, bigBallistaModel, castleCatapultModel, mageModel, oilModel, soldierModel, spikeTrapModel } from './models';
+import { archerModel, ballistaModel, bigBallistaModel, castleCatapultModel, mageModel, obstacleModel, oilModel, soldierModel, spikeTrapModel } from './models';
 import { VoxelOrcs } from './orcs';
 import { VoxBatch, type Vox } from './voxels';
 import { ShieldModel } from './shield';
@@ -119,6 +119,15 @@ const TOWER_PLANK_Y = 6.8;
 /** The planning overlay: one cell per half unit over the field in front of the wall. */
 const OVERLAY_CELL = 0.5;
 const OVERLAY_MIN_Y = -2;
+/**
+ * The marching-route preview: a texture over the field, ROUTE_PPU pixels per unit. Chevron spacing is in
+ * route points (1.5 units apart) by detail level, dust puffs per drop likewise (cheaper on Low).
+ */
+const ROUTE_PPU = 16;
+const ROUTE_COLORS: Record<RoutePreview['kind'], string> = { foot: '255,96,80', rider: '255,120,200', runner: '90,210,255', heavy: '190,130,255' };
+const ROUTE_GOLD = '255,205,70';
+const ROUTE_STEP: Record<Quality, number> = { low: 3, medium: 2, high: 1 };
+const DUST: Record<Quality, number> = { low: 2, medium: 4, high: 6 };
 const COVER_COLORS: Record<PlacedKind, [number, number, number]> = {
   crossbow: [255, 120, 60], archers: [110, 255, 90], catapult: [190, 130, 255], soldiers: [80, 170, 255],
   mage: [200, 90, 255], ballista: [255, 200, 60], oil: [255, 150, 30], spiketrap: [220, 220, 220],
@@ -396,6 +405,22 @@ export class BattleScene {
   private overlayCtx!: CanvasRenderingContext2D;
   private overlayTex!: THREE.CanvasTexture;
   private overlayKey = '';
+  /** The marching routes, drawn as chevrons on a ground texture; a defender in focus lights only its own overlap. */
+  private routeMesh!: THREE.Mesh;
+  private routeCtx!: CanvasRenderingContext2D;
+  private routeTex!: THREE.CanvasTexture;
+  private routeDrawn: { routes: RoutePreview[] | null; focus: number | null; quality: Quality | '' } = { routes: null, focus: null, quality: '' };
+  private routeFocus: number | null = null;
+  private routeFade = 0;
+  /** The coverage shape's pulse: where, and seconds since (a big number is finished). */
+  private pulseAt = { x: 0, y: 0, t: 99 };
+  /** When each defender was set down (scene seconds), for the drop-in bounce; and dust waiting for the landing. */
+  private drops = new Map<number, number>();
+  private landings: { at: number; x: number; y: number }[] = [];
+  /** The ghost of a barricade or rubble about to be placed. */
+  private terrainGhosts = new Map<TerrainKind, THREE.Group>();
+  /** How fast the camera glides up the field and back (exponential rate per second). */
+  lookRate = 2.2;
   private planning = { show: false, preview: null as PlanPreview | null, lanes: false };
   readonly fireworks = new Fireworks(9000);
   private rockets: Rocket[] = [];
@@ -676,6 +701,23 @@ export class BattleScene {
     this.overlay.position.set(0, 0.12, -(OVERLAY_MIN_Y + (rows * OVERLAY_CELL) / 2));
     this.overlay.renderOrder = 2;
     this.scene.add(this.overlay);
+    // The route preview: the whole field from the wall to the spawn line.
+    const top = g.cfg.field.spawnY + 2;
+    const rc = document.createElement('canvas');
+    rc.width = Math.round(hw * 2 * ROUTE_PPU);
+    rc.height = Math.round(top * ROUTE_PPU);
+    this.routeCtx = rc.getContext('2d')!;
+    this.routeTex = new THREE.CanvasTexture(rc);
+    this.routeTex.colorSpace = THREE.SRGBColorSpace;
+    this.routeMesh = new THREE.Mesh(
+      new THREE.PlaneGeometry(hw * 2, top).rotateX(-Math.PI / 2),
+      new THREE.MeshBasicMaterial({ map: this.routeTex, transparent: true, depthWrite: false, opacity: 0 }),
+    );
+    this.routeMesh.position.set(0, 0.14, -top / 2);
+    this.routeMesh.renderOrder = 2;
+    this.routeMesh.visible = false;
+    this.scene.add(this.routeMesh);
+    this.routeDrawn.routes = null;
   }
 
   /** Swaps in a fresh game (after a restart or for the next level) and rebuilds the castle and ground. */
@@ -695,12 +737,29 @@ export class BattleScene {
       this.overlay.geometry.dispose();
       (this.overlay.material as THREE.Material).dispose();
       this.overlayTex.dispose();
+      this.scene.remove(this.routeMesh);
+      this.routeMesh.geometry.dispose();
+      (this.routeMesh.material as THREE.Material).dispose();
+      this.routeTex.dispose();
       this.buildOverlay();
     } else {
       this.ground.reset();
       this.terrain.reset();
     }
     this.lastWave = -1;
+    this.drops.clear();
+    this.landings = [];
+    this.routeDrawn.routes = null;
+    for (const gh of this.terrainGhosts.values()) {
+      this.scene.remove(gh);
+      gh.traverse((o) => {
+        if (o instanceof THREE.Mesh) {
+          o.geometry.dispose();
+          (o.material as THREE.Material).dispose();
+        }
+      });
+    }
+    this.terrainGhosts.clear();
     this.debris = [];
     for (const fx of this.effects) this.scene.remove(fx.obj);
     this.effects = [];
@@ -814,6 +873,55 @@ export class BattleScene {
   hideGhost() {
     for (const gh of this.ghosts.values()) gh.visible = false;
     this.ghostShown = null;
+  }
+
+  /** The defender whose overlap with the marching routes glows extra bright (null: every covered point glows alike). */
+  setRouteFocus(id: number | null) {
+    this.routeFocus = id;
+  }
+
+  /** The coverage shapes pulse (a unit was placed, moved or aimed at x, y). */
+  pulse(x: number, y: number) {
+    this.pulseAt = { x, y, t: 0 };
+  }
+
+  /** A bumper or ramp being dragged: it follows (x, y), green where it fits, red where not; null drops it back at the sim's spot. */
+  dragFixture(d: { index: number; x: number; y: number; ok: boolean } | null) {
+    this.world.dragFixture(d);
+  }
+
+  /** Shows a barricade (turned to angle) or rubble pile about to go down: green where it fits, red where not. null hides it. */
+  setTerrainGhost(g: { kind: TerrainKind; x: number; y: number; angle: number; ok: boolean } | null) {
+    for (const [k, gh] of this.terrainGhosts) if (!g || k !== g.kind) gh.visible = false;
+    if (!g) {
+      return;
+    }
+    let ghost = this.terrainGhosts.get(g.kind);
+    if (!ghost) {
+      const s = this.game.cfg.shaping;
+      const v = obstacleModel(g.kind, 0.3, s.rubble.r, s.barricade.hw, s.barricade.hh, 5);
+      ghost = new VoxBatch().add(v, 0.3, new THREE.Vector3()).build();
+      ghost.traverse((o) => {
+        if (!(o instanceof THREE.Mesh)) return;
+        const m = o.material as THREE.MeshBasicMaterial;
+        m.transparent = true;
+        m.depthTest = false;
+        m.depthWrite = false;
+        o.renderOrder = 10;
+      });
+      this.scene.add(ghost);
+      this.terrainGhosts.set(g.kind, ghost);
+    }
+    ghost.visible = true;
+    ghost.position.set(g.x, this.groundHeight(g.x, -g.y) + 0.05, -g.y);
+    ghost.rotation.y = g.kind === 'barricade' ? g.angle : 0;
+    const wob = 0.7 + Math.sin(this.time * 6) * 0.12;
+    ghost.traverse((o) => {
+      if (!(o instanceof THREE.Mesh)) return;
+      const m = o.material as THREE.MeshBasicMaterial;
+      m.color.set(g.ok ? '#c8ffc8' : '#ff7a6a');
+      m.opacity = g.ok ? wob : 0.55;
+    });
   }
 
   /**
@@ -1087,6 +1195,29 @@ export class BattleScene {
           this.burst(ev.x, 0.4, -ev.y, 8, '#9a8f78', 7);
           this.shake = Math.max(this.shake, 0.3);
           break;
+        case 'defenderPlaced': {
+          const fx = g.cfg.setupFx;
+          this.drops.set(ev.id, this.time);
+          this.landings.push({ at: this.time + fx.dropSeconds, x: ev.x, y: ev.y });
+          this.pulse(ev.x, ev.y);
+          break;
+        }
+        case 'terrainPlaced': {
+          const wood = ev.kind === 'barricade';
+          this.world.addObstacle(ev.index);
+          this.dust(ev.x, 0.3, -ev.y, wood ? '#a88858' : '#b8b0a0', wood ? '#7a4a24' : '#8c877c');
+          if (g.cfg.setupFx.shake > 0) this.shake = Math.max(this.shake, g.cfg.setupFx.shake * 0.6);
+          break;
+        }
+        case 'terrainRemoved':
+          this.world.removeObstacle(ev.index);
+          break;
+        case 'terrainRebuilt':
+          this.world.rebuildTerrain();
+          break;
+        case 'contraptionMoved':
+          this.world.moveFixture(ev.index, ev.x, ev.y);
+          break;
         case 'treeDown':
           this.world.fellTree(ev.index);
           this.shake = Math.max(this.shake, 0.25);
@@ -1277,6 +1408,13 @@ export class BattleScene {
     }
   }
 
+  /** Dust puffs and chips at a spot, fewer on Low detail. */
+  private dust(x: number, y: number, z: number, puff: string, chip: string) {
+    const n = DUST[this.quality];
+    for (let i = 0; i < n; i++) this.puff(x + (Math.random() - 0.5) * 1.6, y + Math.random() * 0.4, z + (Math.random() - 0.5) * 1.6, 1.6 + Math.random() * 1.2, puff, 0.7);
+    this.burst(x, y + 0.2, z, n, chip, 4);
+  }
+
   private flash(level: number, color: string) {
     if (level >= this.flashLevel) this.flashColor = color;
     this.flashLevel = Math.min(0.8, Math.max(this.flashLevel, level));
@@ -1336,6 +1474,8 @@ export class BattleScene {
     this.updateCapsules(time);
     this.updateTower(dt);
     this.updatePlanning();
+    this.updateRoutes(time);
+    this.updateSetupFx(dt);
     this.updateRockets(dt);
     this.world.update(dt, time);
     this.fireworks.update(dt);
@@ -1346,7 +1486,7 @@ export class BattleScene {
     this.shake = Math.max(0, this.shake - dt * 2.5);
     const k = this.shake * this.shake * this.shakeScale;
     // Looking ahead glides the camera up the field and down closer to the horde (eased), and back.
-    this.lookNow += (this.lookAhead - this.lookNow) * Math.min(1, dt * 2.2);
+    this.lookNow += (this.lookAhead - this.lookNow) * Math.min(1, dt * this.lookRate);
     const ahead = this.lookNow * this.lookNow * (3 - 2 * this.lookNow) * LOOK_AHEAD;
     this.camera.position.set(
       this.camBase.x + (Math.random() - 0.5) * k * 1.2,
@@ -1646,6 +1786,136 @@ export class BattleScene {
   }
 
   // ---- planning view --------------------------------------------------------
+
+  /** A defender's drop-in: height above its spot, and the squash (stretch) as it lands. */
+  private dropOf(id: number): { y: number; sy: number; sxz: number } {
+    const at = this.drops.get(id);
+    if (at === undefined) return { y: 0, sy: 1, sxz: 1 };
+    const fx = this.game.cfg.setupFx;
+    const age = this.time - at;
+    if (age < fx.dropSeconds) {
+      const u = Math.max(0, age / fx.dropSeconds);
+      return { y: fx.dropHeight * (1 - u * u), sy: 1 + 0.12 * u, sxz: 1 - 0.05 * u };
+    }
+    if (age < fx.dropSeconds + fx.squashSeconds) {
+      const k = Math.sin(((age - fx.dropSeconds) / fx.squashSeconds) * Math.PI);
+      return { y: 0, sy: 1 - 0.3 * k, sxz: 1 + 0.18 * k };
+    }
+    this.drops.delete(id);
+    return { y: 0, sy: 1, sxz: 1 };
+  }
+
+  /** Landing dust (when a dropped unit touches down) and the coverage shapes' pulse. */
+  private updateSetupFx(dt: number) {
+    const fx = this.game.cfg.setupFx;
+    this.landings = this.landings.filter((l) => {
+      if (this.time < l.at) return true;
+      this.dust(l.x, this.standHeight(l.x, -l.y) + 0.1, -l.y, '#c8b898', '#8c7a58');
+      if (fx.shake > 0) this.shake = Math.max(this.shake, fx.shake);
+      return false;
+    });
+    this.pulseAt.t += dt;
+    const k = Math.max(0, 1 - this.pulseAt.t / fx.pulseSeconds);
+    const s = 1 + (fx.pulseScale - 1) * k * k;
+    // Scale about the unit's spot, so the shape settles onto it.
+    const px = this.pulseAt.x;
+    const pz = -this.pulseAt.y;
+    const h = (this.overlay.geometry as THREE.PlaneGeometry).parameters.height;
+    const cz = -(OVERLAY_MIN_Y + h / 2);
+    this.overlay.scale.set(s, 1, s);
+    this.overlay.position.set(px * (1 - s), 0.12, cz * s + pz * (1 - s));
+    (this.overlay.material as THREE.MeshBasicMaterial).color.setScalar(1 + 0.8 * k);
+    if (this.aimMesh) {
+      this.aimMesh.scale.set(s, 1, s);
+      this.aimMesh.position.set(px * (1 - s), 0, pz * (1 - s));
+      (this.aimMesh.material as THREE.MeshBasicMaterial).opacity = 0.45 + 0.4 * k;
+    }
+  }
+
+  /** The horde's marching routes as chevrons on the ground, redrawn only when the routes, the focus or the detail change. */
+  private updateRoutes(time: number) {
+    const g = this.game;
+    const mat = this.routeMesh.material as THREE.MeshBasicMaterial;
+    const show = this.planning.show && (g.phase === 'setup' || g.phase === 'preview');
+    this.routeFade = Math.max(0, Math.min(1, this.routeFade + (show ? 0.08 : -0.08)));
+    this.routeMesh.visible = this.routeFade > 0;
+    // On Low the arrows hold still; otherwise they breathe a little.
+    mat.opacity = this.routeFade * (this.quality === 'low' ? 1 : 0.9 + 0.1 * Math.sin(time * 2.5));
+    if (!show) return;
+    const routes = g.routePreview();
+    const d = this.routeDrawn;
+    if (d.routes === routes && d.focus === this.routeFocus && d.quality === this.quality) return;
+    this.routeDrawn = { routes, focus: this.routeFocus, quality: this.quality };
+    this.drawRoutes(routes);
+  }
+
+  private drawRoutes(routes: RoutePreview[]) {
+    const g = this.game;
+    const ctx = this.routeCtx;
+    const { width, height } = ctx.canvas;
+    const hw = g.cfg.field.halfWidth;
+    const top = g.cfg.field.spawnY + 2;
+    const focus = this.routeFocus;
+    const step = ROUTE_STEP[this.quality];
+    const px = (x: number) => (x + hw) * ROUTE_PPU;
+    const py = (y: number) => (top - y) * ROUTE_PPU;
+    ctx.clearRect(0, 0, width, height);
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    // How lit a stretch is: 0 plain, otherwise the gold's strength (more defenders, stronger; over 1 is the focused defender's own).
+    const lit = (cover: number[]) => {
+      if (!cover.length) return 0;
+      if (focus === null) return Math.min(0.95, 0.45 + 0.15 * cover.length);
+      return cover.includes(focus) ? 1.4 : 0.3;
+    };
+    for (const r of routes) {
+      const pts = r.pts;
+      const base = ROUTE_COLORS[r.kind];
+      if (this.quality !== 'low') {
+        for (let i = 1; i < pts.length; i++) {
+          const k = lit(pts[i].cover);
+          ctx.strokeStyle = k > 0 ? 'rgba(' + ROUTE_GOLD + ',' + Math.min(1, k * 0.6) + ')' : 'rgba(' + base + ',0.25)';
+          ctx.lineWidth = (k > 1 ? 0.35 : 0.18) * ROUTE_PPU;
+          ctx.beginPath();
+          ctx.moveTo(px(pts[i - 1].x), py(pts[i - 1].y));
+          ctx.lineTo(px(pts[i].x), py(pts[i].y));
+          ctx.stroke();
+        }
+      }
+      for (let i = 0; i + 1 < pts.length; i += step) {
+        const a = pts[i];
+        const b = pts[i + 1];
+        // The strongest cover anywhere in this chevron's stretch.
+        let k = 0;
+        for (let j = i; j < Math.min(pts.length, i + step); j++) k = Math.max(k, lit(pts[j].cover));
+        let dx = b.x - a.x;
+        let dy = -(b.y - a.y);
+        const len = Math.hypot(dx, dy) || 1;
+        dx /= len;
+        dy /= len;
+        const size = (k > 1 ? 1.5 : 1.25) * ROUTE_PPU;
+        const cx = px(a.x);
+        const cy = py(a.y);
+        const path = () => {
+          ctx.beginPath();
+          ctx.moveTo(cx - dx * size * 0.6 - dy * size, cy - dy * size * 0.6 + dx * size);
+          ctx.lineTo(cx + dx * size * 0.6, cy + dy * size * 0.6);
+          ctx.lineTo(cx - dx * size * 0.6 + dy * size, cy - dy * size * 0.6 - dx * size);
+        };
+        const w = (k > 1 ? 0.55 : k > 0 ? 0.45 : 0.36) * ROUTE_PPU;
+        // A faint dark outline so it reads on brown road and green grass alike, then the chevron.
+        ctx.strokeStyle = 'rgba(30,20,10,0.5)';
+        ctx.lineWidth = w + 0.22 * ROUTE_PPU;
+        path();
+        ctx.stroke();
+        ctx.strokeStyle = k > 1 ? 'rgba(255,225,90,1)' : k > 0 ? 'rgba(' + ROUTE_GOLD + ',' + Math.min(1, 0.7 + 0.3 * k) + ')' : 'rgba(255,248,225,0.55)';
+        ctx.lineWidth = w;
+        path();
+        ctx.stroke();
+      }
+    }
+    this.routeTex.needsUpdate = true;
+  }
 
   private updatePlanning() {
     const g = this.game;
@@ -2021,11 +2291,13 @@ export class BattleScene {
       const since = g.time - d.firedAt;
       if (entry.obj) {
         entry.obj.position.copy(this.defenderBase(d));
+        const drop = this.dropOf(d.id);
+        entry.obj.position.y += drop.y;
         // The ballista swings round to where it is aimed (straight up its lane if it isn't).
         for (const child of entry.obj.children) if (child.name === 'model') child.rotation.y = -(d.heading ?? 0);
         // Recoil when it fires: a quick squash that springs back.
         const kick = since >= 0 && since < 0.3 ? Math.sin((since / 0.3) * Math.PI) : 0;
-        entry.obj.scale.set(1 + kick * 0.08, 1 - kick * 0.1, 1);
+        entry.obj.scale.set((1 + kick * 0.08) * drop.sxz, (1 - kick * 0.1) * drop.sy, drop.sxz);
         continue;
       }
       // Archers: the whole squad in ranks, each standing on whatever is under them, all drawing together.
@@ -2037,9 +2309,10 @@ export class BattleScene {
         const x = d.x + (col - (SQUAD_COLS - 1) / 2) * SQUAD_SPACING + (row % 2) * 0.2;
         const z = -d.y + (row - (rows - 1) / 2) * SQUAD_SPACING * 0.8;
         const draw = since >= 0 && since < 0.5 ? Math.sin((since / 0.5) * Math.PI) : 0;
-        tmpV.set(x, this.standHeight(x, z) + draw * 0.15, z);
+        const drop = this.dropOf(d.id);
+        tmpV.set(x, this.standHeight(x, z) + draw * 0.15 + drop.y, z);
         tmpQ.setFromAxisAngle(UP, -(d.heading ?? 0));
-        this.archerSprites.setMatrixAt(archers, tmpM.compose(tmpV, tmpQ, tmpS.set(1, 1 + draw * 0.06, 1)));
+        this.archerSprites.setMatrixAt(archers, tmpM.compose(tmpV, tmpQ, tmpS.set(drop.sxz, (1 + draw * 0.06) * drop.sy, drop.sxz)));
         archers++;
       }
     }

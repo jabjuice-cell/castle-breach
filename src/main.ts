@@ -19,7 +19,7 @@ import { Sounds } from './render/sound';
 import { defenderPortraits } from './render/portraits';
 import { BUILDINGS } from './render/world';
 import { DEFENDER_KINDS, type DefenderKind, type Ground, type PlacedKind, SPECIAL_NAMES, type Track, USEFUL_TRACKS, groundAt, stackAt } from './sim/defenders';
-import { BUILDING_KINDS, type BuildingKind, type PowerKind, Game, STEP } from './sim/game';
+import { BUILDING_KINDS, type BuildingKind, type PowerKind, type TerrainKind, Game, STEP } from './sim/game';
 import {
   ARCHER_ROLE_INFO, BALL_KIT_INFO, SHIELD_KIT_INFO, SOLDIER_ROLE_INFO, TACTIC_INFO,
   type ChoiceBuilding, type Choices, type Option, hasChoiceBuilding, optionNeeds, optionOpen, sanitizeChoices,
@@ -63,6 +63,7 @@ const progress = loadProgress();
 let tutorial: Tutorial | null = null;
 let game = newLevel();
 const view = new BattleScene(canvas, game, quality);
+if (location.search.includes("debug")) Object.defineProperty(window, "__dbg", { get: () => ({ game, scene: view }) });
 
 const sounds = new Sounds();
 sounds.muted = loadSetting('muted') === '1';
@@ -155,6 +156,35 @@ const input = { x: 0, y: 30, shieldX: 0 };
 let placing: PlacedKind | null = null;
 let dragging: number | null = null;
 
+/** War Council shaping: the barricade or rubble being placed, a barricade's turn (radians), and a bumper or ramp being dragged. */
+let shaping: TerrainKind | null = null;
+let shapeAngle = 0;
+let dragFix: { index: number; dx: number; dy: number; sx: number; sy: number } | null = null;
+const SHAPE_NAMES: Record<TerrainKind, string> = { barricade: 'Barricade', rubble: 'Rubble' };
+
+function rotateShape(dir: number) {
+  shapeAngle += (dir * game.cfg.setupFx.rotateDegrees * Math.PI) / 180;
+  if (shapeAngle > Math.PI) shapeAngle -= Math.PI * 2;
+  if (shapeAngle < -Math.PI) shapeAngle += Math.PI * 2;
+}
+
+/** The bumper or ramp (bells stay put) under (x, y) while the shop is open, or -1. */
+function fixtureAt(x: number, y: number): number {
+  if (!game.shopOpen) return -1;
+  const bumper = game.cfg.contraptions.bumper.radius;
+  return game.contraptions.findIndex((c) => c.kind !== 'bell' && !!contact(
+    c.kind === 'bumper' ? { look: 'stone', x: c.x, y: c.y, r: bumper } : { look: 'ruin', x: c.x, y: c.y, hw: c.hw ?? 2, hh: c.hh ?? 1.5, angle: c.angle ?? 0 }, x, y, 0.2));
+}
+
+/** The placed barricade or rubble (obstacle index) under (x, y) while the shop is open, or -1. */
+function terrainAt(x: number, y: number): number {
+  return game.shopOpen ? game.obstacles.findIndex((o) => o.placed && !o.removed && !o.down && !!contact(o, x, y, 0.3)) : -1;
+}
+
+/** BATTLE READY: the camera is held up the field for the first preview's countdown. */
+let ready = false;
+let bannerT = 0;
+
 /** True while the player is choosing where to build a tower storey. */
 let building = false;
 
@@ -193,11 +223,23 @@ function tryPlace(kind: PlacedKind) {
   if (game.place(kind, input.x, input.y)) {
     placing = null;
     toast(`${DEFENDER_INFO[kind].name} in position`);
-    sounds.thunk();
     trayKey = '';
     return;
   }
   toast(game.canPlace(kind, input.x, input.y) ? 'Not enough gold' : whyNot(kind, input.x, input.y));
+}
+
+/** Sets a barricade or a heap of rubble down where the mouse is (the sound and dust come from the sim's event). */
+function tryShape(kind: TerrainKind) {
+  if (game.placeTerrain(kind, input.x, input.y, shapeAngle)) {
+    if (game.shapeLeft(kind) <= 0) shaping = null;
+    trayKey = '';
+    return;
+  }
+  const s = game.cfg.shaping;
+  toast(game.shapeLeft(kind) <= 0 ? `No ${kind} left`
+    : input.y < s.minY || input.y > s.maxY ? `Shape the field between ${s.minY} and ${s.maxY} up from the wall`
+      : 'Not there: keep clear of the trees, the edges and other pieces, and leave gaps');
 }
 
 /** Why a defender can't stand at (x, y): off the castle grounds, or on top of another one. */
@@ -259,6 +301,9 @@ canvas.addEventListener('pointerdown', (e) => {
     if (placing) cancelPlacing();
     if (aiming) cancelAiming();
     building = false;
+    shaping = null;
+    dragFix = null;
+    trayKey = '';
     return;
   }
   if (e.button !== 0) return;
@@ -277,6 +322,8 @@ canvas.addEventListener('pointerdown', (e) => {
   if (aiming) {
     // The aim follows the mouse; a click sets it.
     sounds.thunk();
+    const aimed = game.defenders.find((o) => o.id === aiming!.id);
+    if (aimed) view.pulse(aimed.x, aimed.y);
     selected = aiming.id;
     aiming = null;
     return;
@@ -285,11 +332,31 @@ canvas.addEventListener('pointerdown', (e) => {
     tryPlace(placing);
     return;
   }
+  if (shaping) {
+    tryShape(shaping);
+    return;
+  }
   if (canArrange(e)) {
     const d = game.defenderAt(input.x, input.y);
     if (d) {
       dragging = d.id;
       pressAt = { x: input.x, y: input.y };
+      return;
+    }
+  }
+  if (running && game.shopOpen) {
+    // Bumpers and ramps are dragged to a new spot; a placed barricade or rubble pile is taken back with a click.
+    const fi = fixtureAt(input.x, input.y);
+    if (fi >= 0) {
+      const c = game.contraptions[fi];
+      dragFix = { index: fi, dx: c.x - input.x, dy: c.y - input.y, sx: input.x, sy: input.y };
+      return;
+    }
+    const ti = terrainAt(input.x, input.y);
+    if (ti >= 0) {
+      const name = SHAPE_NAMES[game.obstacles[ti].look as TerrainKind] ?? 'Piece';
+      if (game.removeTerrain(ti)) toast(`${name} taken back`);
+      trayKey = '';
       return;
     }
   }
@@ -304,6 +371,15 @@ canvas.addEventListener('pointerdown', (e) => {
   if (running) game.heave();
 });
 window.addEventListener('pointerup', (e) => {
+  if (e.button === 0 && dragFix) {
+    const f = dragFix;
+    dragFix = null;
+    // Barely moved: nothing to do. Otherwise it goes there if it fits, and snaps back if not.
+    if (Math.hypot(input.x - f.sx, input.y - f.sy) >= 0.6 && !game.moveContraption(f.index, input.x + f.dx, input.y + f.dy)) {
+      toast(`Can't go there: keep ${game.cfg.shaping.keepClearX} from the middle, within ${game.cfg.shaping.minY}-${game.cfg.shaping.maxY} up the field, clear of other things`);
+    }
+    return;
+  }
   if (e.button !== 0 || dragging === null) return;
   const id = dragging;
   dragging = null;
@@ -348,8 +424,12 @@ window.addEventListener('keydown', (e) => {
     if (placing) cancelPlacing();
     if (aiming) cancelAiming();
     building = false;
+    shaping = null;
+    dragFix = null;
     selected = null;
+    trayKey = '';
   }
+  if (e.code === 'KeyR' && shaping === 'barricade' && !e.repeat) rotateShape(e.shiftKey ? -1 : 1);
   const power = POWER_KEYS[e.code];
   if (power && running) usePower(power);
   if (e.code === 'Enter' && running) {
@@ -390,22 +470,44 @@ function updateLook(dt: number) {
     tour = -1;
     peek = false;
   }
+  // Pressing To battle sweeps the camera up to the horde; it holds through the countdown and glides back when the battle starts.
+  if (!running || game.phase !== 'preview') ready = false;
   if (tour >= 0) {
     tour += dt;
     if (tour > TOUR.back + 1.5) tour = -1;
   }
   const touring = tour >= TOUR.up && tour < TOUR.back;
-  view.lookAhead = touring || peek ? 1 : 0;
+  view.lookAhead = touring || peek || ready ? 1 : 0;
+  view.lookRate = ready ? game.cfg.setupFx.sweepRate : 2.2;
 }
 let peek = false;
 window.addEventListener('wheel', (e) => {
   if (!running || !game.shopOpen) return;
+  // While placing a barricade the wheel turns it instead of looking up the field.
+  if (shaping === 'barricade') {
+    rotateShape(e.deltaY < 0 ? -1 : 1);
+    return;
+  }
   peek = e.deltaY < 0;
   tour = -1;
+  if (!peek) ready = false;
 }, { passive: true });
 window.addEventListener('pointerdown', () => {
   if (tour >= 0) tour = -1;
+  ready = false;
 }, { capture: true });
+
+/** The big BATTLE READY! banner: shown for setupFx.bannerSeconds, then hidden. */
+function showBanner(text: string) {
+  const el = $('banner');
+  el.textContent = text;
+  el.style.animation = 'none';
+  void el.offsetWidth;
+  el.style.animation = '';
+  el.style.animationDuration = `${game.cfg.setupFx.bannerSeconds}s`;
+  el.hidden = false;
+  bannerT = game.cfg.setupFx.bannerSeconds;
+}
 
 // ---- names -----------------------------------------------------------------
 
@@ -556,6 +658,17 @@ function updateMarkers() {
 }
 
 /** A tag over the ghost while placing: what the ground there gives, or why it won't fit. */
+/** The label that follows the mouse over the field. */
+function showTag(text: string, x: number, y: number, height: number, bad: boolean) {
+  const tag = hud.placeTag;
+  tag.hidden = false;
+  tag.classList.toggle('bad', bad);
+  if (tag.textContent !== text) tag.textContent = text;
+  const p = view.project(x, y, height);
+  tag.style.left = `${p.x}px`;
+  tag.style.top = `${p.y}px`;
+}
+
 function updatePlaceTag(kind: PlacedKind | undefined, ok: boolean, ignoreId: number) {
   const tag = hud.placeTag;
   if (!kind) {
@@ -598,6 +711,7 @@ function addFloater(text: string, x: number, y: number, cls: string, life: numbe
 const bowlPopups = new Map<number, ReturnType<typeof addFloater>>();
 const BOWL_WORDS = ['', '', 'DOUBLE!', 'TRIPLE!', 'ORC BOWLING!'];
 let lastBowlSound = 0;
+let lastVoice = 0;
 function updateFloaters(dt: number) {
   for (let i = floaters.length - 1; i >= 0; i--) {
     const f = floaters[i];
@@ -699,7 +813,7 @@ function updateHud(dt: number) {
 
   const previewing = (game.phase === 'preview' || game.phase === 'setup') && running;
   // Out of the way while the camera looks up the field at the horde.
-  hud.preview.hidden = !previewing || view.lookAhead > 0;
+  hud.preview.hidden = !previewing || (view.lookAhead > 0 && !ready);
   hud.queen.hidden = !previewing;
   updateCoach();
   if (previewing) {
@@ -833,6 +947,13 @@ function trayHtml(): string {
   }).join('');
   const storey = game.storeyCost();
   const tower = `<button type="button" data-action="tower" class="${building ? 'on' : ''}" ${storey > gold ? 'disabled' : ''}>${portrait('tower')}<b>Tower storey</b><small>${game.cfg.towers.costs.join(' / ')} gold, by height</small><small>Tall: more reach, draws fire</small></button>`;
+  const shape = game.cfg.shaping.enabled
+    ? (['barricade', 'rubble'] as const).map((k) => {
+      const n = game.shapeLeft(k);
+      const tip = k === 'barricade' ? 'Orcs have to go round it and balls bank off it. R or the wheel turns it.' : 'A heap of stone: slows nothing, but orcs go round it and balls bank off it.';
+      return `<button type="button" data-action="shape:${k}" class="${shaping === k ? 'on' : ''}" title="${tip} Click a placed piece to take it back." ${n <= 0 && shaping !== k ? 'disabled' : ''}><b>${SHAPE_NAMES[k]} (${n} left)</b><small>${k === 'barricade' ? 'Crossed stakes' : 'Stone pile'}</small></button>`;
+    }).join('')
+    : '';
   const again = setup && progress.lastLoadout.length && !game.defenders.length
     ? `<button type="button" class="again" data-action="again">Put back last level's defenders</button>`
     : '';
@@ -846,8 +967,9 @@ function trayHtml(): string {
   const choices = setup ? choicesLine() : '';
   return `
     <header><h3>${setup ? 'Load-out' : 'Between waves'}</h3><span class="purse">${icon('gold')}${gold} gold</span></header>
-    <div class="buy">${buy}${tower}</div>${again}
-    <p class="tip">${tip}</p>${choices}
+    <div class="buy">${buy}${tower}${shape}</div>${again}
+    <p class="tip">${shaping ? `Click the field to place ${shaping === 'barricade' ? 'a barricade (R or the mouse wheel turns it)' : 'rubble'}. Right click or Esc to cancel.` : tip}</p>
+    <p class="tip">Faint arrows: where the horde marches; gold: covered by your defenders.${game.cfg.shaping.enabled ? ' Drag bumpers and ramps to move them. Click a placed barricade or rubble pile to take it back.' : ''}</p>${choices}
     ${setup ? '<button type="button" class="go" data-action="go">To battle! <kbd>Enter</kbd></button>' : ''}`;
 }
 
@@ -899,6 +1021,7 @@ function clickTownBuilding(b: ChoiceBuilding) {
     townOpen = b;
     selected = null;
     building = false;
+    shaping = null;
     if (placing) cancelPlacing();
     hud.townPop.dataset.key = '';
   }
@@ -987,7 +1110,7 @@ function updateShop() {
   hud.tray.hidden = !open;
   if (open) {
     // Re-render only when something it shows has changed, so the buttons stay clickable.
-    const key = [game.phase, Math.floor(game.gold), placing, building, game.defenders.length, progress.lastLoadout.length, JSON.stringify(game.choices)].join('|');
+    const key = [game.phase, Math.floor(game.gold), placing, building, shaping, game.shapeLeft('barricade'), game.shapeLeft('rubble'), game.defenders.length, progress.lastLoadout.length, JSON.stringify(game.choices)].join('|');
     if (key !== trayKey) {
       trayKey = key;
       hud.tray.innerHTML = trayHtml();
@@ -1015,10 +1138,17 @@ function shopAction(action: string) {
   if (verb === 'place') {
     placing = placing === a ? null : (a as PlacedKind);
     building = false;
+    shaping = null;
     selected = null;
   } else if (verb === 'tower') {
     building = !building;
     placing = null;
+    shaping = null;
+    selected = null;
+  } else if (verb === 'shape') {
+    shaping = shaping === a ? null : (a as TerrainKind);
+    placing = null;
+    building = false;
     selected = null;
   } else if (verb === 'up') {
     if (game.upgrade(a as DefenderKind, b as Track)) sounds.thunk();
@@ -1051,7 +1181,11 @@ function shopAction(action: string) {
 
 function startBattle() {
   placing = null;
+  shaping = null;
+  dragFix = null;
   selected = null;
+  // The sweep up the field belongs to the battleReady event; cut the level-start tour short so they don't add up.
+  tour = -1;
   game.endSetup();
 }
 
@@ -1114,6 +1248,9 @@ function updateCoach() {
 function startLevel() {
   game = newLevel();
   placing = null;
+  shaping = null;
+  dragFix = null;
+  ready = false;
   dragging = null;
   selected = null;
   view.setGame(game);
@@ -1246,6 +1383,12 @@ function updateGhost() {
   const kind = placing ?? dragged?.kind;
   if (aiming && !(game.shopOpen && game.defenders.some((d) => d.id === aiming!.id))) aiming = null;
   if (building && !game.shopOpen) building = false;
+  if (!game.shopOpen) {
+    shaping = null;
+    dragFix = null;
+  }
+  let terrainGhost: Parameters<typeof view.setTerrainGhost>[0] = null;
+  let fixGhost: Parameters<typeof view.dragFixture>[0] = null;
   if (building) {
     view.hideGhost();
     const plan = game.towerPlan(input.x, input.y);
@@ -1275,6 +1418,22 @@ function updateGhost() {
     tag.style.left = `${p.x}px`;
     tag.style.top = `${p.y - 10}px`;
     canvas.style.cursor = 'crosshair';
+  } else if (shaping) {
+    view.hideGhost();
+    const ok = game.canPlaceTerrain(shaping, input.x, input.y, shapeAngle);
+    terrainGhost = { kind: shaping, x: input.x, y: input.y, angle: shapeAngle, ok };
+    const s = game.cfg.shaping;
+    showTag(ok ? `${SHAPE_NAMES[shaping]}: click to place, ${game.shapeLeft(shaping)} left${shaping === 'barricade' ? ' · R / wheel turns' : ''}`
+      : game.shapeLeft(shaping) <= 0 ? 'None left' : input.y < s.minY || input.y > s.maxY ? 'Too near the wall or too far up the field' : 'Blocked: keep clear of trees, edges and other pieces', input.x, input.y, 1.5, !ok);
+    canvas.style.cursor = 'none';
+  } else if (dragFix) {
+    view.hideGhost();
+    const x = input.x + dragFix.dx;
+    const y = input.y + dragFix.dy;
+    const ok = game.canMoveContraption(dragFix.index, x, y);
+    fixGhost = { index: dragFix.index, x, y, ok };
+    showTag(ok ? 'Release to move it here' : "Can't go here: it will snap back", x, y, 2, !ok);
+    canvas.style.cursor = 'grabbing';
   } else if (kind) {
     const ignore = dragged?.id ?? -1;
     const gold = placing ? game.defenderCost(kind) : game.moveCost();
@@ -1285,16 +1444,25 @@ function updateGhost() {
     canvas.style.cursor = 'none';
   } else {
     view.hideGhost();
-    updatePlaceTag(undefined, false, -1);
     const hover = planning ? game.defenderAt(input.x, input.y) : undefined;
-    canvas.style.cursor = hover ? 'grab' : '';
+    const fi = running && !hover ? fixtureAt(input.x, input.y) : -1;
+    const ti = running && !hover && fi < 0 ? terrainAt(input.x, input.y) : -1;
+    if (fi >= 0) showTag('Drag to move (bumpers and ramps)', input.x, input.y, 2, false);
+    else if (ti >= 0) showTag(`Click to take ${SHAPE_NAMES[game.obstacles[ti].look as TerrainKind] ?? 'it'} back`, input.x, input.y, 1.5, false);
+    else updatePlaceTag(undefined, false, -1);
+    canvas.style.cursor = hover ? 'grab' : fi >= 0 ? 'grab' : ti >= 0 ? 'pointer' : '';
   }
+  view.setTerrainGhost(terrainGhost);
+  view.dragFixture(fixGhost);
+  // The marching routes glow brighter only where the defender in focus (picked, aimed, dragged or hovered) reaches.
+  const over = running && game.shopOpen && !placing && !shaping && !building ? game.defenderAt(input.x, input.y) : undefined;
+  view.setRouteFocus(aiming?.id ?? dragging ?? selected ?? over?.id ?? null);
   view.setPlanning(planning, preview, game.shopOpen);
   // The gold aim shape: while aiming, and for the defender whose card is open.
   const shown = aiming?.id ?? selected;
   view.showAim(running && shown !== null ? game.defenders.find((d) => d.id === shown) ?? null : null);
   // Clicks while aiming or building go through the wave banner to the field.
-  hud.preview.style.pointerEvents = aiming || building || placing ? 'none' : '';
+  hud.preview.style.pointerEvents = aiming || building || placing || shaping ? 'none' : '';
 }
 
 // ---- loop ------------------------------------------------------------------
@@ -1431,6 +1599,33 @@ function frame(now: number) {
         case 'treeDown':
           sounds.crunch(12);
           break;
+        case 'defenderPlaced':
+          // The unit drops in: a shout as it falls, the thunk as it lands (the scene's drop takes dropSeconds).
+          if (now - lastVoice > 120) {
+            lastVoice = now;
+            sounds.voice(ev.kind);
+          }
+          setTimeout(() => sounds.thunk(), game.cfg.setupFx.dropSeconds * 1000);
+          break;
+        case 'terrainPlaced':
+          if (ev.kind === 'rubble') sounds.crunch(6);
+          else sounds.thunk();
+          break;
+        case 'terrainRemoved':
+          sounds.rattle();
+          break;
+        case 'contraptionMoved':
+          sounds.thunk();
+          break;
+        case 'obstacle':
+          if (game.obstacles[ev.index]?.placed) sounds.thunk();
+          break;
+        case 'battleReady':
+          sounds.horn();
+          showBanner('BATTLE READY!');
+          ready = true;
+          tour = -1;
+          break;
         case 'line':
           hitStop = Math.max(hitStop, 0.06);
           floater('SMASH!', (ev.x0 + ev.x1) / 2, ev.y, 'smash', 0.9);
@@ -1493,6 +1688,7 @@ function frame(now: number) {
     game.events.length = 0;
   }
   updateLook(dt);
+  if (bannerT > 0 && (bannerT -= dt) <= 0) $('banner').hidden = true;
   updateGhost();
   sounds.scrape(running && game.phase === 'battle' ? Math.abs(game.shield.vx) / game.cfg.shield.speed : 0);
   // The horde swells with the crowd on the field (and mutters while it waits up the far end).

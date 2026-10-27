@@ -46,6 +46,13 @@ export const defaultConfig = {
     rebuild: true,
   },
   /**
+   * War Council feedback (visual only, the sim never reads it): a placed unit drops in from dropHeight over dropSeconds
+   * and squashes for squashSeconds; the coverage shape pulses from pulseScale to 1 over pulseSeconds; the BATTLE READY
+   * banner shows bannerSeconds; the camera sweeps up the field at sweepRate (higher is quicker); shake is the camera
+   * kick on a landing (0 for none); rotateDegrees is a barricade's turn per wheel notch or R press.
+   */
+  setupFx: { dropHeight: 1.5, dropSeconds: 0.28, squashSeconds: 0.22, pulseSeconds: 0.5, pulseScale: 1.15, bannerSeconds: 1.5, sweepRate: 5, shake: 0.18, rotateDegrees: 15 },
+  /**
    * Trees dotted over the middle of the field, count per level. A ball smashes one in a single
    * hit (it still bounces off); orcs go round them. They keep off the road down the middle.
    */
