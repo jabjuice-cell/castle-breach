@@ -6,6 +6,7 @@ import {
 import { type Contraption, footprint } from './contraptions';
 import { type Obstacle, contact, needsHeave, nearestOn, plantTrees } from './obstacles';
 import { Rng } from './rng';
+import { type Choices, applyChoices } from './town';
 import { type EnemyKind, type Shape, type WavePlan, formation, planSize, planWave } from './waves';
 
 /**
@@ -57,6 +58,8 @@ export interface Enemy {
   shielded: boolean;
   /** Orc Bowling: tumbling along a shot's chain, in place of marching or fighting. Null when upright. */
   bowl: Bowl | null;
+  /** Seconds left walking slowed by a Pin arrow. */
+  pinned: number;
 }
 
 /** One orc's tumble in a bowling chain: slides along (dx, dy), slowing steadily to a stop over dur seconds. */
@@ -119,6 +122,8 @@ export interface Block {
   regroupAt: number;
   /** Spawned with a drummer that is still alive. */
   drummed: boolean;
+  /** The game time until which a Pin arrow holds the block from marching. */
+  haltUntil: number;
 }
 
 export interface Soldier {
@@ -220,7 +225,7 @@ export interface Capsule {
 }
 
 /** The town's buildings behind the wall: the keep has a power, the rest are passive boons. */
-export const BUILDING_KINDS = ['keep', 'tavern', 'alchemist', 'blacksmith', 'chapel', 'forge'] as const;
+export const BUILDING_KINDS = ['keep', 'tavern', 'alchemist', 'blacksmith', 'chapel', 'forge', 'warroom', 'barracks', 'watchtower'] as const;
 export type BuildingKind = (typeof BUILDING_KINDS)[number];
 /** Buildings with a click power. */
 export type PowerKind = 'keep';
@@ -296,6 +301,12 @@ export type GameEvent =
   | { type: 'splash'; x: number; y: number; radius: number }
   /** damage: how hard, so a boulder can throw more stone about than a pebble. */
   | { type: 'wallHit'; x: number; y: number; segment: number; damage: number }
+  /** The town choices were changed in the setup. */
+  | { type: 'choicesChanged' }
+  /** A Powder Ball's every-4th-hit blast. */
+  | { type: 'powderBlast'; x: number; y: number }
+  /** An arrow pinned an orc (Pin role). */
+  | { type: 'pinned'; x: number; y: number }
   | { type: 'ballLost'; x: number; kind: BallKind }
   | { type: 'caught'; x: number; y: number; kind: CapsuleKind }
   | { type: 'segmentDestroyed'; segment: number }
@@ -342,7 +353,10 @@ const MAX_RADIUS = 1.6;
 const CROSSBOW_PRIORITY: Partial<Record<EnemyKind, number>> = { orcCatapult: 3, warlord: 2, ogre: 2 };
 
 export class Game {
-  readonly cfg: Config;
+  /** The level's config with the town's choices folded in; setChoices swaps it during the setup. */
+  cfg: Config;
+  /** The config without the choices, to rebuild from. */
+  private readonly baseCfg: Config;
   readonly seed: number;
   time = 0;
   phase: Phase = 'setup';
@@ -408,6 +422,8 @@ export class Game {
   /** Orc tricks the shield plating can still shrug off this wave. */
   platingLeft = 0;
   private salvoTimer = 0;
+  /** Royal-ball orc hits so far, for the Powder Ball's every-nth blast. */
+  private royalHits = 0;
   /** When the Royal Ball is served again after being lost. */
   royalDue = 0;
   /** While true no wall segment can fall (the tutorial wave sets it). */
@@ -432,8 +448,10 @@ export class Game {
   private grid = new Map<number, Enemy[]>();
 
   /** cfg normally comes from applyMeta, with the town's upgrades in it. */
-  constructor(seed = 1, cfg: Config = makeConfig(), level = 0) {
-    this.cfg = cfg;
+  constructor(seed = 1, cfg: Config = makeConfig(), level = 0, choices?: Choices) {
+    this.baseCfg = structuredClone(cfg);
+    this.cfg = choices ? applyChoices(cfg, choices) : cfg;
+    cfg = this.cfg;
     this.seed = seed;
     this.level = level;
     this.rng = new Rng(seed);
@@ -450,6 +468,38 @@ export class Game {
     this.obstacles = [...fixed, ...plantTrees(cfg.fieldTrees, level, cfg.field.halfWidth, seed, [...fixed, ...this.shapes])];
     this.wave = this.cleared = this.firstWave - 1;
     this.plan = planWave(this.firstWave, seed, cfg);
+  }
+
+  get choices(): Choices {
+    return this.cfg.choices;
+  }
+
+  /** Swaps the town's choices; only in the setup, where nothing is damaged yet. */
+  setChoices(c: Choices): boolean {
+    if (this.phase !== 'setup') return false;
+    this.cfg = applyChoices(this.baseCfg, c);
+    this.segmentHp = this.segmentHp.map(() => this.cfg.wall.segmentHp);
+    this.musterSoldiers();
+    this.events.push({ type: 'choicesChanged' });
+    return true;
+  }
+
+  /** What the level's waves hold, from the plans (no rng is touched), for the watchtower. */
+  scoutReport(): { wave: number; enemies: Partial<Record<EnemyKind, number>>; boss: 'siege tower' | 'warlord' | null }[] {
+    const w = this.cfg.waves;
+    const out = [];
+    for (let n = this.firstWave; n <= this.lastWave; n++) {
+      const plan = planWave(n, this.seed, this.cfg);
+      const enemies: Partial<Record<EnemyKind, number>> = {};
+      for (const g of plan.groups) for (const m of g.members) enemies[m.kind] = (enemies[m.kind] ?? 0) + m.count;
+      out.push({ wave: n, enemies, boss: w.warlordWaves.includes(n) ? ('warlord' as const) : w.towerWaves.includes(n) ? ('siege tower' as const) : null });
+    }
+    return out;
+  }
+
+  /** The Royal Ball's kit for a royal ball (null for every other ball). */
+  private kit(b: Ball) {
+    return b.kind === 'royal' ? this.cfg.town.balls[this.cfg.choices.ball] : null;
   }
 
   get firstWave(): number {
@@ -564,7 +614,7 @@ export class Game {
     const x = this.shield.x;
     const block: Block = {
       id: this.nextBlockId++, x, y: 14, shape: 'column', members: [], start: 0, spacing: 0.9, speed: 0, homeX: x,
-      zig: false, phase: 0, dirty: false, regroupAt: 0, drummed: false,
+      zig: false, phase: 0, dirty: false, regroupAt: 0, drummed: false, haltUntil: 0,
     };
     for (let i = 0; i < count; i++) this.spawn(kind, block, 0, i * 0.95);
     block.start = block.members.length;
@@ -683,7 +733,7 @@ export class Game {
   /** Bonus gold for calling the next wave right now. */
   earlyCallGold(): number {
     const next = this.phase === 'preview' ? this.plan.number : this.wave + 1;
-    return Math.round(this.secondsSkipped() * Math.max(1, next / 5));
+    return Math.round(Math.round(this.secondsSkipped() * Math.max(1, next / 5)) * this.cfg.economy.earlyGoldMult);
   }
 
   /**
@@ -1317,7 +1367,7 @@ export class Game {
   /** Gold multiplier a ball's next hit earns. */
   ballGoldMult(b: Ball): number {
     const c = this.cfg.balls;
-    return Math.min(c.comboMax, 1 + b.combo * c.comboStep) * (b.behind ? c.behindMult : 1);
+    return Math.min(c.comboMax, 1 + b.combo * (this.kit(b)?.comboStep ?? c.comboStep)) * (b.behind ? c.behindMult : 1);
   }
 
   // ---- simulation ---------------------------------------------------------
@@ -1412,7 +1462,14 @@ export class Game {
     this.nextGroup = 0;
     this.platingLeft = this.shieldLevels.plating;
     this.salvoTimer = this.cfg.waves.salvoInterval;
+    // Sally Forth: only so many of the fallen come back each wave (not before the level's first).
+    const alive = this.soldiers.filter((s) => s.hp > 0).length;
+    const companies = this.defenders.filter((d) => d.kind === 'soldiers').length;
     this.musterSoldiers();
+    if (this.cfg.choices.tactic === 'sallyForth' && this.wave > this.firstWave) {
+      let keep = alive + this.cfg.town.sallyForth.returnPerWave * companies;
+      for (const s of this.soldiers) if (keep-- <= 0) s.hp = 0;
+    }
     if (!this.balls.some((b) => b.primary)) this.serveRoyal();
     if (this.plan.tower && !this.tower) this.spawnTower();
     this.events.push({ type: 'waveStart', wave: this.wave });
@@ -1448,7 +1505,7 @@ export class Game {
       const speed = lead === 'runner' || lead === 'rider' || lead === 'ogre' || lead === 'warlord' ? this.cfg[lead].speed : this.cfg.march.speed;
       const block: Block = {
         id: this.nextBlockId++, x: g.x, y: this.cfg.field.spawnY, shape: g.shape, members: [], start: 0,
-        spacing, speed, homeX: g.x, zig: lead === 'rider', phase: this.rng.next() * Math.PI * 2, dirty: false, regroupAt: 0, drummed: false,
+        spacing, speed, homeX: g.x, zig: lead === 'rider', phase: this.rng.next() * Math.PI * 2, dirty: false, regroupAt: 0, drummed: false, haltUntil: 0,
       };
       // Chuckers are mixed through the block rather than all in one corner; shield orcs take the front.
       const shieldCount = foot.find((m) => m.kind === 'shieldOrc')?.count ?? 0;
@@ -1486,7 +1543,7 @@ export class Game {
       timer: this.rng.range(0, kind === 'orcCatapult' ? cat.throwInterval : this.cfg.chucker.throwInterval),
       phase: this.rng.next(),
       burn: 0, burnTime: 0, rally: 1, foe: null, block, slotX, slotY, goldMult: 1,
-      lastBall: -1, stagger: 0, blasted: false, shielded: kind === 'shieldOrc' && block.drummed, bowl: null,
+      lastBall: -1, stagger: 0, blasted: false, shielded: kind === 'shieldOrc' && block.drummed, bowl: null, pinned: 0,
     };
     this.enemies.push(e);
     block.members.push(e);
@@ -1550,7 +1607,7 @@ export class Game {
       const rally = Math.max(...b.members.map((e) => e.rally));
       // Spike traps slow a block in step with the share of it caught in them.
       const slow = this.hasTraps ? b.members.reduce((n, e) => n + this.trapSlow(e.x, e.y), 0) / b.members.length : 1;
-      b.y -= b.speed * (1 + m.growthPerWave) ** Math.max(0, this.wave - 1) * boost * rally * slow * dt;
+      if (this.time >= b.haltUntil) b.y -= b.speed * (1 + m.growthPerWave) ** Math.max(0, this.wave - 1) * boost * rally * slow * dt;
       if (b.zig) b.x = b.homeX + Math.sin(this.time * this.cfg.rider.zigRate + b.phase) * (this.cfg.rider.zigSpeed / this.cfg.rider.zigRate);
       this.keepInField(b);
     }
@@ -1668,6 +1725,7 @@ export class Game {
         continue;
       }
 
+      if (e.pinned > 0) e.pinned -= dt;
       if (e.burnTime > 0) {
         e.burnTime -= dt;
         e.hp -= e.burn * dt;
@@ -1709,7 +1767,7 @@ export class Game {
               const tx = -hw + (weakest + 0.5) * this.segmentWidth();
               mx = Math.max(-2, Math.min(2, tx - e.x));
             }
-            my = -stats.speed * e.rally;
+            my = -stats.speed * e.rally * (e.pinned > 0 ? this.cfg.town.pin.slow : 1);
           }
           const foe = e.y < soldierReach ? this.soldiers.find((s) => s.hp > 0 && Math.hypot(s.x - e.x, s.y - e.y) < stats.radius + 0.6) : undefined;
           if (foe) {
@@ -1816,6 +1874,7 @@ export class Game {
     const columns: Enemy[][] = Array.from({ length: hw * 2 + 1 }, () => []);
     for (const e of this.enemies) if (e.y < reachY) columns[Math.max(0, Math.min(hw * 2, Math.floor(e.x + hw)))].push(e);
     // Orcs on the wall anywhere: soldiers with nothing to do at their post trudge over to them.
+    const stayHome = this.cfg.choices.soldiers === 'repair' || this.cfg.choices.tactic === 'sallyForth';
     const breachers = this.enemies.filter((e) => e.hp > 0 && (e.state === 'climb' || e.state === 'wall'));
     for (const s of this.soldiers) {
       if (s.hp <= 0) continue;
@@ -1836,7 +1895,7 @@ export class Game {
       // Everyone piles onto ogres and warlords from further along the wall.
       for (const e of heavies) consider(e, c.guard * c.heavyGuard);
       // Nothing near their post: walk (slowly) to the nearest orc on the wall, wherever it is.
-      if (!target) {
+      if (!target && !stayHome) {
         for (const e of breachers) {
           const d = Math.hypot(e.x - s.x, e.y - s.y) - this.cfg[e.kind].radius;
           if (d < best) {
@@ -1859,7 +1918,15 @@ export class Game {
         s.x += (dx / dist) * stepLen;
         s.y += (dy / dist) * stepLen;
       }
-      if (target && best < c.reach) target.hp -= dps * dt;
+      if (target && best < c.reach) {
+        const t: Enemy = target;
+        const was = t.hp;
+        t.hp -= dps * dt;
+        if (was > 0 && t.hp <= 0 && this.cfg.choices.tactic === 'sallyForth') t.goldMult *= this.cfg.town.sallyForth.killGold;
+      } else if (!target && this.cfg.choices.soldiers === 'repair' && Math.hypot(s.x - s.postX, s.y - s.postY) <= 0.3) {
+        const seg = this.segmentAt(s.postX);
+        if (this.segmentHp[seg] > 0) this.segmentHp[seg] = Math.min(this.cfg.wall.segmentHp, this.segmentHp[seg] + (this.cfg.town.repair.hps / c.count) * dt);
+      }
     }
   }
 
@@ -2151,7 +2218,7 @@ export class Game {
     // Launched from clear of the shield and the turrets: along its aim, or at the crowd.
     const y = this.cfg.bumpers.y + 2;
     const angle = def.heading ?? Math.max(-c.spread, Math.min(c.spread, Math.atan2(crowd.x - def.x, crowd.y - y)));
-    const sp = this.cfg.balls.speed;
+    const sp = this.cfg.balls.speed * this.cfg.town.balls[this.cfg.choices.ball].speed;
     const b = this.addBall('royal', def.x, y, Math.sin(angle) * sp, Math.cos(angle) * sp);
     b.power = this.mult('catapult', 'damage');
   }
@@ -2175,6 +2242,12 @@ export class Game {
     if (p.burn) {
       target.burn = Math.max(target.burn, p.burn);
       target.burnTime = this.cfg.archers.burnSeconds;
+    }
+    if (this.cfg.choices.archers === 'pin') {
+      const pin = this.cfg.town.pin;
+      target.pinned = pin.seconds;
+      if (target.block) target.block.haltUntil = this.time + pin.halt;
+      this.events.push({ type: 'pinned', x: target.x, y: target.y });
     }
     this.events.push({ type: 'hit', x: target.x, y: target.y });
   }
@@ -2324,7 +2397,7 @@ export class Game {
   private serve(b: Ball): void {
     const off = Math.abs(b.stuckOffset) < 0.1 ? this.rng.range(-0.35, 0.35) : b.stuckOffset / this.shieldHalfWidth();
     b.spin = 0;
-    this.launch(b, off * this.cfg.shield.serveAngle, b.kind === 'royal' ? this.cfg.balls.royalSpeed : this.cfg.balls.speed);
+    this.launch(b, off * this.cfg.shield.serveAngle, b.kind === 'royal' ? this.cfg.balls.royalSpeed * (this.kit(b)?.speed ?? 1) : this.cfg.balls.speed);
   }
 
   private powerUp(b: Ball): void {
@@ -2344,7 +2417,8 @@ export class Game {
     const half = this.shieldHalfWidth();
     const offset = (b.x - s.x) / half;
     const base = b.kind === 'royal' ? c.royalSpeed : c.speed;
-    const speed = Math.min(c.maxSpeed, Math.max(base, Math.hypot(b.vx, b.vy) * c.speedUp));
+    const k = this.kit(b);
+    const speed = Math.min(k?.maxSpeed ?? c.maxSpeed, Math.max(base * (k?.speed ?? 1), Math.hypot(b.vx, b.vy) * (k?.speedUp ?? c.speedUp)));
     // Hybrid bounce: mirror off the flat middle, kick off the edges, plus English and curve from the shield's movement.
     const move = s.vx / this.cfg.shield.speed;
     this.launch(b, this.bounceAngle(offset, Math.atan2(b.vx, -b.vy)) + move * this.cfg.shield.english, speed);
@@ -2362,6 +2436,10 @@ export class Game {
     // Judged on the sim clock at contact, so frame rate can't change the result.
     const heaved = this.time - s.heaveAt <= this.heaveWindow();
     const perfect = this.time - s.bashAt <= this.heaveWindow();
+    if (!heaved && !perfect) {
+      b.vx *= this.cfg.shield.returnMult;
+      b.vy *= this.cfg.shield.returnMult;
+    }
     if (heaved) {
       this.powerUp(b);
       s.heaveAt = -99;
@@ -2525,7 +2603,8 @@ export class Game {
   }
 
   private loseBall(b: Ball): void {
-    const damage = this.cfg.balls.missDamage * (b.kind === 'pebble' ? this.cfg.balls.pebbleShare : 1);
+    const powder = b.kind === 'royal' && this.cfg.choices.ball === 'powder';
+    const damage = (powder ? this.cfg.town.powder.missDamage : this.cfg.balls.missDamage) * (b.kind === 'pebble' ? this.cfg.balls.pebbleShare : 1);
     const seg = this.segmentAt(b.x);
     this.damageSegment(seg, damage, b.x, `missed ${b.kind}`);
     this.ballsLost++;
@@ -2807,16 +2886,18 @@ export class Game {
       return;
     }
 
+    const k = this.kit(b);
+    const kd = k?.damage ?? 1;
     const flask = this.time < this.effects.flask || this.hasBuilding('alchemist');
     const pinBlock = e.block?.shape === 'pins' ? e.block : null;
     // The Royal Ball flattens anything but a boss.
-    e.hp -= b.kind === 'royal' && e.kind !== 'warlord' ? Math.max(e.hp, c.damage) : c.damage * b.power * boost;
+    e.hp -= b.kind === 'royal' && e.kind !== 'warlord' ? Math.max(e.hp, c.damage * kd) : c.damage * kd * b.power * boost;
     e.goldMult = mult;
     e.lastBall = b.id;
     this.addCombo(b, 1);
     // The orcs around it go flying like bowling pins.
-    const sr = flask ? this.cfg.capsules.flaskRadius : c.splashRadius;
-    const sd = flask ? c.damage * b.power : c.splashDamage * b.power;
+    const sr = flask ? this.cfg.capsules.flaskRadius : c.splashRadius * (k?.splash ?? 1);
+    const sd = (flask ? c.damage * b.power : c.splashDamage * b.power) * kd;
     this.within(e.x, e.y, sr + MAX_RADIUS, (o) => {
       if (o.hp <= 0) return;
       const dx = o.x - e.x;
@@ -2828,7 +2909,7 @@ export class Game {
         o.goldMult = mult;
         o.lastBall = b.id;
       }
-      const kb = c.knockback / this.cfg[o.kind].mass;
+      const kb = (c.knockback * (k?.knockback ?? 1)) / this.cfg[o.kind].mass;
       const nx = o === e ? b.vx / (Math.hypot(b.vx, b.vy) || 1) : dx / (d || 1);
       const ny = o === e ? b.vy / (Math.hypot(b.vx, b.vy) || 1) : dy / (d || 1);
       o.vx += nx * kb;
@@ -2839,6 +2920,16 @@ export class Game {
       }
     });
     if (flask) this.events.push({ type: 'splash', x: e.x, y: e.y, radius: sr });
+    if (k && this.cfg.choices.ball === 'powder' && ++this.royalHits % this.cfg.town.powder.every === 0) {
+      const pw = this.cfg.town.powder;
+      this.within(e.x, e.y, pw.radius + MAX_RADIUS, (o) => {
+        if (o.hp <= 0 || Math.hypot(o.x - e.x, o.y - e.y) > pw.radius + this.cfg[o.kind].radius * 0.5) return;
+        o.hp -= pw.damage * this.cfg.bonuses.damage;
+        o.goldMult = mult;
+        o.lastBall = b.id;
+      });
+      this.events.push({ type: 'powderBlast', x: e.x, y: e.y });
+    }
     this.events.push({ type: 'hit', x: e.x, y: e.y, combo: b.combo });
     if (pinBlock) this.topplePins(b, e, pinBlock, mult);
     if (empowered) this.startBowling(b, e);
@@ -3092,7 +3183,7 @@ export class Game {
     this.events.push({ type: 'floorDown', x: tw.x, y: tw.y, floorsLeft: tw.floors.length });
     const block: Block = {
       id: this.nextBlockId++, x: tw.x, y: Math.max(2, tw.y - 2), shape: 'rect', members: [], start: 0,
-      spacing: 0.45 * 2 * this.cfg.march.spacing, speed: this.cfg.march.speed, homeX: tw.x, zig: false, phase: 0, dirty: false, regroupAt: 0, drummed: false,
+      spacing: 0.45 * 2 * this.cfg.march.spacing, speed: this.cfg.march.speed, homeX: tw.x, zig: false, phase: 0, dirty: false, regroupAt: 0, drummed: false, haltUntil: 0,
     };
     const slots = formation('rect', t.floorOrcs, block.spacing);
     for (const s of slots) this.spawn('grunt', block, s.dx, s.dy);

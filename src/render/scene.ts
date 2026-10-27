@@ -994,6 +994,15 @@ export class BattleScene {
           this.flash(0.35, '#ffb43a');
           this.shake = Math.max(this.shake, 0.6);
           break;
+        case 'powderBlast': {
+          const r = g.cfg.town.powder.radius;
+          this.spawnEffect('fireball', ev.x, -ev.y, 0.55, r * 1.6);
+          this.ground.decal(ev.x, -ev.y, r * 0.8, this.scorchBlast, 0.8);
+          fw.burst(ev.x, 0.5, -ev.y, { count: 70, colors: FIRE, speed: 12, life: 0.7, size: 0.5, up: 0.45, gravity: 9, twinkle: true });
+          this.burst(ev.x, 0.6, -ev.y, 6, '#5a3a1e', 8);
+          this.shake = Math.max(this.shake, 0.3);
+          break;
+        }
         case 'soldierDown':
           this.burst(ev.x, 0.6, -ev.y, 3, '#2f56b0', 4);
           break;
@@ -2090,7 +2099,7 @@ export class BattleScene {
         const x = Math.max(-g.cfg.field.halfWidth + 0.5, Math.min(g.cfg.field.halfWidth - 0.5, grp.x + (kind === 'orcCatapult' ? (i % 3 - 1) * 3 : s.dx)));
         this.horde.push({
           kind, x, y, vx: 0, vy: 0, hp: 1, maxHp: 1, state: 'stand', standY: y, timer: 0, phase: (i * 0.618) % 1,
-          burn: 0, burnTime: 0, rally: 1, foe: null, block: null, slotX: 0, slotY: 0, goldMult: 1, lastBall: -1, stagger: 0, blasted: false, shielded: kind === 'shieldOrc', bowl: null,
+          burn: 0, burnTime: 0, rally: 1, foe: null, block: null, slotX: 0, slotY: 0, goldMult: 1, lastBall: -1, stagger: 0, blasted: false, pinned: 0, shielded: kind === 'shieldOrc', bowl: null,
         });
       });
       depth[grp.lane] = back + deepest + 4;

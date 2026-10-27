@@ -19,10 +19,14 @@ import { Sounds } from './render/sound';
 import { defenderPortraits } from './render/portraits';
 import { BUILDINGS } from './render/world';
 import { DEFENDER_KINDS, type DefenderKind, type Ground, type PlacedKind, SPECIAL_NAMES, type Track, USEFUL_TRACKS, groundAt, stackAt } from './sim/defenders';
-import { BUILDING_KINDS, type PowerKind, Game, STEP } from './sim/game';
+import { BUILDING_KINDS, type BuildingKind, type PowerKind, Game, STEP } from './sim/game';
+import {
+  ARCHER_ROLE_INFO, BALL_KIT_INFO, SHIELD_KIT_INFO, SOLDIER_ROLE_INFO, TACTIC_INFO,
+  type ChoiceBuilding, type Choices, type Option, hasChoiceBuilding, optionNeeds, optionOpen, sanitizeChoices,
+} from './sim/town';
 import { contact } from './sim/obstacles';
 import { Tutorial } from './sim/tutorial';
-import { META_GROUPS, META_UPGRADES, type MetaGroup, type Progress, applyMeta, buyMeta, metaCost, metaDepth, metaLocked, newProgress } from './sim/meta';
+import { META_GROUPS, META_UPGRADES, type MetaGroup, type Progress, applyMeta, buyMeta, metaCost, metaDepth, metaLocked, metaUpgrade, newProgress } from './sim/meta';
 import { ENEMY_KINDS, type EnemyKind } from './sim/waves';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -224,6 +228,7 @@ const GROUND_NOTE: Record<Ground, string> = {
 window.addEventListener('pointermove', (e) => {
   pointerToSim(e);
   hovered = e.target === canvas && !placing && !aiming && !building ? buildingAt(e) : null;
+  if (hovered && hovered !== 'keep' && game.phase !== 'setup') hovered = null;
   canvas.style.cursor = hovered ? 'pointer' : '';
 });
 
@@ -232,12 +237,15 @@ window.addEventListener('pointermove', (e) => {
 const POWER_KEYS: Record<string, PowerKind> = { KeyQ: 'keep' };
 const POWER_KEY: Record<PowerKind, string> = { keep: 'Q' };
 /** The keep under the mouse, lit up while it's there. */
-let hovered: PowerKind | null = null;
+let hovered: BuildingKind | null = null;
 
-function buildingAt(e: PointerEvent | MouseEvent): PowerKind | null {
+const CHOICE_BUILDINGS: ChoiceBuilding[] = ['warroom', 'barracks', 'blacksmith', 'watchtower'];
+/** The keep, or (outside the battle itself, so clicks there still heave) a building you make choices in. */
+function buildingAt(e: PointerEvent | MouseEvent): BuildingKind | null {
   const r = canvas.getBoundingClientRect();
   const b = view.pickBuilding(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
-  return b === 'keep' ? b : null;
+  if (b === 'keep') return b;
+  return b && (CHOICE_BUILDINGS as string[]).includes(b) && game.phase !== 'battle' ? b : null;
 }
 
 function usePower(kind: PowerKind) {
@@ -247,6 +255,7 @@ canvas.addEventListener('pointerdown', (e) => {
   pointerToSim(e);
   sounds.unlock();
   if (e.button === 2) {
+    townOpen = null;
     if (placing) cancelPlacing();
     if (aiming) cancelAiming();
     building = false;
@@ -288,7 +297,8 @@ canvas.addEventListener('pointerdown', (e) => {
   // A click on the keep sounds the call to arms instead of heaving.
   const b = buildingAt(e);
   if (b && running) {
-    usePower(b);
+    if (b === 'keep') usePower(b);
+    else clickTownBuilding(b as ChoiceBuilding);
     return;
   }
   if (running) game.heave();
@@ -300,6 +310,7 @@ window.addEventListener('pointerup', (e) => {
   // Barely moved: a click, which opens the defender's card.
   if (Math.hypot(input.x - pressAt.x, input.y - pressAt.y) < 0.6) {
     selected = game.shopOpen ? id : null;
+    if (selected !== null) townOpen = null;
     return;
   }
   const cost = game.moveCost();
@@ -333,6 +344,7 @@ window.addEventListener('keydown', (e) => {
   // Dev aid (?debug): O sets up a column of grunts with an empowered ball heading for them (Shift+O: shield-team orcs), to try Orc Bowling.
   if (e.code === 'KeyO' && params.has('debug') && running && !e.repeat) game.practiceBowling(4, e.shiftKey ? 'shieldOrc' : 'grunt');
   if (e.code === 'Escape') {
+    townOpen = null;
     if (placing) cancelPlacing();
     if (aiming) cancelAiming();
     building = false;
@@ -489,6 +501,7 @@ const hud = {
   flash: $('flash'),
   tray: $('tray'),
   defPop: $('defPop'),
+  townPop: $('townPop'),
   toast: $('toast'),
   bottom: $('bottom'),
   queen: $('queen'),
@@ -830,10 +843,11 @@ function trayHtml(): string {
     : setup
       ? 'Spend your war chest on defenders and put them anywhere on the castle. Click one to upgrade or sell it (full refund until the battle starts); drag it to move it.'
       : 'Between waves: click a defender to upgrade it, a wall\'s Repair tag to patch it, or buy more. The next wave won\'t wait.';
+  const choices = setup ? choicesLine() : '';
   return `
     <header><h3>${setup ? 'Load-out' : 'Between waves'}</h3><span class="purse">${icon('gold')}${gold} gold</span></header>
     <div class="buy">${buy}${tower}</div>${again}
-    <p class="tip">${tip}</p>
+    <p class="tip">${tip}</p>${choices}
     ${setup ? '<button type="button" class="go" data-action="go">To battle! <kbd>Enter</kbd></button>' : ''}`;
 }
 
@@ -855,14 +869,125 @@ function popHtml(d: { id: number; kind: DefenderKind }): string {
     <footer><button type="button" data-action="sell:${d.id}">Sell for ${game.sellValue(d.id)}g</button><button type="button" data-action="close">Done</button></footer>`;
 }
 
+/** The tray's one-line summary of the town's choices (only for buildings the town has). */
+function choicesLine(): string {
+  const m = progress.meta;
+  const c = game.choices;
+  const name = <T extends string>(list: Option<T>[], id: T) => list.find((o) => o.id === id)!.name;
+  const parts: string[] = [];
+  if (hasChoiceBuilding(m, 'warroom')) parts.push(`Tactic: ${c.tactic ? name(TACTIC_INFO, c.tactic) : 'None'}`);
+  if (hasChoiceBuilding(m, 'barracks')) parts.push(`Archers: ${name(ARCHER_ROLE_INFO, c.archers)}`, `Soldiers: ${name(SOLDIER_ROLE_INFO, c.soldiers)}`);
+  if (hasChoiceBuilding(m, 'blacksmith')) parts.push(`Shield: ${name(SHIELD_KIT_INFO, c.shield)}`, `Ball: ${name(BALL_KIT_INFO, c.ball)}`);
+  if (!parts.length) return '';
+  return `<p class="tip"><b>${parts.join(' · ')}</b><br>Click the war room, barracks, blacksmith or watchtower to change</p>`;
+}
+
+// ---- the town popover: choices made by clicking the town's buildings ----------
+
+let townOpen: ChoiceBuilding | null = null;
+let lastPinned = -1;
+const TOWN_NAMES: Record<string, string> = {
+  grunt: 'Grunts', shieldOrc: 'Shield orcs', drummer: 'Drummers', chucker: 'Chuckers', runner: 'Goblin runners',
+  rider: 'Riders', ogre: 'Ogres', barrel: 'Powder barrels', orcCatapult: 'Catapults', warlord: 'Warlord',
+};
+
+function clickTownBuilding(b: ChoiceBuilding) {
+  const name = BUILDINGS[b].name;
+  if (!hasChoiceBuilding(progress.meta, b)) toast(`${name}: build it in the town with Renown`);
+  else if (game.phase !== 'setup') toast(`${name}: choose before the battle, in the setup`);
+  else {
+    townOpen = b;
+    selected = null;
+    building = false;
+    if (placing) cancelPlacing();
+    hud.townPop.dataset.key = '';
+  }
+}
+
+function optionRows(building: ChoiceBuilding, field: keyof Choices, list: Option<string>[], none?: boolean): string {
+  const cur = game.choices[field] ?? 'none';
+  const row = (o: { id: string; name: string; good: string; bad: string }, open: boolean, needs: string[]) => {
+    const btn = !open
+      ? `<small class="need">Needs ${needs.map((id) => metaUpgrade(id).name).join(', ')}</small>`
+      : `<button type="button" data-action="choose:${field}:${o.id}" ${cur === o.id ? 'disabled' : ''}>${cur === o.id ? 'Chosen' : 'Choose'}</button>`;
+    return `<div class="opt${open ? '' : ' locked'}${cur === o.id ? ' on' : ''}"><div class="row"><b>${o.name}</b>${btn}</div><small>${o.good}</small>${o.bad ? `<small class="bad">${o.bad}</small>` : ''}</div>`;
+  };
+  const rows = list.map((o) => row(o, optionOpen(progress.meta, building, o), optionNeeds(progress.meta, o)));
+  if (none) rows.push(row({ id: 'none', name: 'No tactic', good: 'Fight the level as it comes.', bad: '' }, true, []));
+  return rows.join('');
+}
+
+function townPopHtml(b: ChoiceBuilding): string {
+  const done = '<footer><button type="button" data-action="close">Done</button></footer>';
+  if (b === 'warroom') return `<h3>The War Room – one tactic for this level</h3>${optionRows(b, 'tactic', TACTIC_INFO, true)}${done}`;
+  if (b === 'barracks') {
+    const archers = (progress.meta.archers ?? 0) > 0 ? optionRows(b, 'archers', ARCHER_ROLE_INFO) : '<small>Unlock archers first</small>';
+    return `<h3>The Barracks</h3><h4>Archers</h4>${archers}<h4>Soldiers</h4>${optionRows(b, 'soldiers', SOLDIER_ROLE_INFO)}${done}`;
+  }
+  if (b === 'blacksmith') return `<h3>The Blacksmith</h3><h4>Shield</h4>${optionRows(b, 'shield', SHIELD_KIT_INFO)}<h4>Royal Ball</h4>${optionRows(b, 'ball', BALL_KIT_INFO)}${done}`;
+  const rows = game
+    .scoutReport()
+    .map((w) => {
+      const counts = (Object.entries(w.enemies) as [string, number][])
+        .filter(([, n]) => n > 0)
+        .map(([k, n]) => `${n} ${TOWN_NAMES[k] ?? k}`)
+        .join(', ');
+      const boss = w.boss ? `<b class="boss">${w.boss === 'warlord' ? 'Warlord on the siege tower!' : 'Siege tower!'}</b>` : '';
+      return `<tr><td>${w.wave}</td><td>${counts}</td><td>${boss}</td></tr>`;
+    })
+    .join('');
+  return `<h3>The Watchtower – what's coming</h3><table class="scout"><tr><th>Wave</th><th>Orcs</th><th>Boss</th></tr>${rows}</table>${done}`;
+}
+
+function townAction(action: string) {
+  const [verb, field, id] = action.split(':');
+  if (verb === 'close') {
+    townOpen = null;
+    return;
+  }
+  if (verb !== 'choose') return;
+  const c = { ...game.choices, [field]: id === 'none' ? null : id } as Choices;
+  if (!game.setChoices(c)) return;
+  progress.choices = c;
+  saveProgress();
+  sounds.thunk();
+  const all = [...TACTIC_INFO, ...ARCHER_ROLE_INFO, ...SOLDIER_ROLE_INFO, ...SHIELD_KIT_INFO, ...BALL_KIT_INFO] as Option<string>[];
+  toast(`${id === 'none' ? 'No tactic' : all.find((o) => o.id === id)?.name} chosen`);
+  hud.townPop.dataset.key = '';
+  trayKey = '';
+}
+
+function updateTownPop() {
+  if (townOpen && !(running && game.phase === 'setup')) townOpen = null;
+  hud.townPop.hidden = !townOpen;
+  if (!townOpen) return;
+  const key = `${townOpen}|${JSON.stringify(game.choices)}`;
+  if (hud.townPop.dataset.key !== key) {
+    hud.townPop.dataset.key = key;
+    hud.townPop.innerHTML = townPopHtml(townOpen);
+  }
+  // Under the building (projected like its tag), kept on screen.
+  const b = BUILDINGS[townOpen];
+  const p = view.project(b.x, -b.z, 0);
+  const w = hud.townPop.offsetWidth;
+  hud.townPop.style.left = `${Math.min(window.innerWidth - w / 2 - 8, Math.max(w / 2 + 8, p.x))}px`;
+  hud.townPop.style.top = `${Math.max(8, Math.min(p.y + 8, window.innerHeight - hud.townPop.offsetHeight - 8))}px`;
+}
+hud.townPop.addEventListener('click', (e) => {
+  const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('button[data-action]');
+  if (btn && !btn.disabled) townAction(btn.dataset.action!);
+});
+
 let trayKey = '';
 let selected: number | null = null;
 function updateShop() {
+  if (selected !== null) townOpen = null;
+  updateTownPop();
   const open = running && game.shopOpen;
   hud.tray.hidden = !open;
   if (open) {
     // Re-render only when something it shows has changed, so the buttons stay clickable.
-    const key = [game.phase, Math.floor(game.gold), placing, building, game.defenders.length, progress.lastLoadout.length].join('|');
+    const key = [game.phase, Math.floor(game.gold), placing, building, game.defenders.length, progress.lastLoadout.length, JSON.stringify(game.choices)].join('|');
     if (key !== trayKey) {
       trayKey = key;
       hud.tray.innerHTML = trayHtml();
@@ -933,6 +1058,7 @@ function startBattle() {
 hud.buildTags.addEventListener('click', (e) => {
   const tag = (e.target as HTMLElement).closest<HTMLElement>('[data-building]');
   if (tag?.dataset.building === 'keep') usePower('keep');
+  else if (tag && (CHOICE_BUILDINGS as string[]).includes(tag.dataset.building ?? '')) clickTownBuilding(tag.dataset.building as ChoiceBuilding);
 });
 
 for (const el of [hud.tray, hud.defPop, hud.wallBars]) {
@@ -964,7 +1090,7 @@ function saveProgress() {
 
 function newLevel(): Game {
   const level = progress.levelsBeaten;
-  const g = new Game(Math.floor(Math.random() * 1e9), applyMeta(progress.meta, level), level);
+  const g = new Game(Math.floor(Math.random() * 1e9), applyMeta(progress.meta, level), level, sanitizeChoices(progress.meta, progress.choices));
   tutorial = !progress.tutorialDone && level === 0 ? Tutorial.begin(g) : null;
   return g;
 }
@@ -1033,7 +1159,7 @@ function townHtml(): string {
     <div class="levels">${levels}</div>
     <div class="groups">${groups}</div>
     <button type="button" class="march" data-march>March to ${names[next]}!</button>
-    <p class="tag">The town itself, with its buildings and townsfolk, is coming. For now the upgrades live on this page.</p>
+    <p class="tag">Between levels: spend Renown here, then click the war room, barracks, blacksmith and watchtower in the town before the battle.</p>
   </div>`;
 }
 
@@ -1313,6 +1439,13 @@ function frame(now: number) {
           floater(`×${ev.combo} COMBO!`, ev.x, ev.y, `c${ev.combo}`, 1.4);
           sounds.chime(ev.combo >= 40 ? 3 : ev.combo >= 25 ? 2 : 1);
           break;
+        case 'pinned':
+          if (game.time - lastPinned >= 0.5 || game.time < lastPinned) {
+            lastPinned = game.time;
+            floater('Pinned', ev.x, ev.y + 1, 'bad', 0.7);
+          }
+          break;
+        case 'powderBlast':
         case 'blast':
         case 'floorDown':
           hitStop = Math.max(hitStop, 0.05);

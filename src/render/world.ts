@@ -16,8 +16,8 @@ import tf8 from '../assets/sprites/townsfolk-8.webp';
 import { BUILDING_KINDS, type BuildingKind, type Game } from '../sim/game';
 import { roadAt } from './ground';
 import {
-  LEAF, type RoofKind, type TreeKind, bellModel, bellPostModel, bumperShieldModel, bumperSpringModel, rampModel, campfireModel, clutterModel, cottageModel, keepModel, obstacleModel,
-  palisadeModel, plotModel, scatterModel, stallModel, tentModel, totemModel, treeModel, wellModel,
+  LEAF, type RoofKind, type TreeKind, bellModel, bellPostModel, bumperShieldModel, bumperSpringModel, rampModel, campfireModel, clutterModel, barracksModel, cottageModel, keepModel, obstacleModel,
+  palisadeModel, plotModel, scatterModel, stallModel, tentModel, totemModel, treeModel, warRoomModel, watchtowerModel, wellModel,
 } from './models';
 import { type SpriteArt, imageSprite } from './textures';
 import { type Vox, VoxBatch, seeded } from './voxels';
@@ -45,10 +45,15 @@ export const BUILDINGS: Record<BuildingKind, { x: number; z: number; top: number
   // The five sprite buildings (w = world width of the sprite): a crooked street, back row z 9-11, front row z 15-19.
   tavern: { x: -17.5, z: 10, top: 8.2, w: 7.1, name: 'The Rusty Tankard', power: 'Stand a round' },
   alchemist: { x: 17.5, z: 18.5, top: 7.8, w: 6.4, name: 'The alchemist', power: 'Every ball burns' },
-  blacksmith: { x: -12.8, z: 16.5, top: 6.6, w: 7.3, name: 'The Blacksmith', power: 'Arrows +25%' },
+  blacksmith: { x: -12.8, z: 16.5, top: 6.6, w: 7.3, name: 'The Blacksmith', power: 'Shield & ball' },
   chapel: { x: 12.8, z: 15.3, top: 8.4, w: 7.2, name: 'The Chapel', power: 'Mends the wall' },
   forge: { x: 17, z: 9.5, top: 7.8, w: 7.6, name: 'The Siege Forge', power: 'Catapult +40%' },
+  // Voxel models (no painted art yet), standing where three cottages were.
+  warroom: { x: -24, z: 12, top: 10, name: 'The War Room', power: 'Battle tactic' },
+  barracks: { x: 23.5, z: 12, top: 7, name: 'The Barracks', power: 'Unit roles' },
+  watchtower: { x: -33, z: 14, top: 15, name: 'The Watchtower', power: 'Scout the horde' },
 };
+const MODELS: Partial<Record<BuildingKind, () => Vox>> = { warroom: warRoomModel, barracks: barracksModel, watchtower: watchtowerModel };
 const TOWN_ART: Partial<Record<BuildingKind, [string, string]>> = {
   tavern: [townTavern, 'town-tavern'], alchemist: [townAlchemist, 'town-alchemist'], blacksmith: [townBlacksmith, 'town-blacksmith'],
   chapel: [townChapel, 'town-chapel'], forge: [townForge, 'town-forge'],
@@ -204,7 +209,7 @@ export class World {
       const built = this.game.hasBuilding(kind);
       const art = TOWN_ART[kind];
       if (!built || !art) {
-        const group = place(built ? keepModel() : plotModel(), b.x, b.z, 0, kind === 'keep' ? KEEP_VOX : BUILD_VOX);
+        const group = place(built ? (MODELS[kind] ?? keepModel)() : plotModel(), b.x, b.z, 0, kind === 'keep' ? KEEP_VOX : BUILD_VOX);
         this.spots.push({ kind, group, box: new THREE.Box3().setFromObject(group), built, glow: 0 });
         continue;
       }
@@ -225,8 +230,8 @@ export class World {
     }
     // Cottages round the edges, stalls in the lanes by the keep, a well and clutter.
     const cottages: [number, number, number, number, RoofKind][] = [
-      [-24, 12, 15, 11, 'slate'], [-22.5, 19.5, 13, 9, 'thatch'], [23.5, 12, 15, 11, 'tile'], [24.5, 19.5, 13, 9, 'thatch'],
-      [-33, 14, 13, 11, 'tile'], [33.5, 15, 13, 11, 'slate'], [-31, 22, 11, 9, 'thatch'], [32, 22.5, 11, 9, 'tile'],
+      [-22.5, 19.5, 13, 9, 'thatch'], [24.5, 19.5, 13, 9, 'thatch'],
+      [33.5, 15, 13, 11, 'slate'], [-31, 22, 11, 9, 'thatch'], [32, 22.5, 11, 9, 'tile'],
     ];
     cottages.forEach(([x, z, w, d, roof], i) => {
       place(cottageModel(100 + i, w, d, roof), x, z);

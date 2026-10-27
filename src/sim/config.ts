@@ -178,6 +178,8 @@ export const defaultConfig = {
     slamKnock: 40,
     /** Render only: shield hits that knock one cluster of blocks off the voxel shield (cleared each wave). */
     hitsPerChunk: 2,
+    /** Speed multiplier on plain returns (not Perfect Returns or heaves). */
+    returnMult: 1,
   },
   balls: {
     radius: 0.45,
@@ -468,6 +470,8 @@ export const defaultConfig = {
     callEarlyAt: 0.15,
     /** Seconds credited for calling from the tail of a wave, on top of the skipped preview. */
     tailCallSeconds: 6,
+    /** Multiplier on early-call gold; Hold the Gate sets 0. */
+    earlyGoldMult: 1,
   },
   /**
    * Orc Bowling: an empowered (Perfect Return) hit sends a light orc tumbling into the next, one chain per shot.
@@ -502,6 +506,45 @@ export const defaultConfig = {
     light: ['grunt', 'chucker', 'runner', 'drummer'] as string[],
     medium: ['rider', 'shieldOrc'] as string[],
     heavy: ['ogre', 'warlord', 'orcCatapult', 'barrel'] as string[],
+  },
+  /**
+   * The town's choices for a level (town.ts): picked in the setup by clicking the war room, barracks and
+   * blacksmith. applyChoices sets choices and folds the stat changes below into the level's config.
+   */
+  choices: { tactic: null, archers: 'fire', soldiers: 'hold', shield: 'kite', ball: 'royal' } as import('./town').Choices,
+  town: {
+    /** Wall strength and soldier toughness multipliers; every defender's rate multiplier. Early calls pay nothing. */
+    holdGate: { wallHp: 1.4, soldierHp: 1.5, rate: 0.8 },
+    /** Archer and crossbow rate multiplier, the volley's boulder shoot-down chance, burn seconds; men per company, repair cost multiplier. */
+    rainOfArrows: { rate: 1.35, shootDown: 0.6, burnSeconds: 5, soldiers: 20, repairCost: 1.5 },
+    /**
+     * Soldiers hold a line y units up the field and chase orcs within guard of it; damage, speed and kill-gold
+     * multipliers. They never go back to the wall, and only returnPerWave of each company's fallen come back.
+     */
+    sallyForth: { y: 10, guard: 6, dps: 1.3, speed: 1.5, killGold: 1.5, returnPerWave: 20 },
+    /** Archers on Pin: damage multiplier; an orc hit walks at slow x speed for seconds; a block that is hit halts for halt seconds. */
+    pin: { damage: 0.4, slow: 0.5, seconds: 2, halt: 1 },
+    /** Soldiers on Repair: each company mends its nearest wall section at hps while no orc is within guard; fights at dps x. */
+    repair: { hps: 4, dps: 0.5 },
+    /** Shields: width and speed multipliers, extra heave cooldown and window (s), overrides, and plain-return speed. */
+    shields: {
+      kite: { width: 1, speed: 1, heaveCooldown: 0, heaveWindow: 0, returnMult: 1 },
+      tower: { width: 1.35, speed: 0.7, heaveCooldown: 1, heaveWindow: 0, returnMult: 1 },
+      buckler: { width: 0.7, speed: 1.25, heaveCooldown: 0, heaveWindow: 0.05, bashCooldown: 0.45, perfectSpeed: 1.45, returnMult: 1 },
+      spiked: { width: 1, speed: 1, heaveCooldown: 0, heaveWindow: 0, slamDamage: 45, slamReach: 3, slamKillMass: 2.5, returnMult: 0.85 },
+    } as Record<import('./town').ShieldKit, { width: number; speed: number; heaveCooldown: number; heaveWindow: number; returnMult: number; bashCooldown?: number; perfectSpeed?: number; slamDamage?: number; slamReach?: number; slamKillMass?: number }>,
+    /**
+     * The Royal Ball (served and the castle catapult's; claimed boulders and pebbles stay as they are): damage, splash
+     * radius, knockback and speed multipliers, speed-up per bounce, top speed and combo step (null: the balls defaults).
+     * Powder: every powderEvery-th hit blows up orcs within powderRadius for powderDamage; a miss hits the wall for missDamage.
+     */
+    balls: {
+      royal: { damage: 1, splash: 1, knockback: 1, speed: 1, speedUp: null, maxSpeed: null, comboStep: null },
+      iron: { damage: 2, splash: 1.5, knockback: 1.55, speed: 0.73, speedUp: 1, maxSpeed: null, comboStep: null },
+      jester: { damage: 0.7, splash: 1, knockback: 1, speed: 1, speedUp: 1.05, maxSpeed: 38, comboStep: 0.15 },
+      powder: { damage: 1, splash: 1, knockback: 1, speed: 1, speedUp: null, maxSpeed: null, comboStep: null },
+    } as Record<import('./town').BallKit, { damage: number; splash: number; knockback: number; speed: number; speedUp: number | null; maxSpeed: number | null; comboStep: number | null }>,
+    powder: { every: 4, radius: 2.5, damage: 25, missDamage: 25 },
   },
   renown: {
     perWaveBase: 5,

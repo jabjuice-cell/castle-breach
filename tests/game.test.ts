@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { averageBot } from '../src/sim/bot';
 import { makeConfig } from '../src/sim/config';
 import { type Ball, type Enemy, Game, type Projectile } from '../src/sim/game';
+import { applyChoices, defaultChoices, sanitizeChoices } from '../src/sim/town';
 import { META_UPGRADES, applyMeta, buyMeta, metaCost, metaDepth, metaLocked, newProgress } from '../src/sim/meta';
 import { type Contraption, footprint } from '../src/sim/contraptions';
 import { LEVEL_OBSTACLES, contact } from '../src/sim/obstacles';
@@ -15,7 +16,7 @@ function run(game: Game, seconds: number) {
 function enemy(over: Partial<Enemy>): Enemy {
   return {
     kind: 'grunt', x: 0, y: 10, vx: 0, vy: 0, hp: 10, maxHp: 10, state: 'march', standY: 25, timer: 99, phase: 0,
-    burn: 0, burnTime: 0, rally: 1, foe: null, block: null, slotX: 0, slotY: 0, goldMult: 1, lastBall: -1, stagger: 0, blasted: false, shielded: false, bowl: null,
+    burn: 0, burnTime: 0, rally: 1, foe: null, block: null, slotX: 0, slotY: 0, goldMult: 1, lastBall: -1, stagger: 0, blasted: false, shielded: false, bowl: null, pinned: 0,
     ...over,
   };
 }
@@ -322,7 +323,7 @@ describe('the shield and the balls', () => {
 
   it('a heave just before impact is a power shot that smashes through a whole orc line', () => {
     const game = battle();
-    const block = { id: 1, x: 0, y: 20, shape: 'line' as const, members: [] as Enemy[], start: 8, spacing: 1, speed: 0, homeX: 0, zig: false, phase: 0, dirty: false, regroupAt: 99, drummed: false };
+    const block = { id: 1, x: 0, y: 20, shape: 'line' as const, members: [] as Enemy[], start: 8, spacing: 1, speed: 0, homeX: 0, zig: false, phase: 0, dirty: false, regroupAt: 99, drummed: false, haltUntil: 0 };
     for (let i = 0; i < 8; i++) {
       const e = enemy({ x: -3.5 + i, y: 20, block, slotX: -3.5 + i, slotY: 0, hp: 20, maxHp: 20 });
       block.members.push(e);
@@ -1723,7 +1724,7 @@ describe('orc bowling', () => {
     const game = battle();
     const block = {
       id: 77, x: 0, y: 10, shape: 'rect' as const, members: [] as Enemy[], start: 4, spacing: 1.6, speed: 0, homeX: 0, zig: false, phase: 0,
-      dirty: false, regroupAt: 0, drummed: true,
+      dirty: false, regroupAt: 0, drummed: true, haltUntil: 0,
     };
     const slots = [[0, 0, 'drummer'], [-1.5, 1.8, 'shieldOrc'], [0, 1.8, 'shieldOrc'], [1.5, 1.8, 'shieldOrc']] as const;
     for (const [sx, sy, kind] of slots) {
@@ -2088,5 +2089,126 @@ describe('war council shaping', () => {
     game.endSetup();
     game.endSetup();
     expect(game.events.filter((e) => e.type === 'battleReady')).toHaveLength(1);
+  });
+});
+
+describe('town choices', () => {
+  const pick = (over: Partial<ReturnType<typeof defaultChoices>>) => ({ ...defaultChoices(), ...over });
+  /** A quiet battle with the soldiers' company placed and the choices applied. */
+  function withSoldiers(choices: ReturnType<typeof defaultChoices>) {
+    const cfg = veteran(quiet());
+    const game = new Game(1, cfg, 0, choices);
+    game.gold = 5000;
+    expect(game.place('soldiers', 1, -1.2)).toBe(true);
+    game.endSetup();
+    game.plan.groups = [];
+    game.skipPreview();
+    game.balls = [];
+    game.royalDue = Infinity;
+    game.enemies.push(enemy({ x: 0, y: 60, state: 'stand', hp: 1e9 }));
+    return game;
+  }
+  const priv = (g: Game) => g as unknown as { rebuildGrid(): void; landArrow(p: unknown): void; ballVsOrcs(b: Ball): void; royalHits: number };
+
+  it('sanitizeChoices drops options whose building or upgrade is not owned', () => {
+    expect(sanitizeChoices({}, pick({ tactic: 'rainOfArrows' })).tactic).toBeNull();
+    expect(sanitizeChoices({ warroom: 1, archers: 1 }, pick({ tactic: 'rainOfArrows' })).tactic).toBe('rainOfArrows');
+    expect(sanitizeChoices({ blacksmith: 1, width: 1 }, pick({ shield: 'tower' })).shield).toBe('kite');
+    expect(sanitizeChoices({ blacksmith: 1, width: 2 }, pick({ shield: 'tower' })).shield).toBe('tower');
+  });
+
+  it('Hold the Gate: wall x1.4, rate x0.8, no early-call gold', () => {
+    const base = makeConfig();
+    const cfg = applyChoices(base, pick({ tactic: 'holdGate' }));
+    expect(cfg.wall.segmentHp).toBe(Math.round(base.wall.segmentHp * 1.4));
+    expect(cfg.bonuses.rate).toBeCloseTo(base.bonuses.rate * 0.8);
+    expect(cfg.economy.earlyGoldMult).toBe(0);
+    const plain = new Game(1, makeConfig());
+    const hold = new Game(1, makeConfig(), 0, pick({ tactic: 'holdGate' }));
+    for (const g of [plain, hold]) { g.endSetup(); run(g, 1); }
+    expect(plain.earlyCallGold()).toBeGreaterThan(0);
+    expect(hold.earlyCallGold()).toBe(0);
+  });
+
+  it('setChoices works in the setup only and resets the wall to the new strength', () => {
+    const game = new Game(1, makeConfig());
+    expect(game.setChoices(pick({ tactic: 'holdGate' }))).toBe(true);
+    expect(game.choices.tactic).toBe('holdGate');
+    expect(game.segmentHp.every((h) => h === Math.round(makeConfig().wall.segmentHp * 1.4))).toBe(true);
+    expect(game.events.some((e) => e.type === 'choicesChanged')).toBe(true);
+    expect(game.setChoices(pick({}))).toBe(true);
+    expect(game.segmentHp.every((h) => h === makeConfig().wall.segmentHp)).toBe(true);
+    game.endSetup();
+    expect(game.setChoices(pick({ tactic: 'holdGate' }))).toBe(false);
+    expect(game.choices.tactic).toBeNull();
+  });
+
+  it('the tower shield is 1.35x the kite', () => {
+    const kite = new Game(1, makeConfig());
+    const tower = new Game(1, makeConfig(), 0, pick({ shield: 'tower' }));
+    expect(tower.shieldHalfWidth()).toBeCloseTo(kite.shieldHalfWidth() * 1.35);
+  });
+
+  it('Pin: an arrow landing on a block member halts the block for a second', () => {
+    const game = battle(1, applyChoices(quiet(), pick({ archers: 'pin' })));
+    const block = { id: 1, x: 0, y: 30, shape: 'rect' as const, members: [] as Enemy[], start: 1, spacing: 1, speed: 2, homeX: 0, zig: false, phase: 0, dirty: false, regroupAt: 99, drummed: false, haltUntil: 0 };
+    const e = enemy({ x: 0, y: 30, block, hp: 100, maxHp: 100 });
+    block.members.push(e);
+    game.enemies.push(e);
+    game.blocks.push(block);
+    priv(game).rebuildGrid();
+    priv(game).landArrow({ x: 0, y: 30, damage: 1, burn: 0 });
+    expect(e.pinned).toBe(2);
+    run(game, 0.5);
+    expect(block.y).toBe(30);
+    run(game, 1);
+    expect(block.y).toBeLessThan(30);
+  });
+
+  it('Repair: idle soldiers mend a damaged wall section; on Hold they do not', () => {
+    const mend = (soldiers: 'hold' | 'repair') => {
+      const game = withSoldiers(pick({ soldiers }));
+      const seg = game.segmentAt(game.soldiers[0].postX);
+      game.segmentHp[seg] = 100;
+      run(game, 3);
+      return game.segmentHp[seg];
+    };
+    expect(mend('repair')).toBeGreaterThan(100);
+    expect(mend('hold')).toBe(100);
+  });
+
+  it('Sally Forth: soldiers muster up the field', () => {
+    const game = withSoldiers(pick({ tactic: 'sallyForth' }));
+    expect(game.soldiers.length).toBeGreaterThan(0);
+    for (const s of game.soldiers) expect(s.y).toBeGreaterThanOrEqual(10);
+    for (const s of game.soldiers) expect(s.y).toBeLessThan(11.5);
+  });
+
+  it('Powder Ball: a miss hits the wall for 25 and the 4th hit blows up the neighbours', () => {
+    const game = battle(1, applyChoices(quiet(), pick({ ball: 'powder' })));
+    const seg = game.segmentAt(15);
+    const before = game.segmentHp[seg];
+    ball(game, { kind: 'royal', x: 15, y: 0.1, vy: -20 });
+    run(game, 0.1);
+    expect(before - game.segmentHp[seg]).toBe(25);
+    const hit = enemy({ x: 0, y: 30, state: 'stand' });
+    const near = enemy({ x: 1.5, y: 30, state: 'stand', hp: 500, maxHp: 500 });
+    game.enemies.push(hit, near);
+    priv(game).rebuildGrid();
+    priv(game).royalHits = 3;
+    game.events.length = 0;
+    priv(game).ballVsOrcs(ball(game, { kind: 'royal', x: 0, y: 30, vy: 20 }));
+    expect(game.events.some((e) => e.type === 'powderBlast')).toBe(true);
+    expect(near.hp).toBeLessThanOrEqual(500 - 25 * game.cfg.bonuses.damage);
+  });
+
+  it('scoutReport lists the the waves and bosses of a level', () => {
+    const cfg = makeConfig();
+    const l0 = new Game(1, cfg).scoutReport();
+    expect(l0).toHaveLength(cfg.levels.waves);
+    expect(l0[0].wave).toBe(1);
+    expect(l0[0].enemies.grunt).toBeGreaterThan(0);
+    const l2 = new Game(1, cfg, 2).scoutReport();
+    expect(l2[l2.length - 1].boss).toBe('warlord');
   });
 });

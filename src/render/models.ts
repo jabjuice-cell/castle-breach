@@ -229,6 +229,67 @@ export function plotModel(): Vox {
   return v;
 }
 
+/** The War Room (placeholder until it has art): a stone hall with a red tiled roof and a banner pole. */
+export function warRoomModel(): Vox {
+  const v = new Vox();
+  const rnd = seeded(71);
+  v.box(-8, 0, -6, 8, 1, 6, () => jitter(PAL.stone, 0.12, rnd));
+  v.shell(-7, 2, -5, 7, 10, 5, brick(PAL.stone, rnd));
+  v.box(-1, 2, 5, 1, 6, 5, PAL.woodDark);
+  windowZ(v, -5, 5, 5);
+  windowZ(v, 5, 5, 5);
+  v.gable(-8, 8, -7, 7, 11, tiles('#b8322a', rnd), PAL.stone);
+  v.box(10, 0, 4, 10, 22, 4, PAL.wood);
+  v.box(11, 16, 4, 14, 21, 4, '#b8322a');
+  v.box(11, 18, 4, 12, 19, 4, PAL.gold);
+  return v;
+}
+
+/** The Barracks (placeholder): a long timber hall, a fenced yard and a weapon rack. */
+export function barracksModel(): Vox {
+  const v = new Vox();
+  const rnd = seeded(72);
+  v.box(-10, 0, -5, 10, 1, 5, () => jitter(PAL.stone, 0.12, rnd));
+  v.shell(-9, 2, -4, 9, 8, 4, halfTimber(-9, -4, 9, 4, [2, 8], rnd));
+  v.box(-1, 2, 4, 1, 6, 4, PAL.woodDark);
+  windowZ(v, -6, 5, 4);
+  windowZ(v, 6, 5, 4);
+  v.gable(-10, 10, -6, 6, 9, tiles(PAL.slate, rnd), PAL.plaster);
+  // The yard fence in front, with a gap at the door.
+  for (let x = -10; x <= 10; x += 2) if (Math.abs(x) > 2) v.box(x, 0, 9, x, 3, 9, PAL.wood);
+  v.box(-10, 2, 9, -3, 2, 9, PAL.woodDark);
+  v.box(3, 2, 9, 10, 2, 9, PAL.woodDark);
+  v.box(-10, 0, 6, -10, 3, 9, PAL.wood);
+  v.box(10, 0, 6, 10, 3, 9, PAL.wood);
+  // A weapon rack: two posts, a bar and spears.
+  v.box(5, 0, 7, 5, 4, 7, PAL.wood);
+  v.box(9, 0, 7, 9, 4, 7, PAL.wood);
+  v.box(5, 3, 7, 9, 3, 7, PAL.woodDark);
+  for (let x = 6; x <= 8; x++) v.box(x, 1, 7, x, 6, 7, PAL.iron);
+  return v;
+}
+
+/** The Watchtower (placeholder): a tall narrow stone tower with a wooden lookout on top. */
+export function watchtowerModel(): Vox {
+  const v = new Vox();
+  const rnd = seeded(73);
+  v.box(-4, 0, -4, 4, 1, 4, () => jitter(PAL.stone, 0.12, rnd));
+  v.shell(-3, 2, -3, 3, 28, 3, brick(PAL.stone, rnd));
+  v.box(-1, 2, 3, 1, 6, 3, PAL.woodDark);
+  for (const y of [12, 20]) v.box(0, y, 3, 0, y + 2, 3, PAL.woodDark);
+  // The lookout: a wider wooden deck, rails, posts and a pitched roof.
+  v.box(-4, 29, -4, 4, 29, 4, PAL.wood);
+  for (const [x, z] of [[-4, -4], [4, -4], [-4, 4], [4, 4]]) v.box(x, 30, z, x, 35, z, PAL.woodDark);
+  v.box(-4, 31, 4, 4, 31, 4, PAL.wood);
+  v.box(-4, 31, -4, 4, 31, -4, PAL.wood);
+  v.box(-4, 31, -4, -4, 31, 4, PAL.wood);
+  v.box(4, 31, -4, 4, 31, 4, PAL.wood);
+  v.gable(-5, 5, -5, 5, 36, tiles(PAL.tile, rnd));
+  v.box(0, 30, 0, 0, 33, 0, PAL.glow);
+  markGlow(v, PAL.glow);
+  return v;
+}
+
 export type RoofKind = 'tile' | 'thatch' | 'slate';
 
 /** A townsfolk cottage: w x d voxels, one storey, with a roof of tile, thatch or slate. */

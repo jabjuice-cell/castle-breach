@@ -1,5 +1,6 @@
 import { type Config, makeConfig } from './config';
 import type { DefenderKind } from './defenders';
+import { type Choices, defaultChoices } from './town';
 
 /**
  * Meta-progression: permanent upgrades bought in the town with Renown, between levels.
@@ -47,6 +48,8 @@ export const META_UPGRADES: MetaUpgrade[] = [
   { id: 'blacksmith', group: 'town', name: 'Blacksmith', blurb: 'Builds the blacksmith. Arrows and bolts are sharpened: +25% damage.', costs: [45] },
   { id: 'chapel', group: 'town', name: 'Chapel', blurb: 'Builds the chapel. Damaged wall segments mend themselves in battle.', costs: [55] },
   { id: 'forge', group: 'town', name: 'Siege Forge', blurb: 'Builds the Siege Forge. The castle catapult hits 40% harder.', costs: [70] },
+  { id: 'watchtower', group: 'town', name: 'Watchtower', blurb: 'Builds the watchtower. Scout the orcs, warlords and siege towers of the level ahead.', costs: [15] },
+  { id: 'warroom', group: 'town', name: 'War room', blurb: 'Builds the war room. Pick one big battle tactic for each level.', costs: [20] },
   { id: 'treasury', group: 'town', name: 'Treasury', blurb: '+60 gold in the war chest for every level, per level.', costs: [20, 45, 100, 220] },
   { id: 'market', group: 'town', name: 'Market', blurb: '+15% gold from kills, per level.', costs: [40, 90, 200] },
   // Capstones: the far ends of the tree.
@@ -126,10 +129,12 @@ export interface Progress {
   lastLoadout: { kind: DefenderKind; x: number; y: number }[];
   /** True once the guided first wave has been played (or skipped by an older save). */
   tutorialDone: boolean;
+  /** The town choices last made (sanitised against the meta-upgrades when a level is set up). */
+  choices: Choices;
 }
 
 export function newProgress(): Progress {
-  return { renown: 0, meta: {}, levelsBeaten: 0, lastLoadout: [], tutorialDone: false };
+  return { renown: 0, meta: {}, levelsBeaten: 0, lastLoadout: [], tutorialDone: false, choices: defaultChoices() };
 }
 
 /** Spends Renown on the next level of an upgrade. */
@@ -149,7 +154,7 @@ export function applyMeta(meta: MetaLevels, level: number, base: Config = makeCo
   const cfg = structuredClone(base);
   const lv = (id: string) => meta[id] ?? 0;
   cfg.unlocks.defenders = ['crossbow', ...(['archers', 'soldiers', 'catapult', 'mage', 'ballista', 'oil', 'spiketrap'] as const).filter((k) => lv(k) > 0)];
-  cfg.unlocks.buildings = ['keep', ...(['tavern', 'alchemist', 'blacksmith', 'chapel', 'forge'] as const).filter((k) => lv(k) > 0)];
+  cfg.unlocks.buildings = ['keep', ...(['tavern', 'alchemist', 'blacksmith', 'chapel', 'forge', 'warroom', 'watchtower'] as const).filter((k) => lv(k) > 0), ...(lv('soldiers') >= 1 ? (['barracks'] as const) : [])];
   cfg.bonuses.damage *= 1 + 0.15 * lv('fletching');
   cfg.bonuses.rate *= 1 + 0.12 * lv('drill');
   cfg.wall.segmentHp = Math.round(cfg.wall.segmentHp * (1 + 0.2 * lv('masonry') + 0.5 * lv('bastion')));
