@@ -987,6 +987,11 @@ export class BattleScene {
           this.shieldJolt = Math.max(this.shieldJolt, 1.2);
           this.shake = Math.max(this.shake, 0.35);
           break;
+        case 'bowlHit':
+          // Placeholder fx (fx-orc-bowling.png later): yellow impact stars and a flying helmet or two.
+          fw.burst(ev.x, 1.4, -ev.y, { count: 10, colors: ['#fff6c8', '#ffd34a', '#ffffff'], speed: 6, life: 0.35, size: 0.35, up: 0.6, gravity: 6 });
+          if (!ev.armoured) fw.burst(ev.x, 1.8, -ev.y, { count: 3, colors: ['#8a8f99', '#5a5f6a', '#b0b5bd'], speed: 7, life: 0.8, size: 0.5, up: 1.4, gravity: 16 });
+          break;
         case 'power': {
           this.world.glow(ev.kind, 1);
           this.world.cheer();
@@ -1979,7 +1984,7 @@ export class BattleScene {
         const x = Math.max(-g.cfg.field.halfWidth + 0.5, Math.min(g.cfg.field.halfWidth - 0.5, grp.x + (kind === 'orcCatapult' ? (i % 3 - 1) * 3 : s.dx)));
         this.horde.push({
           kind, x, y, vx: 0, vy: 0, hp: 1, maxHp: 1, state: 'stand', standY: y, timer: 0, phase: (i * 0.618) % 1,
-          burn: 0, burnTime: 0, rally: 1, foe: null, block: null, slotX: 0, slotY: 0, goldMult: 1, lastBall: -1, stagger: 0, blasted: false, shielded: kind === 'shieldOrc',
+          burn: 0, burnTime: 0, rally: 1, foe: null, block: null, slotX: 0, slotY: 0, goldMult: 1, lastBall: -1, stagger: 0, blasted: false, shielded: kind === 'shieldOrc', bowl: null,
         });
       });
       depth[grp.lane] = back + deepest + 4;
@@ -2018,9 +2023,12 @@ export class BattleScene {
       const pace = e.kind === 'rider' || e.kind === 'runner' ? 14 : e.kind === 'orcCatapult' ? 5 : 9 / Math.sqrt(size);
       const step = time * pace + e.phase * 20;
       const hop = moving ? Math.abs(Math.sin(step)) : 0;
-      const bob = hop * 0.18 * size * (e.kind === 'orcCatapult' ? 0.3 : 1);
+      // Orc Bowling: a bowled orc hops through the air and spins end over end until it stops (code placeholder for fx-orc-bowling.png).
+      const bp = e.bowl ? 1 - e.bowl.t / e.bowl.dur : 0;
+      const bowlHop = e.bowl ? Math.sin(bp * Math.PI) * 1.1 * size : 0;
+      const bob = hop * 0.18 * size * (e.kind === 'orcCatapult' ? 0.3 : 1) + bowlHop;
       const sway = e.kind === 'rider' ? 0.04 : e.kind === 'orcCatapult' ? 0.02 : 0.12;
-      const roll = moving ? Math.sin(step) * sway : 0;
+      const roll = e.bowl ? bp * Math.PI * 4 : moving ? Math.sin(step) * sway : 0;
       const squash = moving ? 1 - (1 - hop) * 0.08 : 1;
       // Small orcs at the wall scramble up the stones, then hack away at the top; big ones pound it from below.
       const c = this.game.cfg[e.kind];

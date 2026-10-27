@@ -319,6 +319,8 @@ window.addEventListener('keydown', (e) => {
   }
   // Dev aid (?debug): P lobs a practice boulder at the shield, Shift+P one off to the side, to try Perfect Returns.
   if (e.code === 'KeyP' && params.has('debug') && running && !e.repeat) game.practiceBall(e.shiftKey ? 6 : 0);
+  // Dev aid (?debug): O sets up a column of grunts with an empowered ball heading for them (Shift+O: shield-team orcs), to try Orc Bowling.
+  if (e.code === 'KeyO' && params.has('debug') && running && !e.repeat) game.practiceBowling(4, e.shiftKey ? 'shieldOrc' : 'grunt');
   if (e.code === 'Escape') {
     if (placing) cancelPlacing();
     if (aiming) cancelAiming();
@@ -549,12 +551,22 @@ function updatePlaceTag(kind: PlacedKind | undefined, ok: boolean, ignoreId: num
 const floaters: { el: HTMLElement; x: number; y: number; t: number; life: number }[] = [];
 function floater(text: string, x: number, y: number, cls = '', life = 1.2) {
   if (floaters.length > 16) floaters.shift()!.el.remove();
+  return addFloater(text, x, y, cls, life);
+}
+function addFloater(text: string, x: number, y: number, cls: string, life: number) {
   const el = document.createElement('div');
   el.className = `floater ${cls}`;
   el.textContent = text;
   hud.floaters.appendChild(el);
-  floaters.push({ el, x, y, t: 0, life });
+  const f = { el, x, y, t: 0, life };
+  floaters.push(f);
+  return f;
 }
+
+/** One popup per bowling chain, updated as the chain grows: DOUBLE!, TRIPLE!, then ORC BOWLING!. */
+const bowlPopups = new Map<number, ReturnType<typeof addFloater>>();
+const BOWL_WORDS = ['', '', 'DOUBLE!', 'TRIPLE!', 'ORC BOWLING!'];
+let lastBowlSound = 0;
 function updateFloaters(dt: number) {
   for (let i = floaters.length - 1; i >= 0; i--) {
     const f = floaters[i];
@@ -1158,6 +1170,40 @@ function frame(now: number) {
           // Heave timed just right: a second, heavier clang layered over the parry's.
           sounds.clang(true);
           floater('PERFECT!', ev.x, game.cfg.shield.y, 'trick', 0.9);
+          break;
+        case 'bowl':
+          if (ev.count < 2) break;
+          {
+            const text = BOWL_WORDS[Math.min(ev.count, BOWL_WORDS.length - 1)];
+            const pop = bowlPopups.get(ev.chain);
+            if (pop && floaters.includes(pop)) {
+              pop.el.textContent = text;
+              pop.el.className = `floater bowling b${Math.min(ev.count, 4)}`;
+              pop.x = ev.x;
+              pop.y = ev.y;
+              pop.t = 0.05;
+              pop.life = 1.4;
+            } else {
+              bowlPopups.set(ev.chain, floater(text, ev.x, ev.y, `bowling b${Math.min(ev.count, 4)}`, 1.4));
+            }
+          }
+          break;
+        case 'bowlHit': {
+          // Limit the thuds so a big chain (or several balls) doesn't pile up sounds.
+          const now = performance.now();
+          if (now - lastBowlSound > 90) {
+            lastBowlSound = now;
+            if (ev.armoured) sounds.clang(false);
+            else sounds.thunk();
+          }
+          break;
+        }
+        case 'bowlEnd':
+          bowlPopups.delete(ev.chain);
+          if (ev.bonus > 0) {
+            floater(`+${ev.bonus}`, ev.x, ev.y - 1.5, 'smash', 1.1);
+            sounds.chime(Math.min(1, ev.count / 5));
+          }
           break;
         case 'rebound':
           floater('REBOUND!', ev.x, ev.y - 3, 'rebound', 1.1);

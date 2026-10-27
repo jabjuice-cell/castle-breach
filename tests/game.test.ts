@@ -15,7 +15,7 @@ function run(game: Game, seconds: number) {
 function enemy(over: Partial<Enemy>): Enemy {
   return {
     kind: 'grunt', x: 0, y: 10, vx: 0, vy: 0, hp: 10, maxHp: 10, state: 'march', standY: 25, timer: 99, phase: 0,
-    burn: 0, burnTime: 0, rally: 1, foe: null, block: null, slotX: 0, slotY: 0, goldMult: 1, lastBall: -1, stagger: 0, blasted: false, shielded: false,
+    burn: 0, burnTime: 0, rally: 1, foe: null, block: null, slotX: 0, slotY: 0, goldMult: 1, lastBall: -1, stagger: 0, blasted: false, shielded: false, bowl: null,
     ...over,
   };
 }
@@ -1488,5 +1488,161 @@ describe('the guided first wave', () => {
     game.time += 31;
     t.update(game);
     expect(t.done).toBe(true);
+  });
+});
+
+describe('orc bowling', () => {
+  /** A column of grunts up the field, an empowered ball just below the first. */
+  function lineup(ys: number[], over: Partial<Enemy> = {}, perfect = true) {
+    const game = battle();
+    const orcs = ys.map((y) => enemy({ x: 0, y, hp: 400, maxHp: 400, ...over }));
+    game.enemies.push(...orcs);
+    ball(game, { x: 0, y: 8.5, vy: 20, perfect });
+    game.events = [];
+    return { game, orcs };
+  }
+  /** Lets the shot land, then takes the ball away so only the bowling is left to measure. */
+  const shoot = (game: Game, seconds: number) => {
+    run(game, 0.1);
+    game.balls = [];
+    run(game, seconds);
+  };
+  const ends = (g: Game) => g.events.filter((e) => e.type === 'bowlEnd');
+
+  it('a Perfect Return knocks a grunt into a tumble, and into the next one', () => {
+    const { game, orcs } = lineup([10, 11.7, 13.4]);
+    run(game, 0.1);
+    expect(orcs[0].bowl).not.toBeNull();
+    run(game, 2);
+    const end = ends(game);
+    expect(end).toHaveLength(1);
+    expect(end[0]).toMatchObject({ count: 3, bonus: 3 });
+    expect(orcs.every((o) => o.bowl === null)).toBe(true);
+    expect(game.chains).toHaveLength(0);
+  });
+
+  it('keeps 70% of the strength each transfer and damages each orc once', () => {
+    const { game, orcs } = lineup([10, 11.7, 13.4]);
+    shoot(game, 2);
+    const c = game.cfg.bowling;
+    expect(orcs[1].hp).toBeCloseTo(400 - c.damage * c.transfer, 5);
+    expect(orcs[2].hp).toBeCloseTo(400 - c.damage * c.transfer ** 2, 5);
+  });
+
+  it('pays the bonus once, when the chain ends, on top of normal gold', () => {
+    const { game } = lineup([10, 11.7, 13.4]);
+    const before = game.gold;
+    run(game, 0.3);
+    expect(game.gold).toBe(before);
+    run(game, 2);
+    expect(game.gold).toBe(before + 3);
+    run(game, 2);
+    expect(game.gold).toBe(before + 3);
+    expect(game.events.filter((e) => e.type === 'bowl').map((e) => (e as { count: number }).count)).toEqual([1, 2, 3]);
+  });
+
+  it('an ordinary ball does not start one', () => {
+    const { game, orcs } = lineup([10, 11.7], {}, false);
+    run(game, 0.5);
+    expect(orcs[0].bowl).toBeNull();
+    expect(game.events.some((e) => e.type === 'bowl')).toBe(false);
+  });
+
+  it('stops after five transfers', () => {
+    const { game } = lineup([10, 11.4, 12.8, 14.2, 15.6, 17, 18.4, 19.8, 21.2]);
+    run(game, 3);
+    expect(ends(game)[0]).toMatchObject({ count: 6, bonus: 8 });
+  });
+
+  it('a heavy orc takes a little damage, stops the chain and never tumbles', () => {
+    const { game, orcs } = lineup([10, 12], {});
+    orcs[1].kind = 'ogre';
+    shoot(game, 2);
+    expect(orcs[1].bowl).toBeNull();
+    expect(orcs[1].hp).toBeCloseTo(400 - game.cfg.bowling.heavyDamage, 5);
+    expect(ends(game)[0]).toMatchObject({ count: 1, bonus: 0 });
+  });
+
+  it('an empowered hit on a heavy orc starts nothing', () => {
+    const { game, orcs } = lineup([10]);
+    orcs[0].kind = 'ogre';
+    run(game, 0.5);
+    expect(orcs[0].bowl).toBeNull();
+    expect(game.events.some((e) => e.type === 'bowl')).toBe(false);
+  });
+
+  it('armour stops a tumbler first: a raised shield takes no damage and does not tumble', () => {
+    const { game, orcs } = lineup([10, 11.7]);
+    orcs[1].kind = 'shieldOrc';
+    orcs[1].shielded = true;
+    shoot(game, 2);
+    expect(orcs[1].bowl).toBeNull();
+    expect(orcs[1].hp).toBe(400);
+    expect(ends(game)[0]).toMatchObject({ count: 1, bonus: 0 });
+  });
+
+  it('a felled orc finishes its tumble, still passes the chain on, and pays its kill once', () => {
+    const { game, orcs } = lineup([10, 11.7]);
+    orcs[0].hp = 5;
+    orcs[0].maxHp = 5;
+    const kills = () => game.events.filter((e) => e.type === 'kill').length;
+    run(game, 0.2);
+    expect(game.enemies).toContain(orcs[0]);
+    run(game, 2);
+    expect(game.enemies).not.toContain(orcs[0]);
+    expect(kills()).toBe(1);
+    expect(ends(game)[0]).toMatchObject({ count: 2, bonus: 1 });
+  });
+
+  it('a knocked rider keeps travelling as the bowling body', () => {
+    const { game, orcs } = lineup([10, 11.7], { hp: 400 });
+    orcs[0].kind = 'rider';
+    orcs[0].hp = 5;
+    run(game, 2);
+    expect(orcs[1].hp).toBeLessThan(400);
+    expect(ends(game)[0]).toMatchObject({ count: 2 });
+    expect(game.kills).toBe(1);
+  });
+
+  it('tumblers neither march nor hit the wall, and the tumble always ends', () => {
+    const { game, orcs } = lineup([10]);
+    run(game, 0.1);
+    game.balls = [];
+    expect(orcs[0].bowl).not.toBeNull();
+    const at = orcs[0].y;
+    run(game, 0.2);
+    expect(orcs[0].y).toBeGreaterThan(at);
+    run(game, 1);
+    expect(orcs[0].bowl).toBeNull();
+    expect(orcs[0].stagger).toBeGreaterThan(0);
+  });
+
+  it('shield team: the drum falling topples the exposed members in sequence', () => {
+    const game = battle();
+    const block = {
+      id: 77, x: 0, y: 10, shape: 'rect' as const, members: [] as Enemy[], start: 4, spacing: 1.6, speed: 0, homeX: 0, zig: false, phase: 0,
+      dirty: false, regroupAt: 0, drummed: true,
+    };
+    const slots = [[0, 0, 'drummer'], [-1.5, 1.8, 'shieldOrc'], [0, 1.8, 'shieldOrc'], [1.5, 1.8, 'shieldOrc']] as const;
+    for (const [sx, sy, kind] of slots) {
+      const e = enemy({ kind, x: sx, y: 10 + sy, block, slotX: sx, slotY: sy, shielded: kind === 'shieldOrc', hp: kind === 'drummer' ? 5 : 400, maxHp: 400 });
+      block.members.push(e);
+      game.enemies.push(e);
+    }
+    game.blocks.push(block);
+    ball(game, { x: 0, y: 8.5, vy: 20, perfect: true });
+    game.events = [];
+    run(game, 3);
+    expect(ends(game)).toHaveLength(1);
+    expect(ends(game)[0]).toMatchObject({ count: 4 });
+    expect(game.enemies.filter((e) => e.kind === 'shieldOrc' && e.hp < 400)).toHaveLength(3);
+  });
+
+  it('the dev lineup sets up a working chain', () => {
+    const game = battle();
+    game.practiceBowling(4);
+    game.events = [];
+    run(game, 4);
+    expect(game.bowlBest).toBeGreaterThanOrEqual(2);
   });
 });

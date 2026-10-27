@@ -426,6 +426,40 @@ export const defaultConfig = {
     /** Seconds credited for calling from the tail of a wave, on top of the skipped preview. */
     tailCallSeconds: 6,
   },
+  /**
+   * Orc Bowling: an empowered (Perfect Return) hit sends a light orc tumbling into the next, one chain per shot.
+   * Light orcs tumble, medium ones tumble for less once their armour is off, heavy ones stop the chain.
+   */
+  bowling: {
+    /** Seconds a tumble lasts. */
+    tumbleSeconds: 0.8,
+    /** How far the first victim slides, in grunt widths (it slows steadily to a stop). */
+    travelWidths: 3,
+    /** Medium orcs (riders, unarmoured shield orcs) slide this share as far. */
+    mediumTravel: 0.75,
+    /** Each transfer keeps this share of the strength, up to maxTransfers, or until strength drops below minStrength. */
+    transfer: 0.7,
+    maxTransfers: 5,
+    minStrength: 0.15,
+    /** The shot direction is tipped this much away from the castle (a slight bias, 0 to 1). */
+    awayBias: 0.35,
+    /** Damage to an orc a tumbler runs into, times the tumbler's strength. */
+    damage: 7,
+    /** Modest damage when a tumbler slams into a heavy orc or an armoured shield. */
+    heavyDamage: 4,
+    /** A tumbler can run into this many orcs before it stops. */
+    hitsPerBody: 2,
+    /** Seconds a survivor lies stunned after the tumble. */
+    recoverSeconds: 0.6,
+    /** Shield team: when the drum falls and the shields drop, the exposed orcs topple one after another this far apart. */
+    dominoDelay: 0.12,
+    dominoStrength: 0.7,
+    /** Bonus coins for 1, 2, 3, 4 and 5+ enemies in one chain, paid once when the chain ends. */
+    bonus: [0, 1, 3, 5, 8],
+    light: ['grunt', 'chucker', 'runner', 'drummer'] as string[],
+    medium: ['rider', 'shieldOrc'] as string[],
+    heavy: ['ogre', 'warlord', 'orcCatapult', 'barrel'] as string[],
+  },
   renown: {
     perWaveBase: 5,
     perWave: 1,

@@ -55,6 +55,34 @@ export interface Enemy {
   blasted: boolean;
   /** Shield orcs: front hits clang off while their block's drummer lives. */
   shielded: boolean;
+  /** Orc Bowling: tumbling along a shot's chain, in place of marching or fighting. Null when upright. */
+  bowl: Bowl | null;
+}
+
+/** One orc's tumble in a bowling chain: slides along (dx, dy), slowing steadily to a stop over dur seconds. */
+export interface Bowl {
+  chain: Chain;
+  dx: number;
+  dy: number;
+  /** Opening speed; it falls to nothing by the end. */
+  speed: number;
+  t: number;
+  dur: number;
+  /** 1 for the first victim, then 0.7 of that for each transfer. */
+  strength: number;
+  /** Transfers since the shot. */
+  depth: number;
+  hits: number;
+}
+
+/** Everything one empowered shot sets tumbling. Each orc is in it at most once, and the bonus is paid once when it ends. */
+export interface Chain {
+  id: number;
+  members: Set<Enemy>;
+  /** Shield-team members still to topple, in order. */
+  pending: { e: Enemy; at: number; strength: number; depth: number }[];
+  x: number;
+  y: number;
 }
 
 /** Units that march behind the foot formation and are not part of its shape. */
@@ -199,6 +227,12 @@ export type ShieldTrack = (typeof SHIELD_TRACKS)[number];
 
 export type GameEvent =
   | { type: 'kill'; x: number; y: number; kind: EnemyKind }
+  /** An orc joins a bowling chain: count is how many are in it so far (1 is the first victim). */
+  | { type: 'bowl'; chain: number; count: number; x: number; y: number }
+  /** A tumbling orc smacks into another (armoured: it thudded into a heavy or clanged off a shield). */
+  | { type: 'bowlHit'; x: number; y: number; armoured: boolean }
+  /** All motion in the chain has stopped: its bonus coins are paid. */
+  | { type: 'bowlEnd'; chain: number; count: number; bonus: number; x: number; y: number }
   /** A ball or boulder hit the shield. parry: a heave power hit. trick: an edge-zone trick shot. */
   | { type: 'deflect'; x: number; y: number; parry: boolean; trick: boolean; perfect?: boolean }
   /** A ball left the shield at (x, y) with this velocity: the render shows the outgoing angle. */
@@ -318,6 +352,10 @@ export class Game {
   parries = 0;
   /** Perfect Returns this run. */
   perfects = 0;
+  /** Bowling chains still moving, and the biggest finished one this run. */
+  chains: Chain[] = [];
+  private nextChainId = 1;
+  bowlBest = 0;
   /** Enemy boulders and rocks the shield blocked, and those that got through. */
   blocked = 0;
   missed = 0;
@@ -486,6 +524,25 @@ export class Game {
     const sy = this.cfg.shield.y;
     const b = this.addBall('claimed', this.shield.x + offset, sy + 16, 0, -this.cfg.balls.speed);
     b.primary = false;
+  }
+
+  /** Dev aid: a column of grunts up the field and an empowered ball heading for the front one, to try Orc Bowling without a run. */
+  practiceBowling(count = 4, kind: EnemyKind = 'grunt'): void {
+    const x = this.shield.x;
+    const block: Block = {
+      id: this.nextBlockId++, x, y: 14, shape: 'column', members: [], start: 0, spacing: 0.9, speed: 0, homeX: x,
+      zig: false, phase: 0, dirty: false, regroupAt: 0, drummed: false,
+    };
+    for (let i = 0; i < count; i++) this.spawn(kind, block, 0, i * 0.95);
+    block.start = block.members.length;
+    this.blocks.push(block);
+    for (const e of block.members) {
+      e.x = x;
+      e.y = 14 + e.slotY;
+    }
+    const b = this.addBall('claimed', x, this.cfg.shield.y + 2, 0, this.cfg.balls.speed);
+    b.primary = false;
+    b.perfect = true;
   }
 
   /**
@@ -996,6 +1053,7 @@ export class Game {
     this.rebuildGrid();
     this.updateBlocks(dt);
     this.updateEnemies(dt);
+    this.updateBowling();
     this.updateSoldiers(dt);
     this.updateDefenders(dt);
     this.updateProjectiles(dt);
@@ -1140,7 +1198,7 @@ export class Game {
       timer: this.rng.range(0, kind === 'orcCatapult' ? cat.throwInterval : this.cfg.chucker.throwInterval),
       phase: this.rng.next(),
       burn: 0, burnTime: 0, rally: 1, foe: null, block, slotX, slotY, goldMult: 1,
-      lastBall: -1, stagger: 0, blasted: false, shielded: kind === 'shieldOrc' && block.drummed,
+      lastBall: -1, stagger: 0, blasted: false, shielded: kind === 'shieldOrc' && block.drummed, bowl: null,
     };
     this.enemies.push(e);
     block.members.push(e);
@@ -1184,6 +1242,8 @@ export class Game {
       if (b.drummed && !b.members.some((e) => e.kind === 'drummer' && e.hp > 0)) {
         // The drum falls silent: shields drop and the formation scatters.
         b.drummed = false;
+        const drum = b.members.find((e) => e.kind === 'drummer' && e.bowl);
+        if (drum) this.toppleShieldTeam(drum, b);
         for (const e of b.members) {
           e.shielded = false;
           e.block = null;
@@ -1302,6 +1362,21 @@ export class Game {
       let mx = 0;
       let my = 0;
       const front = stats.radius;
+
+      if (e.bowl) {
+        const w = e.bowl;
+        const k = Math.max(0, w.t / w.dur);
+        e.x = Math.max(-hw + 0.3, Math.min(hw - 0.3, e.x + w.dx * w.speed * k * dt));
+        e.y = Math.max(front, e.y + w.dy * w.speed * k * dt);
+        e.vx = 0;
+        e.vy = 0;
+        w.t -= dt;
+        if (w.t <= 0) {
+          e.bowl = null;
+          e.stagger = this.cfg.bowling.recoverSeconds;
+        }
+        continue;
+      }
 
       if (e.burnTime > 0) {
         e.burnTime -= dt;
@@ -2271,6 +2346,7 @@ export class Game {
     const e: Enemy = hit;
     const mult = this.ballGoldMult(b);
     const boost = (b.banked ? this.cfg.bumpers.bankDamage : 1) * (b.perfect ? this.cfg.shield.perfectDamage : 1);
+    const empowered = b.perfect;
     b.banked = false;
 
     // A raised shield: front hits do nothing at all, not even to a heave or the Royal Ball.
@@ -2314,6 +2390,7 @@ export class Game {
       this.addCombo(b, line.length);
       b.passing = e;
       this.events.push({ type: 'line', x0, x1, y: e.y });
+      if (empowered) this.startBowling(b, e);
       return;
     }
 
@@ -2351,6 +2428,7 @@ export class Game {
     if (flask) this.events.push({ type: 'splash', x: e.x, y: e.y, radius: sr });
     this.events.push({ type: 'hit', x: e.x, y: e.y, combo: b.combo });
     if (pinBlock) this.topplePins(b, e, pinBlock, mult);
+    if (empowered) this.startBowling(b, e);
 
     if (e.kind === 'warlord') {
       // The Warlord bats it back down at the wall with his club.
@@ -2386,6 +2464,129 @@ export class Game {
     b.y = e.y + ny * min;
     b.passing = e;
     this.events.push({ type: 'bounce', x: b.x, y: b.y });
+  }
+
+  // ---- orc bowling -------------------------------------------------------------
+
+  /** Light and medium orcs can tumble; heavy ones, and shield orcs with their shield still up, stop a tumbler. */
+  private bowlClass(e: Enemy): 'light' | 'medium' | 'heavy' | 'armoured' {
+    const c = this.cfg.bowling;
+    if (e.kind === 'shieldOrc' && e.shielded) return 'armoured';
+    if (c.light.includes(e.kind)) return 'light';
+    if (c.medium.includes(e.kind)) return 'medium';
+    return 'heavy';
+  }
+
+  /** An empowered hit on e: it tumbles in the direction of the shot and a new chain begins. */
+  private startBowling(b: Ball, e: Enemy): void {
+    const cls = this.bowlClass(e);
+    if (cls === 'heavy' || cls === 'armoured' || e.bowl) return;
+    const chain: Chain = { id: this.nextChainId++, members: new Set(), pending: [], x: e.x, y: e.y };
+    this.chains.push(chain);
+    const sp = Math.hypot(b.vx, b.vy) || 1;
+    this.tumble(chain, e, b.vx / sp, b.vy / sp, 1, 0);
+  }
+
+  /** Sets e tumbling along (dx, dy) tipped a little away from the castle, and adds it to the chain. */
+  private tumble(chain: Chain, e: Enemy, dx: number, dy: number, strength: number, depth: number): void {
+    const c = this.cfg.bowling;
+    const ny = dy + c.awayBias;
+    const len = Math.hypot(dx, ny) || 1;
+    const share = this.bowlClass(e) === 'medium' ? c.mediumTravel : 1;
+    const dist = c.travelWidths * this.cfg.grunt.radius * 2 * share * strength;
+    e.bowl = { chain, dx: dx / len, dy: ny / len, speed: (2 * dist) / c.tumbleSeconds, t: c.tumbleSeconds, dur: c.tumbleSeconds, strength, depth, hits: 0 };
+    e.vx = 0;
+    e.vy = 0;
+    if (e.state === 'wall' || e.state === 'climb' || e.state === 'fight') {
+      e.state = 'march';
+      e.foe = null;
+    }
+    chain.members.add(e);
+    chain.x = e.x;
+    chain.y = e.y;
+    this.events.push({ type: 'bowl', chain: chain.id, count: chain.members.size, x: e.x, y: e.y });
+  }
+
+  /** The drum fell silent in a chain: the exposed shield orcs are knocked backwards one after another. */
+  private toppleShieldTeam(drum: Enemy, block: Block): void {
+    const w = drum.bowl!;
+    const c = this.cfg.bowling;
+    const exposed = block.members
+      .filter((o) => o.kind === 'shieldOrc' && o.hp > 0 && !o.bowl && !w.chain.members.has(o))
+      .sort((p, q) => Math.hypot(p.x - drum.x, p.y - drum.y) - Math.hypot(q.x - drum.x, q.y - drum.y));
+    exposed.forEach((o, i) => {
+      w.chain.pending.push({ e: o, at: this.time + (i + 1) * c.dominoDelay, strength: w.strength * c.dominoStrength, depth: w.depth + 1 });
+    });
+  }
+
+  /** Tumblers run into things; chains with nothing left moving pay out. */
+  private updateBowling(): void {
+    if (this.chains.length === 0) return;
+    const c = this.cfg.bowling;
+    const live: Chain[] = [];
+    for (const ch of this.chains) {
+      ch.pending = ch.pending.filter((p) => {
+        if (p.at > this.time) return true;
+        if (p.e.hp > 0 && !p.e.bowl && !ch.members.has(p.e)) {
+          p.e.hp -= c.damage * p.strength;
+          this.tumble(ch, p.e, 0, 1, p.strength, p.depth);
+        }
+        return false;
+      });
+      for (const e of [...ch.members]) {
+        const w = e.bowl;
+        if (!w || w.hits >= c.hitsPerBody || w.t <= 0) continue;
+        const reach = this.cfg[e.kind].radius;
+        this.within(e.x, e.y, reach + MAX_RADIUS, (o) => {
+          if (o === e || o.hp <= 0 || o.bowl || ch.members.has(o)) return;
+          if (Math.hypot(o.x - e.x, o.y - e.y) > reach + this.cfg[o.kind].radius) return;
+          const cls = this.bowlClass(o);
+          if (cls === 'heavy' || cls === 'armoured') {
+            // A satisfying thud: a heavy orc takes a little damage (a shield takes none), and the tumbler stops dead.
+            if (cls === 'heavy') {
+              o.hp -= c.heavyDamage * w.strength;
+              o.goldMult = e.goldMult;
+              o.lastBall = e.lastBall;
+            }
+            this.events.push({ type: 'bowlHit', x: o.x, y: o.y, armoured: true });
+            w.speed = 0;
+            w.t = Math.min(w.t, 0.1);
+            w.hits = c.hitsPerBody;
+            return true;
+          }
+          const strength = w.strength * c.transfer;
+          if (w.depth + 1 > c.maxTransfers || strength < c.minStrength) {
+            w.hits = c.hitsPerBody;
+            return true;
+          }
+          o.hp -= c.damage * strength;
+          o.goldMult = e.goldMult;
+          o.lastBall = e.lastBall;
+          const dx = o.x - e.x;
+          const dy = o.y - e.y;
+          const d = Math.hypot(dx, dy) || 1;
+          // Carry on mostly the way the tumbler was heading, nudged towards the orc it hit.
+          this.tumble(ch, o, w.dx + (dx / d) * 0.5, w.dy + (dy / d) * 0.5 - c.awayBias, strength, w.depth + 1);
+          this.events.push({ type: 'bowlHit', x: o.x, y: o.y, armoured: false });
+          w.hits++;
+          if (w.hits >= c.hitsPerBody) {
+            w.speed = 0;
+            w.t = Math.min(w.t, 0.1);
+            return true;
+          }
+        });
+      }
+      if (ch.pending.length === 0 && ![...ch.members].some((m) => m.bowl)) {
+        const n = ch.members.size;
+        const bonus = c.bonus[Math.min(n, c.bonus.length) - 1] ?? 0;
+        if (bonus > 0) this.addGold(bonus);
+        this.bowlBest = Math.max(this.bowlBest, n);
+        this.events.push({ type: 'bowlEnd', chain: ch.id, count: n, bonus, x: ch.x, y: ch.y });
+      } else {
+        live.push(ch);
+      }
+    }
+    this.chains = live;
   }
 
   /** Bowling pins: a hit orc topples its neighbours in a chain, each at most once. */
@@ -2637,7 +2838,8 @@ export class Game {
     const alive: Enemy[] = [];
     const growth = this.cfg.economy.killGoldGrowth ** Math.max(0, this.wave - 1) * this.cfg.bonuses.killGold;
     for (const e of this.enemies) {
-      if (e.hp > 0) {
+      // A felled orc finishes its tumble first (so the chain it carries goes on), then pays out once.
+      if (e.hp > 0 || e.bowl) {
         alive.push(e);
         continue;
       }
