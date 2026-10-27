@@ -928,7 +928,8 @@ export class BattleScene {
           } else if (Math.random() < 0.5) {
             this.ground.stamp(ev.x, -ev.y, 0.9 * big, 'rgba(60,70,20,0.5)');
           }
-          this.burst(ev.x, 0.6 * big, -ev.y, big >= 2 ? Math.round(4 * big) : 2, KILL_COLOR[ev.kind], 4 + big);
+          if (this.orcStyle === 'voxel' && ev.kind !== 'warlord') this.breakOrc(ev.kind, ev.x, -ev.y);
+          else this.burst(ev.x, 0.6 * big, -ev.y, big >= 2 ? Math.round(4 * big) : 2, KILL_COLOR[ev.kind], 4 + big);
           // A pop of gold glints: every kill pays.
           fw.burst(ev.x, 0.9, -ev.y, { count: 6, colors: GOLD, speed: 4, life: 0.5, size: 0.3, up: 0.7, gravity: 8 });
           break;
@@ -2129,6 +2130,7 @@ export class BattleScene {
       if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
       (voxel ? this.sprites : this.voxelOrcs.meshes)[kind].count = 0;
     }
+    this.voxelOrcs.sync();
     this.warlordSprites.forEach((mesh, s) => {
       mesh.count = Math.min(lordCounts[s], mesh.instanceMatrix.count);
       mesh.instanceMatrix.needsUpdate = true;
@@ -2212,6 +2214,29 @@ export class BattleScene {
   }
 
   // ---- effects -------------------------------------------------------------
+
+  /** A killed voxel orc bursts into chunks of itself, in its own colours, that bounce and fade. */
+  private breakOrc(kind: EnemyKind, x: number, z: number) {
+    const all = this.voxelOrcs.pieces[kind];
+    const cap = QUALITY[this.quality].debris;
+    const n = Math.min(all.length, kind === 'ogre' || kind === 'orcCatapult' ? 36 : 14);
+    const size = (2 * this.voxelOrcs.voxelSize[kind]) / (VOXEL * 0.8);
+    const ground = this.groundHeight(x, z);
+    const mid = all.reduce((h, p) => Math.max(h, p.y), 0) / 2;
+    for (let i = 0; i < n && this.debris.length < cap; i++) {
+      const p = all[(Math.random() * all.length) | 0];
+      const out = new THREE.Vector3(p.x, p.y - mid, p.z).normalize().multiplyScalar(3 + Math.random() * 3);
+      this.debris.push({
+        pos: new THREE.Vector3(x + p.x, ground + p.y, z + p.z),
+        vel: out.add(tmpD.set(0, 4 + Math.random() * 3, 1.5)),
+        spin: new THREE.Vector3(Math.random() * 10, Math.random() * 10, Math.random() * 10),
+        rot: new THREE.Euler(),
+        life: 0.9 + Math.random() * 0.6,
+        color: p.color.clone(),
+        size,
+      });
+    }
+  }
 
   private burst(x: number, y: number, z: number, n: number, color: string, speed: number) {
     const cap = QUALITY[this.quality].debris;

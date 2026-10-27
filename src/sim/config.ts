@@ -94,7 +94,8 @@ export const defaultConfig = {
     sway: 0.35,
     /** Seconds between re-packing a block that has lost orcs (closing ranks). */
     regroupSeconds: 0.5,
-    spacing: 1.7,
+    /** Distance between slots in a block: wide enough that each voxel orc reads on its own. */
+    spacing: 2.1,
   },
 
   /** Enemy projectiles: what reaches the wall does wallDamage. A blocked one becomes a ball. */

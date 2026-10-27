@@ -1646,3 +1646,18 @@ describe('orc bowling', () => {
     expect(game.bowlBest).toBeGreaterThanOrEqual(2);
   });
 });
+
+describe('battalion spacing', () => {
+  it('keeps every orc slot in a block at least 1.8 units from its neighbours, so voxel orcs read one by one', () => {
+    const cfg = makeConfig();
+    expect(cfg.march.spacing).toBeGreaterThanOrEqual(2);
+    for (const shape of ['rect', 'wedge', 'pins'] as const) {
+      const slots = formation(shape, 20, cfg.march.spacing);
+      for (let i = 0; i < slots.length; i++) {
+        for (let j = i + 1; j < slots.length; j++) {
+          expect(Math.hypot(slots[i].dx - slots[j].dx, slots[i].dy - slots[j].dy)).toBeGreaterThanOrEqual(1.8);
+        }
+      }
+    }
+  });
+});
