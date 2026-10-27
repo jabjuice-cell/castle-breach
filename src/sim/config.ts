@@ -553,6 +553,43 @@ export const defaultConfig = {
     } as Record<import('./town').BallKit, { damage: number; splash: number; knockback: number; speed: number; speedUp: number | null; maxSpeed: number | null; comboStep: number | null }>,
     powder: { every: 4, radius: 2.5, damage: 25, missDamage: 25 },
   },
+  /**
+   * The town plot (plot.ts): land[n] is the inclusive open area at Land grant level n, and the neighbour
+   * bonuses and clashes (multipliers are on the stat; the rest are added). Keys are the two buildings.
+   */
+  plot: {
+    /** Backtracking node limit per land size for the auto-packer. */
+    packNodes: 3000000,
+    land: [
+      { x0: 3, x1: 11, y0: 0, y1: 4 },
+      { x0: 2, x1: 12, y0: 0, y1: 4 },
+      { x0: 1, x1: 13, y0: 0, y1: 5 },
+      { x0: 0, x1: 14, y0: 0, y1: 5 },
+    ],
+    bonuses: {
+      blacksmithSoldiers: { soldierCost: 0.8 },
+      fletchingArchers: { archerDamage: 1.15 },
+      drillSoldiers: { soldierHp: 1.2 },
+      tavernSoldiers: { soldierCount: 10 },
+      workshopForge: { catapultInterval: 0.85 },
+      blacksmithBallista: { ballistaDamage: 1.15 },
+      masonryKeep: { repairCost: 0.85 },
+      chapelMasonry: { wallHp: 1.1 },
+      spiketrapMasonry: { spikeTrapCost: 0.75 },
+      alchemistOil: { oilBurnSeconds: 2 },
+      alchemistMage: { mageRadius: 1.15 },
+      watchtowerArchers: { archerReach: 1.1 },
+      watchtowerWarroom: { callCooldown: 5 },
+      marketTreasury: { warChest: 40 },
+      marketGuild: { killGold: 1.1 },
+      tavernMarket: { earlyGold: 1.25 },
+    },
+    clashes: {
+      tavernChapel: { chapelMend: 0.75 },
+      alchemistTreasury: { warChest: 30 },
+      drillMage: { mageRadius: 0.9 },
+    },
+  },
   renown: {
     perWaveBase: 5,
     perWave: 1,

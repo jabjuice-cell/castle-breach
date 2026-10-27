@@ -11,6 +11,7 @@
 import { type Bot, averageBot, expertBot, expertRandomBot, idleBot } from '../src/sim/bot';
 import { makeConfig } from '../src/sim/config';
 import { Game } from '../src/sim/game';
+import { autoPack } from '../src/sim/plot';
 import { META_UPGRADES, type Progress, applyMeta, buyMeta, metaCost, metaLocked, newProgress } from '../src/sim/meta';
 
 const runs = Number(process.argv[2] ?? 10);
@@ -20,7 +21,10 @@ const LEVELS = makeConfig().levels.names.length;
 
 function playLevel(make: () => Bot, seed: number, progress: Progress) {
   const level = progress.levelsBeaten;
-  const game = new Game(seed, applyMeta(progress.meta, level, makeConfig(overrides)), level);
+  const packed = autoPack(progress.meta);
+  progress.meta.land = Math.max(progress.meta.land ?? 0, packed.land); // free land, so every bot building stands
+  const plot = packed.layout;
+  const game = new Game(seed, applyMeta(progress.meta, level, makeConfig(overrides), plot), level);
   const bot = make();
   const limit = 60 * 60 * 30; // half an hour of game time
   for (let i = 0; i < limit && !game.over; i++) {
@@ -32,7 +36,7 @@ function playLevel(make: () => Bot, seed: number, progress: Progress) {
 }
 
 /** Unlocks the bots can't use, so the town doesn't waste their Renown on them. */
-const BOT_BLIND = ['mage', 'ballista', 'oil', 'spiketrap'];
+const BOT_BLIND = ['mage', 'ballista', 'oil', 'spiketrap', 'land'];
 
 /** The town: buys the cheapest upgrade it can, over and over. */
 function shop(p: Progress) {

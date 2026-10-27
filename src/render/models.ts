@@ -985,3 +985,77 @@ export function towerModel(): Vox {
   v.box(0, 12, -7, 0, 14, -7, PAL.gold);
   return v;
 }
+
+/** Voxels per plot tile for the town pieces (a tile is 8 × 8 voxels). */
+export const PIECE_TILE = 8;
+
+interface PieceLook {
+  wall: string;
+  roof: string;
+  /** Wall height in voxels; 0 for open yards. */
+  h: number;
+  /** Something on top of the piece's first tile: a spire, a chimney, a target... */
+  accent?: (v: Vox, cx: number, cz: number, top: number, rnd: () => number) => void;
+}
+
+const glowCap = (v: Vox, x: number, y: number, z: number, c: string) => {
+  v.glowNext = true;
+  v.box(x - 1, y, z - 1, x, y + 1, z, c);
+  v.glowNext = false;
+};
+
+/** How each town building looks as a plot piece (placeholders until the piece art exists). */
+const PIECE_LOOKS: Record<string, PieceLook> = {
+  archers: { wall: '#6fae4a', roof: '#6fae4a', h: 0, accent: (v, x, z) => { for (let i = -2; i <= 2; i += 2) v.box(x + i * 3, 1, z, x + i * 3 + 1, 4, z, (_, y) => (y === 3 ? '#e03a2a' : '#e8d070')); } },
+  soldiers: { wall: PAL.stone, roof: PAL.slate, h: 8, accent: (v, x, z, t) => { v.box(x, t, z, x, t + 6, z, PAL.wood); v.box(x + 1, t + 3, z, x + 3, t + 6, z, '#c8322a'); } },
+  catapult: { wall: PAL.wood, roof: PAL.timber, h: 5, accent: (v, x, z, t) => { v.box(x - 3, t, z, x + 3, t, z, PAL.woodDark); v.box(x + 3, t + 1, z, x + 3, t + 4, z, PAL.woodDark); } },
+  mage: { wall: '#7a5ab8', roof: '#4a2f80', h: 10, accent: (v, x, z, t) => { v.cone(x, z, 3, t, 9, '#4a2f80'); glowCap(v, x + 1, t + 9, z + 1, '#c08aff'); } },
+  ballista: { wall: PAL.wood, roof: PAL.woodDark, h: 4, accent: (v, x, z, t) => v.box(x - 4, t + 1, z, x + 4, t + 1, z, PAL.iron) },
+  oil: { wall: PAL.stoneDark, roof: PAL.stone, h: 3, accent: (v, x, z, t) => { v.cyl(x, z, 2, t, t + 2, '#2a2a2a'); glowCap(v, x + 1, t + 2, z + 1, '#ff8a2a'); } },
+  spiketrap: { wall: PAL.wood, roof: '#8a7a5a', h: 1, accent: (v, x, z, t) => { for (let i = -3; i <= 3; i += 2) v.box(x + i, t, z, x + i, t + 2, z, PAL.iron); } },
+  fletching: { wall: PAL.plaster, roof: '#c9a24a', h: 6 },
+  drill: { wall: '#b89a6a', roof: '#b89a6a', h: 0, accent: (v, x, z) => { for (const [dx, dz] of [[-2, -2], [2, -2], [-2, 2], [2, 2]]) v.box(x + dx, 1, z + dz, x + dx, 4, z + dz, PAL.wood); } },
+  masonry: { wall: PAL.cream, roof: PAL.creamDark, h: 4, accent: (v, x, z, t) => v.box(x - 2, t, z - 1, x + 1, t + 2, z + 1, PAL.stone) },
+  tavern: { wall: PAL.plaster, roof: PAL.tile, h: 8, accent: (v, x, z, t) => v.box(x, t, z, x + 1, t + 4, z + 1, '#cfcac0') },
+  alchemist: { wall: PAL.plaster, roof: '#3a8a5a', h: 7, accent: (v, x, z, t) => { v.box(x, t, z, x + 1, t + 3, z + 1, PAL.stoneDark); glowCap(v, x + 1, t + 4, z + 1, '#7aff6a'); } },
+  blacksmith: { wall: PAL.stoneDark, roof: PAL.iron, h: 6, accent: (v, x, z, t) => { v.box(x, t, z, x + 1, t + 5, z + 1, PAL.stoneDark); glowCap(v, x + 1, t + 6, z + 1, '#ff7a2a'); } },
+  chapel: { wall: PAL.cream, roof: PAL.slate, h: 9, accent: (v, x, z, t) => { v.box(x - 1, t, z - 1, x + 1, t + 6, z + 1, PAL.cream); v.cone(x, z, 2, t + 7, 6, PAL.slate); v.set(x, t + 13, z, PAL.gold); } },
+  forge: { wall: PAL.stoneDark, roof: PAL.iron, h: 8, accent: (v, x, z, t) => { v.box(x - 1, t, z - 1, x + 1, t + 8, z + 1, PAL.stoneDark); glowCap(v, x + 1, t + 9, z + 1, '#ff5a1a'); } },
+  warroom: { wall: PAL.stone, roof: PAL.tile, h: 9, accent: (v, x, z, t) => { v.box(x, t, z, x, t + 7, z, PAL.wood); v.box(x + 1, t + 4, z, x + 4, t + 7, z, PAL.blue); } },
+  watchtower: { wall: PAL.wood, roof: PAL.tile, h: 20 },
+  treasury: { wall: PAL.cream, roof: PAL.gold, h: 7 },
+  market: { wall: '#f4ecd8', roof: '#c8322a', h: 5, accent: (v, x, z, t) => { for (let i = -3; i <= 3; i++) v.set(x + i, t, z, ['#ff5a3a', '#ffe14a', '#7ad04a'][(i + 3) % 3]); } },
+  guild: { wall: PAL.plaster, roof: PAL.blueLight, h: 10, accent: (v, x, z, t) => banner(v, x, t - 6, t - 1, z + 4, 2) },
+};
+
+/**
+ * A town building as a plot piece: its tiles raised into walls with a roof, a one-voxel lane left
+ * round the outside so neighbouring pieces read apart, and an accent on its first tile.
+ * Voxel (0, 0, 0) is the near-left corner of tile (0, 0); tiles run +x and +z.
+ */
+export function pieceModel(id: string, cells: [number, number][], seed = 1): Vox {
+  const v = new Vox();
+  const rnd = seeded(seed);
+  const look = PIECE_LOOKS[id] ?? { wall: PAL.plaster, roof: PAL.tile, h: 6 };
+  const has = new Set(cells.map(([x, y]) => `${x},${y}`));
+  const T = PIECE_TILE;
+  const wall = (_: number, y: number) => jitter(look.wall, 0.1, rnd).multiplyScalar(y % 4 === 0 ? 0.85 : 1);
+  for (const [cx, cy] of cells) {
+    const x0 = cx * T + (has.has(`${cx - 1},${cy}`) ? 0 : 1);
+    const x1 = cx * T + T - 1 - (has.has(`${cx + 1},${cy}`) ? 0 : 1);
+    const z0 = cy * T + (has.has(`${cx},${cy - 1}`) ? 0 : 1);
+    const z1 = cy * T + T - 1 - (has.has(`${cx},${cy + 1}`) ? 0 : 1);
+    v.box(x0, 0, z0, x1, 0, z1, () => jitter(look.h ? PAL.stone : look.wall, 0.12, rnd));
+    if (look.h) {
+      v.box(x0, 1, z0, x1, look.h, z1, wall);
+      v.box(x0, look.h + 1, z0, x1, look.h + 1, z1, () => jitter(look.roof, 0.12, rnd));
+    }
+  }
+  const [fx, fy] = cells[0];
+  const cx = fx * T + T / 2;
+  const cz = fy * T + T / 2;
+  if (id === 'watchtower') roundTower(v, cx, cz, 2.6, look.h, true, rnd);
+  look.accent?.(v, cx, cz, look.h + 2, rnd);
+  markGlow(v, PAL.glow);
+  return v;
+}

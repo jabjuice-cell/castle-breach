@@ -148,6 +148,30 @@
       #town .up button { font-size: 13px; padding: 3px 9px; box-shadow: 0 2px 0 var(--ink); }
       #town .up button:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
       #town .march { font-size: 20px; padding: 10px 22px; background: var(--gold); }
+      #town .plot { margin: 14px 0; }
+      #town .plot .hand { margin: 4px 0 8px; font-size: 14px; }
+      #town .plot .hand button { font-size: 12px; padding: 2px 8px; margin-left: 6px; }
+      #town .plotgrid { display: grid; grid-template-columns: repeat(var(--w), 1fr); aspect-ratio: calc(var(--w) / var(--h)); max-width: 760px; background: #6a8a3a; border: 3px solid #4f2e15; border-radius: 6px; overflow: hidden; }
+      #town .plotgrid .cell { position: relative; border: 2px solid transparent; box-sizing: border-box; min-width: 0; cursor: pointer; }
+      #town .plotgrid .cell.open { background: #8fb050; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12); }
+      #town .plotgrid .cell.closed { background: repeating-linear-gradient(45deg, #5a6a3a 0 6px, #52623a 6px 12px); cursor: not-allowed; }
+      #town .plotgrid .cell.piece, #town .plotgrid .cell.keep { background: var(--c); }
+      #town .plotgrid .cell.keep { cursor: default; }
+      #town .plotgrid .cell span { position: absolute; left: 2px; top: 1px; z-index: 2; font-size: 10px; line-height: 1.1; font-weight: bold; color: #fff; text-shadow: 0 1px 2px #000, 0 0 2px #000; white-space: nowrap; pointer-events: none; }
+      #town .plotgrid .cell.ghost { box-shadow: inset 0 0 0 40px rgba(120, 255, 120, 0.55); }
+      #town .plotgrid .cell.ghost.bad { box-shadow: inset 0 0 0 40px rgba(255, 70, 50, 0.6); }
+      #town .plotgrid .cell[class*='seam-e-']::after, #town .plotgrid .cell[class*='seam-s-']::before { content: ''; position: absolute; z-index: 1; pointer-events: none; }
+      #town .plotgrid .cell[class*='seam-e-']::after { right: -4px; top: 0; bottom: 0; width: 6px; }
+      #town .plotgrid .cell[class*='seam-s-']::before { bottom: -4px; left: 0; right: 0; height: 6px; }
+      #town .plotgrid .cell.seam-e-bonus::after, #town .plotgrid .cell.seam-s-bonus::before { background: #ffd23a; box-shadow: 0 0 8px #ffd23a; }
+      #town .plotgrid .cell.seam-e-clash::after, #town .plotgrid .cell.seam-s-clash::before { background: repeating-linear-gradient(45deg, #ff3a2a 0 3px, #600 3px 5px); box-shadow: 0 0 8px #ff3a2a; }
+      #town .plotside { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; margin-top: 10px; }
+      #town .plotside h3 { margin: 0 0 4px; font-size: 13px; }
+      #town .yard { display: flex; flex-wrap: wrap; gap: 6px; }
+      #town .yard button { font-size: 12px; padding: 3px 8px; border-left: 8px solid var(--c); }
+      #town .pairs { margin: 0; padding-left: 18px; font-size: 13px; }
+      #town .pairs li.bonus { color: #8a6a00; }
+      #town .pairs li.clash { color: #b0301f; }
       #town .levels { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 6px; font-size: 14px; }
       #town .levels span { padding: 2px 9px; border-radius: 10px; background: rgba(43, 33, 22, 0.1); }
       #town .levels span.done { background: #3f8a3a; color: #fff; }

@@ -720,6 +720,11 @@ export class BattleScene {
     this.routeDrawn.routes = null;
   }
 
+  /** The town plot to draw (from the meta progress). */
+  setPlot(plot: import('../sim/plot').Layout, land: number) {
+    this.world.setPlot(plot, land);
+  }
+
   /** Swaps in a fresh game (after a restart or for the next level) and rebuilds the castle and ground. */
   setGame(game: Game) {
     const resized = game.cfg.field.halfWidth !== this.game.cfg.field.halfWidth;

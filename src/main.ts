@@ -28,6 +28,7 @@ import { contact } from './sim/obstacles';
 import { Tutorial } from './sim/tutorial';
 import { META_GROUPS, META_UPGRADES, type MetaGroup, type Progress, applyMeta, buyMeta, metaCost, metaDepth, metaLocked, metaUpgrade, newProgress } from './sim/meta';
 import { ENEMY_KINDS, type EnemyKind } from './sim/waves';
+import { KEEP_CELLS, PIECES, PLOT_H, PLOT_W, type PieceId, type Placed, activePairs, autoPack, canPlace, effectiveMeta, landBounds, pieceCells, sanitizePlot, yard } from './sim/plot';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -63,6 +64,11 @@ const progress = loadProgress();
 let tutorial: Tutorial | null = null;
 let game = newLevel();
 const view = new BattleScene(canvas, game, quality);
+view.setPlot(progress.plot, progress.meta.land ?? 0);
+/** The building in your hand, and where you grabbed it (tiles from its corner). */
+let held: { p: Placed; dx: number; dy: number } | null = null;
+let plotHover: { x: number; y: number } | null = null;
+
 if (location.search.includes("debug")) Object.defineProperty(window, "__dbg", { get: () => ({ game, scene: view }) });
 
 const sounds = new Sounds();
@@ -837,7 +843,7 @@ function updateHud(dt: number) {
     const p = view.project(b.x, -b.z, b.top);
     el.style.left = `${p.x}px`;
     el.style.top = `${p.y}px`;
-    el.hidden = !running || view.lookAhead > 0;
+    el.hidden = !running || view.lookAhead > 0 || (kind !== 'keep' && !game.hasBuilding(kind));
     if (el.hidden) return;
     const built = game.hasBuilding(kind);
     const span = el.firstElementChild as HTMLElement;
@@ -1015,7 +1021,7 @@ const TOWN_NAMES: Record<string, string> = {
 
 function clickTownBuilding(b: ChoiceBuilding) {
   const name = BUILDINGS[b].name;
-  if (!hasChoiceBuilding(progress.meta, b)) toast(`${name}: build it in the town with Renown`);
+  if (!hasChoiceBuilding(townMeta(), b)) toast(`${name}: build it in the town with Renown`);
   else if (game.phase !== 'setup') toast(`${name}: choose before the battle, in the setup`);
   else {
     townOpen = b;
@@ -1035,7 +1041,7 @@ function optionRows(building: ChoiceBuilding, field: keyof Choices, list: Option
       : `<button type="button" data-action="choose:${field}:${o.id}" ${cur === o.id ? 'disabled' : ''}>${cur === o.id ? 'Chosen' : 'Choose'}</button>`;
     return `<div class="opt${open ? '' : ' locked'}${cur === o.id ? ' on' : ''}"><div class="row"><b>${o.name}</b>${btn}</div><small>${o.good}</small>${o.bad ? `<small class="bad">${o.bad}</small>` : ''}</div>`;
   };
-  const rows = list.map((o) => row(o, optionOpen(progress.meta, building, o), optionNeeds(progress.meta, o)));
+  const rows = list.map((o) => row(o, optionOpen(townMeta(), building, o), optionNeeds(progress.meta, o)));
   if (none) rows.push(row({ id: 'none', name: 'No tactic', good: 'Fight the level as it comes.', bad: '' }, true, []));
   return rows.join('');
 }
@@ -1044,7 +1050,7 @@ function townPopHtml(b: ChoiceBuilding): string {
   const done = '<footer><button type="button" data-action="close">Done</button></footer>';
   if (b === 'warroom') return `<h3>The War Room – one tactic for this level</h3>${optionRows(b, 'tactic', TACTIC_INFO, true)}${done}`;
   if (b === 'barracks') {
-    const archers = (progress.meta.archers ?? 0) > 0 ? optionRows(b, 'archers', ARCHER_ROLE_INFO) : '<small>Unlock archers first</small>';
+    const archers = (townMeta().archers ?? 0) > 0 ? optionRows(b, 'archers', ARCHER_ROLE_INFO) : '<small>Unlock archers first</small>';
     return `<h3>The Barracks</h3><h4>Archers</h4>${archers}<h4>Soldiers</h4>${optionRows(b, 'soldiers', SOLDIER_ROLE_INFO)}${done}`;
   }
   if (b === 'blacksmith') return `<h3>The Blacksmith</h3><h4>Shield</h4>${optionRows(b, 'shield', SHIELD_KIT_INFO)}<h4>Royal Ball</h4>${optionRows(b, 'ball', BALL_KIT_INFO)}${done}`;
@@ -1210,7 +1216,19 @@ function loadProgress(): Progress {
   try {
     const saved = localStorage.getItem('castle-breach:progress');
     // A save from before the tutorial belongs to someone who has already played.
-    if (saved) return { ...p, tutorialDone: true, ...JSON.parse(saved) };
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      const loaded: Progress = { ...p, tutorialDone: true, ...parsed };
+      if ('plot' in parsed) {
+        loaded.plot = sanitizePlot(loaded.meta, parsed.plot);
+      } else {
+        // A save from before the town plot: pack what it owns, with the land it needs for free.
+        const packed = autoPack(loaded.meta);
+        loaded.plot = packed.layout;
+        if (packed.land > (loaded.meta.land ?? 0)) loaded.meta.land = packed.land;
+      }
+      return loaded;
+    }
     // Renown banked before the town existed carries over.
     p.renown = Number(localStorage.getItem('castle-breach:renown') ?? 0) || 0;
   } catch {
@@ -1222,9 +1240,14 @@ function saveProgress() {
   saveSetting('progress', JSON.stringify(progress));
 }
 
+/** The meta-upgrades whose buildings actually stand on the plot (one in the builders' yard does nothing). */
+function townMeta() {
+  return effectiveMeta(progress.meta, progress.plot);
+}
+
 function newLevel(): Game {
   const level = progress.levelsBeaten;
-  const g = new Game(Math.floor(Math.random() * 1e9), applyMeta(progress.meta, level), level, sanitizeChoices(progress.meta, progress.choices));
+  const g = new Game(Math.floor(Math.random() * 1e9), applyMeta(progress.meta, level, undefined, progress.plot), level, sanitizeChoices(townMeta(), progress.choices));
   tutorial = !progress.tutorialDone && level === 0 ? Tutorial.begin(g) : null;
   return g;
 }
@@ -1294,9 +1317,10 @@ function townHtml(): string {
     <header><div><h1>The Town</h1><p class="sub">${fresh ? 'Spend Renown on upgrades that last for ever, then march out. A run is three levels; lose one and it starts again from the first.' : `Level ${next} held! Spend your Renown, then march on to level ${next + 1}.`}</p></div>
     <span class="purse">${icon('renown')}${Math.floor(progress.renown)} Renown</span></header>
     <div class="levels">${levels}</div>
+    <div id="plotBox" class="plot">${plotHtml()}</div>
     <div class="groups">${groups}</div>
     <button type="button" class="march" data-march>March to ${names[next]}!</button>
-    <p class="tag">Between levels: spend Renown here, then click the war room, barracks, blacksmith and watchtower in the town before the battle.</p>
+    <p class="tag">Between levels: spend Renown here, lay out the town plot, then click the war room, barracks, blacksmith and watchtower in the town before the battle.</p>
   </div>`;
 }
 
@@ -1312,12 +1336,185 @@ function showTown() {
 $('town').addEventListener('click', (e) => {
   const el = e.target as HTMLElement;
   const up = el.closest<HTMLButtonElement>('button[data-meta]');
-  if (up && !up.disabled && buyMeta(progress, up.dataset.meta!)) {
-    saveProgress();
-    sounds.chime(1);
-    showTown();
+  const id = up?.dataset.meta;
+  if (up && !up.disabled && id) {
+    const isPiece = id in PIECES && !(progress.meta[id] ?? 0);
+    if (isPiece && !fitsSomewhere(id as PieceId)) toast(`No room: ${PIECES[id as PieceId].name} will wait in the builders' yard.`);
+    if (buyMeta(progress, id)) {
+      saveProgress();
+      sounds.chime(1);
+      // A new building goes straight into your hand, ready to put down.
+      if (isPiece) held = { p: { id: id as PieceId, x: 0, y: 0, rot: 0 }, dx: 0, dy: 0 };
+      showTown();
+      if (isPiece) $('plotBox').scrollIntoView({ behavior: 'smooth', block: 'center' });
+      if (id === 'land') view.setPlot(progress.plot, progress.meta.land ?? 0);
+    }
+    return;
   }
-  if (el.closest('button[data-march]')) startLevel();
+  const yardBtn = el.closest<HTMLElement>('[data-yard]');
+  if (yardBtn) {
+    held = { p: { id: yardBtn.dataset.yard as PieceId, x: 0, y: 0, rot: 0 }, dx: 0, dy: 0 };
+    renderPlot();
+    return;
+  }
+  if (el.closest('[data-drop]')) {
+    held = null;
+    renderPlot();
+    return;
+  }
+  const cell = el.closest<HTMLElement>('[data-cell]');
+  if (cell) {
+    clickPlot(Number(cell.dataset.x), Number(cell.dataset.y));
+    return;
+  }
+  if (el.closest('button[data-march]')) {
+    held = null;
+    const waiting = yard(progress.meta, progress.plot);
+    if (waiting.length) toast(`Still in the builders' yard, doing nothing: ${waiting.map((w) => PIECES[w].name).join(', ')}.`);
+    startLevel();
+  }
+});
+
+// ---- the town plot ------------------------------------------------------------
+
+/** Placeholder colours for each building on the plot (the voxel pieces use the same feel). */
+const PIECE_COLOR: Record<PieceId, string> = {
+  archers: '#6fae4a', soldiers: '#8f8a82', catapult: '#a0703a', mage: '#7a5ab8', ballista: '#7a4a24', oil: '#4a4a52', spiketrap: '#b0a070',
+  fletching: '#d8c070', drill: '#c8a878', masonry: '#e7d8b4', tavern: '#d9572b', alchemist: '#3a8a5a', blacksmith: '#5a5a62', chapel: '#4a5878',
+  forge: '#8a3a2a', warroom: '#c8322a', watchtower: '#9a6a3a', treasury: '#e8b730', market: '#ec7440', guild: '#3d66d6',
+};
+
+/** Can this building go anywhere on the open land as it stands now? */
+function fitsSomewhere(id: PieceId): boolean {
+  const land = progress.meta.land ?? 0;
+  const lb = landBounds(land);
+  const others = progress.plot.filter((q) => q.id !== id);
+  for (let rot = 0; rot < 4; rot++) {
+    for (let y = lb.y0; y <= lb.y1; y++) {
+      for (let x = lb.x0; x <= lb.x1; x++) if (canPlace(others, { id, x, y, rot: rot as Placed['rot'] }, land)) return true;
+    }
+  }
+  return false;
+}
+
+/** The held building where it would land under the mouse. */
+function heldAt(): Placed | null {
+  if (!held || !plotHover) return null;
+  return { ...held.p, x: plotHover.x - held.dx, y: plotHover.y - held.dy };
+}
+
+function clickPlot(x: number, y: number) {
+  const land = progress.meta.land ?? 0;
+  if (held) {
+    const at = heldAt();
+    if (at && canPlace(progress.plot, at, land)) {
+      progress.plot = [...progress.plot.filter((q) => q.id !== at.id), at];
+      held = null;
+      saveProgress();
+      sounds.chime(0.6);
+      view.setPlot(progress.plot, land);
+    } else toast("It doesn't fit there.");
+    renderPlot();
+    return;
+  }
+  // Pick up the building under the mouse (it leaves the plot until it is put down again).
+  const p = progress.plot.find((q) => pieceCells(q).some(([cx, cy]) => cx === x && cy === y));
+  if (!p) return;
+  progress.plot = progress.plot.filter((q) => q !== p);
+  held = { p, dx: x - p.x, dy: y - p.y };
+  saveProgress();
+  view.setPlot(progress.plot, land);
+  renderPlot();
+}
+
+function rotateHeld() {
+  if (!held) return;
+  held = { p: { ...held.p, rot: ((held.p.rot + 1) % 4) as Placed['rot'] }, dx: 0, dy: 0 };
+  renderPlot();
+}
+
+function renderPlot() {
+  const box = document.getElementById('plotBox');
+  if (box) box.innerHTML = plotHtml();
+}
+
+function plotHtml(): string {
+  const land = progress.meta.land ?? 0;
+  const lb = landBounds(land);
+  const owner = new Map<string, PieceId | 'keep'>();
+  for (const [x, y] of KEEP_CELLS) owner.set(`${x},${y}`, 'keep');
+  for (const p of progress.plot) for (const [x, y] of pieceCells(p)) owner.set(`${x},${y}`, p.id);
+  const ghost = heldAt();
+  const ghostCells = new Set(ghost ? pieceCells(ghost).map(([x, y]) => `${x},${y}`) : []);
+  const ghostOk = ghost ? canPlace(progress.plot, ghost, land) : false;
+  // What would light up if the held building went down here.
+  const pairs = activePairs(ghost && ghostOk ? [...progress.plot, ghost] : progress.plot);
+  const seams = new Map<string, string>();
+  for (const pr of pairs) for (const [x, y, side] of pr.edges) seams.set(`${x},${y},${side}`, pr.kind);
+  const labelled = new Set<string>();
+  let cells = '';
+  for (let y = 0; y < PLOT_H; y++) {
+    for (let x = 0; x < PLOT_W; x++) {
+      const k = `${x},${y}`;
+      const o = owner.get(k);
+      const open = x >= lb.x0 && x <= lb.x1 && y >= lb.y0 && y <= lb.y1;
+      const cls = ['cell', open ? 'open' : 'closed'];
+      let style = '';
+      let label = '';
+      if (o) {
+        cls.push(o === 'keep' ? 'keep' : 'piece');
+        style = `--c:${o === 'keep' ? '#cdbb92' : PIECE_COLOR[o]};`;
+        // Outline each building: a dark edge wherever the next tile isn't the same building.
+        const edge = (nx: number, ny: number) => (owner.get(`${nx},${ny}`) === o ? 'transparent' : 'rgba(43,33,22,0.75)');
+        style += `border-color:${edge(x, y - 1)} ${edge(x + 1, y)} ${edge(x, y + 1)} ${edge(x - 1, y)};`;
+        if (!labelled.has(o)) {
+          labelled.add(o);
+          label = `<span>${o === 'keep' ? 'Keep' : PIECES[o].name}</span>`;
+        }
+      }
+      if (ghostCells.has(k)) cls.push(ghostOk ? 'ghost' : 'ghost bad');
+      const se = seams.get(`${k},e`);
+      const ss = seams.get(`${k},s`);
+      if (se) cls.push(`seam-e-${se}`);
+      if (ss) cls.push(`seam-s-${ss}`);
+      const title = o === 'keep' ? 'The keep (fixed)' : o ? `${PIECES[o].name}: click to pick up` : open ? 'Open land' : 'Needs a land grant';
+      cells += `<div class="${cls.join(' ')}" style="${style}" data-cell data-x="${x}" data-y="${y}" title="${title}">${label}</div>`;
+    }
+  }
+  const waiting = yard(progress.meta, progress.plot).filter((id) => id !== held?.p.id);
+  const yardHtml = waiting.length
+    ? waiting.map((id) => `<button type="button" data-yard="${id}" style="--c:${PIECE_COLOR[id]}">${PIECES[id].name}</button>`).join('')
+    : '<small>Empty: every building stands on the plot.</small>';
+  const pairHtml = pairs.length
+    ? pairs.map((pr) => `<li class="${pr.kind}">${pr.text}</li>`).join('')
+    : '<li><small>Put related buildings side by side for bonuses.</small></li>';
+  const hand = held
+    ? `<p class="hand">In your hand: <b>${PIECES[held.p.id].name}</b>. Click the plot to put it down, <kbd>R</kbd> or right-click to turn it. <button type="button" data-drop>Put it in the yard</button></p>`
+    : '<p class="hand"><small>Click a building to pick it up. Buildings only work while they stand on the plot.</small></p>';
+  return `<h2>The town plot</h2>${hand}
+    <div class="plotgrid" style="--w:${PLOT_W};--h:${PLOT_H}">${cells}</div>
+    <div class="plotside"><div><h3>Builders' yard</h3><div class="yard">${yardHtml}</div></div><div><h3>Neighbours</h3><ul class="pairs">${pairHtml}</ul></div></div>`;
+}
+
+$('town').addEventListener('mouseover', (e) => {
+  const cell = (e.target as HTMLElement).closest<HTMLElement>('[data-cell]');
+  const next = cell ? { x: Number(cell.dataset.x), y: Number(cell.dataset.y) } : null;
+  if (next?.x === plotHover?.x && next?.y === plotHover?.y) return;
+  plotHover = next;
+  if (held) renderPlot();
+});
+$('town').addEventListener('contextmenu', (e) => {
+  if (!held || !(e.target as HTMLElement).closest('.plotgrid')) return;
+  e.preventDefault();
+  rotateHeld();
+});
+window.addEventListener('keydown', (e) => {
+  if ($('town').hidden || !held) return;
+  if (e.code === 'KeyR') rotateHeld();
+  if (e.code === 'Escape') {
+    held = null;
+    renderPlot();
+  }
 });
 
 function showEnd(won: boolean, segment = 0) {

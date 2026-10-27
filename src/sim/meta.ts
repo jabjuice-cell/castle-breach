@@ -1,5 +1,6 @@
 import { type Config, makeConfig } from './config';
 import type { DefenderKind } from './defenders';
+import { type Layout, activePairs, effectiveMeta } from './plot';
 import { type Choices, defaultChoices } from './town';
 
 /**
@@ -52,6 +53,7 @@ export const META_UPGRADES: MetaUpgrade[] = [
   { id: 'warroom', group: 'town', name: 'War room', blurb: 'Builds the war room. Pick one big battle tactic for each level.', costs: [20] },
   { id: 'treasury', group: 'town', name: 'Treasury', blurb: '+60 gold in the war chest for every level, per level.', costs: [20, 45, 100, 220] },
   { id: 'market', group: 'town', name: 'Market', blurb: '+15% gold from kills, per level.', costs: [40, 90, 200] },
+  { id: 'land', group: 'town', name: 'Land grant', blurb: 'The town plot grows: 9×5, then 11×5, 13×6, 15×6.', costs: [30, 80, 180] },
   // Capstones: the far ends of the tree.
   { id: 'doctrine', group: 'defence', name: 'Volley doctrine', blurb: 'The horn lasts longer: call to arms fires 0.5 faster and rests 10 s less.', costs: [300] },
   { id: 'bastion', group: 'wall', name: 'Bastion', blurb: '+50% wall strength and climbing orcs take 3 more damage a second.', costs: [260] },
@@ -131,10 +133,12 @@ export interface Progress {
   tutorialDone: boolean;
   /** The town choices last made (sanitised against the meta-upgrades when a level is set up). */
   choices: Choices;
+  /** The town plot: where each building stands (sanitised against the meta-upgrades when loaded). */
+  plot: Layout;
 }
 
 export function newProgress(): Progress {
-  return { renown: 0, meta: {}, levelsBeaten: 0, lastLoadout: [], tutorialDone: false, choices: defaultChoices() };
+  return { renown: 0, meta: {}, levelsBeaten: 0, lastLoadout: [], tutorialDone: false, choices: defaultChoices(), plot: [] };
 }
 
 /** Spends Renown on the next level of an upgrade. */
@@ -149,9 +153,13 @@ export function buyMeta(p: Progress, id: string): boolean {
 /** Shield upgrades, as the levels the game starts with. */
 export const SHIELD_META = ['width', 'window', 'power', 'recovery', 'plating'] as const;
 
-/** The config for a level with the town's permanent upgrades applied. */
-export function applyMeta(meta: MetaLevels, level: number, base: Config = makeConfig()): Config {
+/**
+ * The config for a level with the town's permanent upgrades applied. With a plot, only placed
+ * buildings count and the active neighbour bonuses and clashes are applied; without one, neither.
+ */
+export function applyMeta(full: MetaLevels, level: number, base: Config = makeConfig(), plot?: Layout): Config {
   const cfg = structuredClone(base);
+  const meta = plot ? effectiveMeta(full, plot) : full;
   const lv = (id: string) => meta[id] ?? 0;
   cfg.unlocks.defenders = ['crossbow', ...(['archers', 'soldiers', 'catapult', 'mage', 'ballista', 'oil', 'spiketrap'] as const).filter((k) => lv(k) > 0)];
   cfg.unlocks.buildings = ['keep', ...(['tavern', 'alchemist', 'blacksmith', 'chapel', 'forge', 'warroom', 'watchtower'] as const).filter((k) => lv(k) > 0), ...(lv('soldiers') >= 1 ? (['barracks'] as const) : [])];
@@ -169,5 +177,32 @@ export function applyMeta(meta: MetaLevels, level: number, base: Config = makeCo
   cfg.field.halfWidth = at(cfg.levels.halfWidth);
   cfg.wall.segments = at(cfg.levels.segments);
   for (const t of SHIELD_META) cfg.bonuses.shield[t] = lv(t);
+  if (plot) applyPairs(cfg, plot);
   return cfg;
+}
+
+/** Folds the active neighbour bonuses and clashes (config.plot) into the config. */
+function applyPairs(cfg: Config, plot: Layout) {
+  const on = new Set(activePairs(plot).map((p) => p.id));
+  const b = cfg.plot.bonuses;
+  const c = cfg.plot.clashes;
+  if (on.has('blacksmithSoldiers')) cfg.soldiers.cost *= b.blacksmithSoldiers.soldierCost;
+  if (on.has('fletchingArchers')) cfg.archers.damage *= b.fletchingArchers.archerDamage;
+  if (on.has('drillSoldiers')) cfg.soldiers.hp *= b.drillSoldiers.soldierHp;
+  if (on.has('tavernSoldiers')) cfg.soldiers.count += b.tavernSoldiers.soldierCount;
+  if (on.has('workshopForge')) cfg.catapult.interval *= b.workshopForge.catapultInterval;
+  if (on.has('blacksmithBallista')) cfg.ballista.damage *= b.blacksmithBallista.ballistaDamage;
+  if (on.has('masonryKeep')) cfg.economy.repairGoldPerHp *= b.masonryKeep.repairCost;
+  if (on.has('chapelMasonry')) cfg.wall.segmentHp = Math.round(cfg.wall.segmentHp * b.chapelMasonry.wallHp);
+  if (on.has('spiketrapMasonry')) cfg.spiketrap.cost *= b.spiketrapMasonry.spikeTrapCost;
+  if (on.has('alchemistOil')) cfg.oil.burnSeconds += b.alchemistOil.oilBurnSeconds;
+  if (on.has('alchemistMage')) { cfg.mage.radius *= b.alchemistMage.mageRadius; cfg.mage.radiusPerLevel *= b.alchemistMage.mageRadius; }
+  if (on.has('watchtowerArchers')) cfg.coverage.archerReach *= b.watchtowerArchers.archerReach;
+  if (on.has('watchtowerWarroom')) cfg.callToArms.cooldown -= b.watchtowerWarroom.callCooldown;
+  if (on.has('marketTreasury')) cfg.economy.warChest += b.marketTreasury.warChest;
+  if (on.has('marketGuild')) cfg.bonuses.killGold *= b.marketGuild.killGold;
+  if (on.has('tavernMarket')) cfg.economy.earlyGoldMult *= b.tavernMarket.earlyGold;
+  if (on.has('tavernChapel')) cfg.buildings.chapel.healPerSec *= c.tavernChapel.chapelMend;
+  if (on.has('alchemistTreasury')) cfg.economy.warChest -= c.alchemistTreasury.warChest;
+  if (on.has('drillMage')) { cfg.mage.radius *= c.drillMage.mageRadius; cfg.mage.radiusPerLevel *= c.drillMage.mageRadius; }
 }

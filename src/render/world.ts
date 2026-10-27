@@ -1,10 +1,5 @@
 import * as THREE from 'three';
 import aspects from '../assets/aspects.json';
-import townTavern from '../assets/sprites/town-tavern.webp';
-import townAlchemist from '../assets/sprites/town-alchemist.webp';
-import townBlacksmith from '../assets/sprites/town-blacksmith.webp';
-import townChapel from '../assets/sprites/town-chapel.webp';
-import townForge from '../assets/sprites/town-forge.webp';
 import tf1 from '../assets/sprites/townsfolk-1.webp';
 import tf2 from '../assets/sprites/townsfolk-2.webp';
 import tf3 from '../assets/sprites/townsfolk-3.webp';
@@ -14,13 +9,14 @@ import tf6 from '../assets/sprites/townsfolk-6.webp';
 import tf7 from '../assets/sprites/townsfolk-7.webp';
 import tf8 from '../assets/sprites/townsfolk-8.webp';
 import { BUILDING_KINDS, type BuildingKind, type Game } from '../sim/game';
+import { KEEP_CELLS, type Layout, PLOT_W, type PieceId, landBounds, pieceCells } from '../sim/plot';
 import { roadAt } from './ground';
 import {
-  LEAF, type RoofKind, type TreeKind, bellModel, bellPostModel, bumperShieldModel, bumperSpringModel, rampModel, campfireModel, clutterModel, barracksModel, cottageModel, keepModel, obstacleModel,
-  palisadeModel, plotModel, scatterModel, stallModel, tentModel, totemModel, treeModel, warRoomModel, watchtowerModel, wellModel,
+  LEAF, PIECE_TILE, type RoofKind, type TreeKind, bellModel, bellPostModel, bumperShieldModel, bumperSpringModel, rampModel, campfireModel, clutterModel, cottageModel, keepModel, obstacleModel,
+  palisadeModel, pieceModel, scatterModel, tentModel, totemModel, treeModel, wellModel,
 } from './models';
 import { type SpriteArt, imageSprite } from './textures';
-import { type Vox, VoxBatch, seeded } from './voxels';
+import { Vox, VoxBatch, seeded } from './voxels';
 
 /**
  * Everything round the battle that isn't fighting: the town behind the wall (the keep,
@@ -39,25 +35,31 @@ const PROP_VOX = 0.3;
 /** The trees standing out on the field. */
 const FIELD_TREE_VOX = 0.42;
 
-/** Where each building with a power stands (world x, z), and how high its top is, for the tag over it. */
-export const BUILDINGS: Record<BuildingKind, { x: number; z: number; top: number; name: string; power: string; w?: number }> = {
-  keep: { x: 0, z: 14.5, top: 14.5, name: 'The keep', power: 'Call to arms' },
-  // The five sprite buildings (w = world width of the sprite): a crooked street, back row z 9-11, front row z 15-19.
-  tavern: { x: -17.5, z: 10, top: 8.2, w: 7.1, name: 'The Rusty Tankard', power: 'Stand a round' },
-  alchemist: { x: 17.5, z: 18.5, top: 7.8, w: 6.4, name: 'The alchemist', power: 'Every ball burns' },
-  blacksmith: { x: -12.8, z: 16.5, top: 6.6, w: 7.3, name: 'The Blacksmith', power: 'Shield & ball' },
-  chapel: { x: 12.8, z: 15.3, top: 8.4, w: 7.2, name: 'The Chapel', power: 'Mends the wall' },
-  forge: { x: 17, z: 9.5, top: 7.8, w: 7.6, name: 'The Siege Forge', power: 'Catapult +40%' },
-  // Voxel models (no painted art yet), standing where three cottages were.
-  warroom: { x: -24, z: 12, top: 10, name: 'The War Room', power: 'Battle tactic' },
-  barracks: { x: 23.5, z: 12, top: 7, name: 'The Barracks', power: 'Unit roles' },
-  watchtower: { x: -33, z: 14, top: 15, name: 'The Watchtower', power: 'Scout the horde' },
+/**
+ * Where each building with a power stands (world x, z), and how high its top is, for the tag over it.
+ * buildTown moves x, z and top to wherever the building stands on the town plot.
+ */
+export const BUILDINGS: Record<BuildingKind, { x: number; z: number; top: number; name: string; power: string }> = {
+  keep: { x: 0, z: 11, top: 14.5, name: 'The keep', power: 'Call to arms' },
+  tavern: { x: 0, z: 0, top: 0, name: 'The Rusty Tankard', power: 'Stand a round' },
+  alchemist: { x: 0, z: 0, top: 0, name: 'The alchemist', power: 'Every ball burns' },
+  blacksmith: { x: 0, z: 0, top: 0, name: 'The Blacksmith', power: 'Shield & ball' },
+  chapel: { x: 0, z: 0, top: 0, name: 'The Chapel', power: 'Mends the wall' },
+  forge: { x: 0, z: 0, top: 0, name: 'The Siege Forge', power: 'Catapult +40%' },
+  warroom: { x: 0, z: 0, top: 0, name: 'The War Room', power: 'Battle tactic' },
+  barracks: { x: 0, z: 0, top: 0, name: 'The Barracks', power: 'Unit roles' },
+  watchtower: { x: 0, z: 0, top: 0, name: 'The Watchtower', power: 'Scout the horde' },
 };
-const MODELS: Partial<Record<BuildingKind, () => Vox>> = { warroom: warRoomModel, barracks: barracksModel, watchtower: watchtowerModel };
-const TOWN_ART: Partial<Record<BuildingKind, [string, string]>> = {
-  tavern: [townTavern, 'town-tavern'], alchemist: [townAlchemist, 'town-alchemist'], blacksmith: [townBlacksmith, 'town-blacksmith'],
-  chapel: [townChapel, 'town-chapel'], forge: [townForge, 'town-forge'],
+/** The plot piece each building with a power stands on (the barracks is the 'soldiers' upgrade). */
+const PIECE_OF: Record<Exclude<BuildingKind, 'keep'>, PieceId> = {
+  tavern: 'tavern', alchemist: 'alchemist', blacksmith: 'blacksmith', chapel: 'chapel', forge: 'forge', warroom: 'warroom', barracks: 'soldiers', watchtower: 'watchtower',
 };
+
+/** The town plot on the ground: world units per tile, the left edge of tile column 0 and the back edge of row 0 (by the wall). */
+export const PLOT_TILE = 3;
+const PLOT_X0 = -(PLOT_W / 2) * PLOT_TILE;
+const PLOT_Z0 = 6.5;
+const PIECE_VOX = PLOT_TILE / PIECE_TILE;
 
 export interface WorldFx {
   puff(x: number, y: number, z: number, size: number, color: string, life: number): void;
@@ -95,24 +97,20 @@ interface Walker {
 
 /** The streets the townsfolk walk: nodes (world x, z) and the links between them. */
 const NODES: [number, number][] = [
-  // 0-8: the street in front of the town.
-  [-32, 24], [-23, 24], [-15.5, 24], [-8.5, 24], [0, 24], [8.5, 24], [15.5, 24], [23, 24], [32, 24],
-  // 9-11: lanes either side of the keep, past the stalls, to the back street.
-  [-8.5, 12.5], [8.5, 12.5], [0, 8.4],
-  // 12-14: doors (tavern, keep, alchemist), 15: the gate.
-  [-17.5, 15.5], [0, 22.2], [17.5, 21.5],
-  [0, 3.4],
-  // 16-19: cottage doors.
-  [-24, 15.5], [-22, 22], [23.5, 15.5], [24.5, 22],
+  // 0-8: the street in front of the town plot.
+  [-32, 26.5], [-23, 26.5], [-15.5, 26.5], [-8.5, 26.5], [0, 26.5], [8.5, 26.5], [15.5, 26.5], [23, 26.5], [32, 26.5],
+  // 9-10: lanes down either end of the plot; 11-13: the back lane under the wall, 11 by the gate.
+  [-24.5, 15], [24.5, 15], [0, 4.5], [-24.5, 4.5], [24.5, 4.5],
+  // 14-17: cottage doors.
+  [-30, 15.5], [30, 15.5], [-31.5, 25], [33.5, 23],
 ];
 const LINKS: [number, number][] = [
   [0, 1], [1, 2], [2, 3], [3, 4], [4, 5], [5, 6], [6, 7], [7, 8],
-  [3, 9], [5, 10], [9, 11], [10, 11], [11, 15],
-  [2, 12], [4, 13], [6, 14],
-  [1, 16], [1, 17], [7, 18], [7, 19],
+  [1, 9], [7, 10], [9, 12], [10, 13], [12, 11], [11, 13],
+  [9, 14], [10, 15], [0, 16], [8, 17],
 ];
-/** Where people go: doors, stalls, the gate. */
-const DESTINATIONS = [9, 10, 12, 13, 14, 15, 16, 17, 18, 19, 0, 8];
+/** Where people go: doors, the street, the gate. */
+const DESTINATIONS = [4, 11, 9, 10, 14, 15, 16, 17, 0, 8, 2, 6];
 
 /** Natural facing of each townsfolk sprite (1 = right): farmer, baker, boy, fletcher, monk, old man, water carrier, merchant. */
 const FOLK = [tf1, tf2, tf3, tf4, tf5, tf6, tf7, tf8];
@@ -151,6 +149,9 @@ export class World {
   private adj: number[][];
   private rnd = seeded(5);
   private hw: number;
+  /** The town plot as laid out in the town, and how much land is open. */
+  private plot: Layout = [];
+  private land = 0;
 
   constructor(
     private game: Game,
@@ -191,6 +192,13 @@ export class World {
     this.treeMesh.instanceMatrix.needsUpdate = true;
   }
 
+  /** The town's layout changed (or a level starts with it): the pieces are rebuilt where they stand. */
+  setPlot(plot: Layout, land: number): void {
+    this.plot = plot.map((p) => ({ ...p }));
+    this.land = land;
+    this.buildTown();
+  }
+
   // ---- the town -------------------------------------------------------------
 
   private buildTown(): void {
@@ -210,43 +218,60 @@ export class World {
       this.base.add(g);
       return g;
     };
+    // The keep stands fixed, front and centre on the plot, by the wall.
+    const keepX = PLOT_X0 + (KEEP_CELLS[0][0] + 1.5) * PLOT_TILE;
+    const keepZ = PLOT_Z0 + 1.5 * PLOT_TILE;
+    Object.assign(BUILDINGS.keep, { x: keepX, z: keepZ });
+    const keep = place(keepModel(), keepX, keepZ, 0, KEEP_VOX);
+    this.spots.push({ kind: 'keep', group: keep, box: new THREE.Box3().setFromObject(keep), built: true, glow: 0 });
+    // Every placed building is a voxel piece on its tiles; one waiting in the builders' yard isn't drawn.
+    const groups = new Map<PieceId, THREE.Group>();
+    this.plot.forEach((p, i) => {
+      const cells = pieceCells(p);
+      const mx = Math.min(...cells.map((c) => c[0]));
+      const my = Math.min(...cells.map((c) => c[1]));
+      const local = cells.map(([x, y]) => [x - mx, y - my] as [number, number]);
+      const at = new THREE.Vector3(PLOT_X0 + mx * PLOT_TILE + PIECE_VOX / 2, 0, PLOT_Z0 + my * PLOT_TILE + PIECE_VOX / 2);
+      const g = new VoxBatch().add(pieceModel(p.id, local, 600 + i), PIECE_VOX, at).build();
+      this.base.add(g);
+      groups.set(p.id, g);
+    });
     for (const kind of BUILDING_KINDS) {
-      const b = BUILDINGS[kind];
-      const built = this.game.hasBuilding(kind);
-      const art = TOWN_ART[kind];
-      if (!built || !art) {
-        const group = place(built ? (MODELS[kind] ?? keepModel)() : plotModel(), b.x, b.z, 0, kind === 'keep' ? KEEP_VOX : BUILD_VOX);
-        this.spots.push({ kind, group, box: new THREE.Box3().setFromObject(group), built, glow: 0 });
-        continue;
-      }
-      // A built town building is a painted sprite, upright and facing the camera (its angle is drawn in).
-      const sprite = imageSprite(art[0], (aspects as Record<string, number>)[art[1]] ?? 1);
-      const w = b.w ?? 7;
-      const h = w / sprite.aspect;
-      const mesh = new THREE.Mesh(
-        new THREE.PlaneGeometry(w, h).translate(0, h / 2, 0),
-        new THREE.MeshBasicMaterial({ map: sprite.texture, alphaTest: 0.5, side: THREE.DoubleSide }),
-      );
-      mesh.position.set(b.x, 0, b.z);
-      mesh.onBeforeRender = () => mesh.quaternion.copy(this.camera.quaternion);
-      this.base.add(mesh);
-      // The sprite leans back with the camera, so its pick box reaches back by most of its height.
-      const box = new THREE.Box3(new THREE.Vector3(b.x - w / 2, 0, b.z - h * 0.75), new THREE.Vector3(b.x + w / 2, h, b.z + 1));
-      this.spots.push({ kind, group: mesh, box, built, glow: 0 });
+      if (kind === 'keep') continue;
+      const g = groups.get(PIECE_OF[kind]);
+      if (!g || !this.game.hasBuilding(kind)) continue;
+      const box = new THREE.Box3().setFromObject(g);
+      const c = box.getCenter(new THREE.Vector3());
+      Object.assign(BUILDINGS[kind], { x: c.x, z: c.z, top: box.max.y + 1 });
+      this.spots.push({ kind, group: g, box, built: true, glow: 0 });
     }
-    // Cottages round the edges, stalls in the lanes by the keep, a well and clutter.
+    // A low fence round the open land; the closed land beyond it waits for a land grant.
+    const lb = landBounds(this.land);
+    const fence = new Vox();
+    const fx0 = lb.x0 * PIECE_TILE - 1;
+    const fx1 = (lb.x1 + 1) * PIECE_TILE;
+    const fz1 = (lb.y1 + 1) * PIECE_TILE;
+    for (let x = fx0; x <= fx1; x++) {
+      if (x % 4 === 0) fence.box(x, 0, fz1, x, 3, fz1, '#7a4a24');
+      fence.set(x, 2, fz1, '#9a6a3a');
+    }
+    for (const x of [fx0, fx1]) {
+      for (let z = 0; z <= fz1; z++) {
+        if (z % 4 === 0) fence.box(x, 0, z, x, 3, z, '#7a4a24');
+        fence.set(x, 2, z, '#9a6a3a');
+      }
+    }
+    this.base.add(new VoxBatch().add(fence, PIECE_VOX, new THREE.Vector3(PLOT_X0 + PIECE_VOX / 2, 0, PLOT_Z0 + PIECE_VOX / 2)).build());
+    // Cottages beyond the plot's ends, a well and clutter.
     const cottages: [number, number, number, number, RoofKind][] = [
-      [-22.5, 19.5, 13, 9, 'thatch'], [24.5, 19.5, 13, 9, 'thatch'],
-      [33.5, 15, 13, 11, 'slate'], [-31, 22, 11, 9, 'thatch'], [32, 22.5, 11, 9, 'tile'],
+      [-30, 12, 11, 9, 'thatch'], [30, 12, 11, 9, 'thatch'], [33.5, 20, 11, 9, 'slate'], [-31.5, 22, 11, 9, 'thatch'],
     ];
     cottages.forEach(([x, z, w, d, roof], i) => {
       place(cottageModel(100 + i, w, d, roof), x, z);
       if (i % 2 === 0) this.chimneys.push({ x: x + (Math.floor(w / 2) - 1.5) * BUILD_VOX, y: 7.2, z: z - 0.2, color: '#cfcac0', rate: 0.8 });
     });
-    place(stallModel(201, '#c8322a'), -8.5, 9.5);
-    place(stallModel(202, '#2a4fb0'), 8.5, 9.5);
-    place(wellModel(), -27.5, 25.5);
-    const clutter: [number, number][] = [[-11, 21], [11.5, 22], [-22.5, 7.5], [22.2, 15.8], [-28, 9], [28.5, 9.5], [-36, 19], [37, 20]];
+    place(wellModel(), -27, 28);
+    const clutter: [number, number][] = [[-12, 28], [11.5, 28.5], [-26, 6], [26, 6.5], [-36, 17], [37, 16]];
     clutter.forEach(([x, z], i) => place(clutterModel(300 + i), x, z, (i * 1.3) % Math.PI));
     // Trees round the town's edge, and a line of them outside the wall's ends.
     const tb = new VoxBatch();

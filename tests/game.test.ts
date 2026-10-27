@@ -6,6 +6,7 @@ import { applyChoices, defaultChoices, sanitizeChoices } from '../src/sim/town';
 import { META_UPGRADES, applyMeta, buyMeta, metaCost, metaDepth, metaLocked, newProgress } from '../src/sim/meta';
 import { type Contraption, footprint } from '../src/sim/contraptions';
 import { LEVEL_OBSTACLES, contact } from '../src/sim/obstacles';
+import { type Layout, type Placed, PIECE_IDS, PIECES, activePairs, autoPack, canPlace, effectiveMeta, pieceCells, sanitizePlot, yard } from '../src/sim/plot';
 import { Tutorial } from '../src/sim/tutorial';
 import { formation, planSize, planWave, waveBudget } from '../src/sim/waves';
 
@@ -2210,5 +2211,118 @@ describe('town choices', () => {
     expect(l0[0].enemies.grunt).toBeGreaterThan(0);
     const l2 = new Game(1, cfg, 2).scoutReport();
     expect(l2[l2.length - 1].boss).toBe('warlord');
+  });
+});
+
+describe('town plot', () => {
+  const at = (id: Placed['id'], x: number, y: number, rot: Placed['rot'] = 0): Placed => ({ id, x, y, rot });
+  const key = (cells: [number, number][]) => {
+    const mx = Math.min(...cells.map((c) => c[0]));
+    const my = Math.min(...cells.map((c) => c[1]));
+    return cells.map(([x, y]) => `${x - mx},${y - my}`).sort().join(' ');
+  };
+  const all = Object.fromEntries(PIECE_IDS.map((id) => [id, 1]));
+
+  it('keeps every piece whole when rotated, and never mirrors it', () => {
+    for (const id of PIECE_IDS) {
+      for (const rot of [0, 1, 2, 3] as const) expect(pieceCells(at(id, 0, 0, rot))).toHaveLength(PIECES[id].cells.length);
+    }
+    for (const id of ['soldiers', 'masonry', 'blacksmith', 'spiketrap', 'alchemist', 'guild'] as const) {
+      const turns = new Set([0, 1, 2, 3].map((rot) => key(pieceCells(at(id, 0, 0, rot as Placed['rot'])))));
+      const mirrored = key(PIECES[id].cells.map(([x, y]) => [-x, y] as [number, number]));
+      expect(turns.has(mirrored)).toBe(false);
+    }
+    // Rotated shapes sit with their top-left corner on the anchor.
+    const bar = pieceCells(at('archers', 2, 1, 1));
+    expect(bar).toEqual([[2, 1], [2, 2], [2, 3], [2, 4]]);
+  });
+
+  it('rejects overlaps with the keep and other pieces, and anything off the open land', () => {
+    expect(canPlace([], at('archers', 5, 1), 3)).toBe(false); // runs into the keep
+    expect(canPlace([], at('archers', 9, 0), 3)).toBe(true);
+    expect(canPlace([at('drill', 0, 0)], at('oil', 1, 1), 3)).toBe(false);
+    expect(canPlace([at('drill', 0, 0)], at('oil', 2, 1), 3)).toBe(true);
+    // The same piece never blocks itself.
+    expect(canPlace([at('drill', 0, 0)], at('drill', 1, 0), 3)).toBe(true);
+    expect(canPlace([], at('oil', 2, 3), 0)).toBe(false);
+    expect(canPlace([], at('oil', 3, 3), 0)).toBe(true);
+    expect(canPlace([], at('oil', 3, 5), 0)).toBe(false);
+    expect(canPlace([], at('oil', 3, 5), 2)).toBe(true);
+    expect(canPlace([], at('oil', 13, 0), 3)).toBe(true);
+    expect(canPlace([], at('oil', 14, 0), 3)).toBe(false);
+  });
+
+  it('counts neighbours by shared edge only, and each pair once', () => {
+    const touching: Layout = [at('archers', 0, 3), at('fletching', 0, 4)];
+    const pairs = activePairs(touching);
+    expect(pairs.map((p) => p.id)).toEqual(['fletchingArchers']);
+    expect(pairs[0].edges).toHaveLength(2);
+    expect(activePairs([at('archers', 0, 3), at('fletching', 4, 4)])).toEqual([]); // diagonal only
+    // The keep is a neighbour too.
+    expect(activePairs([at('masonry', 5, 0)]).map((p) => p.id)).toEqual(['masonryKeep']);
+  });
+
+  it('applies bonuses and clashes only for placed, touching buildings', () => {
+    const meta = { archers: 1, fletching: 1 };
+    const base = applyMeta(meta, 0);
+    expect(applyMeta(meta, 0, undefined, [at('archers', 0, 3), at('fletching', 0, 4)]).archers.damage).toBeCloseTo(base.archers.damage * 1.15);
+    expect(applyMeta(meta, 0, undefined, [at('archers', 0, 3), at('fletching', 4, 4)]).archers.damage).toBeCloseTo(base.archers.damage);
+    const m2 = { alchemist: 1, treasury: 1 };
+    const chest = applyMeta(m2, 0).economy.warChest;
+    expect(applyMeta(m2, 0, undefined, [at('alchemist', 0, 3), at('treasury', 2, 3)]).economy.warChest).toBe(chest - 30);
+    expect(applyMeta(m2, 0, undefined, [at('alchemist', 0, 3), at('treasury', 3, 3)]).economy.warChest).toBe(chest);
+  });
+
+  it('gives a building waiting in the yard no effect', () => {
+    const meta = { treasury: 2, tavern: 1 };
+    const chest = applyMeta({}, 0).economy.warChest;
+    const cfg = applyMeta(meta, 0, undefined, []);
+    expect(cfg.economy.warChest).toBe(chest);
+    expect(cfg.unlocks.buildings).not.toContain('tavern');
+    expect(yard(meta, [])).toEqual(['tavern', 'treasury']);
+    expect(effectiveMeta(meta, [at('treasury', 0, 0)])).toEqual({ treasury: 2, tavern: 0 });
+    expect(applyMeta(meta, 0, undefined, [at('treasury', 0, 0)]).economy.warChest).toBe(chest + 120);
+  });
+
+  it('sanitizePlot drops junk, unowned, duplicate, off-land and overlapping entries', () => {
+    const meta = { archers: 1, oil: 1, drill: 1 };
+    expect(sanitizePlot(meta, 'junk')).toEqual([]);
+    expect(sanitizePlot(meta, null)).toEqual([]);
+    const messy = [
+      null, 7, { id: 'bogus', x: 3, y: 0, rot: 0 }, { id: 'archers', x: 'a', y: 0, rot: 0 }, { id: 'archers', x: 3, y: 0, rot: 9 },
+      at('forge', 3, 0), // not owned
+      at('archers', 3, 3),
+      at('archers', 3, 2), // duplicate
+      at('oil', 4, 3), // overlaps archers
+      at('drill', 0, 0), // off the starting land
+      at('oil', 3, 1),
+    ];
+    expect(sanitizePlot(meta, messy)).toEqual([at('archers', 3, 3), at('oil', 3, 1)]);
+    expect(sanitizePlot({ ...meta, land: 3 }, messy)).toContainEqual(at('drill', 0, 0));
+  });
+
+  it('auto-packs the whole town at full land and the early buildings on the starting land', () => {
+    const full = autoPack({ ...all, land: 3 });
+    expect(full.land).toBe(3);
+    expect(full.layout).toHaveLength(20);
+    for (const p of full.layout) expect(canPlace(full.layout, p, 3)).toBe(true);
+    const early = Object.fromEntries(['archers', 'soldiers', 'watchtower', 'warroom', 'treasury', 'masonry', 'fletching', 'tavern'].map((id) => [id, 1]));
+    const small = autoPack(early);
+    expect(small.land).toBe(0);
+    expect(small.layout).toHaveLength(8);
+    for (const p of small.layout) expect(canPlace(small.layout, p, 0)).toBe(true);
+    // Existing placements are kept, and a growing town asks for more land only when it must.
+    const again = autoPack({ ...early, oil: 1 }, small.layout);
+    for (const p of small.layout) expect(again.layout).toContainEqual(p);
+  });
+});
+
+describe('town plot packing', () => {
+  it('keeps clashing neighbours apart when it packs a whole town', () => {
+    const meta: Record<string, number> = { land: 3 };
+    for (const id of PIECE_IDS) meta[id] = 1;
+    const { layout } = autoPack(meta);
+    expect(layout).toHaveLength(PIECE_IDS.length);
+    expect(activePairs(layout).filter((p) => p.kind === 'clash')).toEqual([]);
   });
 });
