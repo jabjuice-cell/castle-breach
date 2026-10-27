@@ -45,7 +45,7 @@
       .nobars .seg .bar { display: none; }
       @keyframes warn { 50% { border-color: #ff3a2a; box-shadow: 0 0 12px #ff3a2a; } }
       #heaveBar { background: linear-gradient(#ffe38a, #e8a920); }
-      /* Over each of the town's buildings: its power, its key and a bar that refills while it rests. Click it (or the building). */
+      /* Over each of the town's buildings: the keep's call to arms (key and a bar that refills while it rests), the others' perk. */
       .btag { position: absolute; transform: translate(-50%, -100%); pointer-events: auto; cursor: pointer; background: rgba(28, 22, 16, 0.82); color: #f4ecd8; border: 2px solid #14100c; border-radius: 5px; padding: 3px 8px 4px; font-size: 12px; white-space: nowrap; text-align: center; box-shadow: 0 2px 0 rgba(0, 0, 0, 0.35); }
       .btag .bar { height: 5px; margin-top: 3px; }
       .btag .bar > i { background: linear-gradient(#9ad0ff, #3a78d8); }
@@ -119,7 +119,10 @@
       #town h2 { margin: 0 0 6px; font-size: 12px; letter-spacing: 0.12em; text-transform: uppercase; opacity: 0.7; }
       #town .up { border-top: 1px solid rgba(43, 33, 22, 0.15); padding: 7px 0; display: grid; gap: 4px; }
       #town .up b { font-size: 15px; }
-      #town .up small { font-size: 12px; opacity: 0.75; line-height: 1.3; }
+      #town .up { margin-left: calc(var(--depth, 0) * 14px); }
+  #town .up.locked { opacity: 0.55; }
+  #town .up small.need { color: #8a2a1a; opacity: 1; font-weight: bold; }
+  #town .up small { font-size: 12px; opacity: 0.75; line-height: 1.3; }
       #town .up .row { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
       #town .pips { letter-spacing: 2px; color: #6a3fa0; font-size: 13px; }
       #town .up button { font-size: 13px; padding: 3px 9px; box-shadow: 0 2px 0 var(--ink); }
@@ -138,6 +141,8 @@
       #preview p { margin: 6px 0 10px; font-size: 15px; }
       .markers { position: absolute; inset: 0; }
       .marker { position: absolute; transform: translate(-50%, -100%); background: var(--danger); color: #fff; font-weight: 800; font-size: 13px; padding: 2px 7px; border-radius: 10px; white-space: nowrap; box-shadow: 0 2px 0 rgba(0, 0, 0, 0.35); }
+      .marker { display: flex; align-items: center; gap: 4px; }
+      .marker img { width: 30px; height: 30px; object-fit: contain; margin: -8px 0 -6px -4px; filter: drop-shadow(0 1px 0 rgba(0, 0, 0, 0.5)); }
       .marker::after { content: ''; position: absolute; left: 50%; bottom: -6px; margin-left: -6px; border: 6px solid transparent; border-bottom: 0; border-top-color: var(--danger); }
       .marker.chucker, .marker.orcCatapult { background: #b8752e; }
       .marker.chucker::after, .marker.orcCatapult::after { border-top-color: #b8752e; }
@@ -169,9 +174,9 @@
       .queen img { width: 64px; height: 64px; object-fit: cover; object-position: top; border-radius: 50%; border: 3px solid var(--gold); background: #2a4fb0; flex: none; }
       .queen p { margin: 0; font-size: 14px; line-height: 1.35; font-style: italic; }
       .queen p b { display: block; font-style: normal; font-family: var(--display); font-size: 18px; color: #2a4fb0; }
-      #queen { position: absolute; left: max(16px, env(safe-area-inset-left, 0px)); bottom: max(170px, calc(env(safe-area-inset-bottom, 0px) + 156px)); width: min(340px, calc(100% - 32px)); background: var(--parchment); color: var(--ink); border: 3px solid var(--ink); border-radius: 6px; padding: 10px 12px; box-shadow: 0 5px 0 rgba(0, 0, 0, 0.35); }
+      #coach, #queen { position: absolute; left: max(16px, env(safe-area-inset-left, 0px)); bottom: max(170px, calc(env(safe-area-inset-bottom, 0px) + 156px)); width: min(340px, calc(100% - 32px)); background: var(--parchment); color: var(--ink); border: 3px solid var(--ink); border-radius: 6px; padding: 10px 12px; box-shadow: 0 5px 0 rgba(0, 0, 0, 0.35); }
       @media (max-width: 720px) { #tray { bottom: auto; top: 76px; } }
-      @media (max-width: 560px) { #callEarly { bottom: 150px; } .wave { font-size: 24px; }  #preview h2 { font-size: 26px; } .hint { display: none; } #queen { display: none; } }
+      @media (max-width: 560px) { #callEarly { bottom: 150px; } .wave { font-size: 24px; }  #preview h2 { font-size: 26px; } .hint { display: none; } #queen { display: none; } #coach { bottom: 150px; font-size: 13px; } }
       @media (prefers-reduced-motion: reduce) { .bar > i { transition: none; } .seg.warn .bar { animation: none; } .btag.ready { animation: none; } }
     </style>
   </head>
@@ -206,6 +211,7 @@
         <p id="previewText">8 grunts</p>
         <button id="startNow" type="button">Start now <kbd>Enter</kbd></button>
       </div>
+      <div class="queen" id="coach" hidden><img data-queen alt="The Queen" /><p><b>The Queen</b><span id="coachText"></span></p></div>
       <div class="queen" id="queen" hidden><img data-queen alt="The Queen" /><p><b>The Queen</b><span id="queenText"></span></p></div>
       <div class="bottom" id="bottom">
         <div class="panel">
@@ -228,7 +234,7 @@
           <li>Chain hits without touching the shield for a <b>combo</b> gold multiplier. Hits behind the lines pay double, the towers make bank shots and barrel orcs blow up their friends. Catch falling capsules, but not the red ones.</li>
           <li>Every ball or boulder you miss hits the wall. If any one stretch of wall falls, the castle is breached.</li>
           <li>Before each level, spend your war chest on defenders and put them anywhere on the castle. Each one covers only part of the field, and the red hatching shows your blind spots. Click a defender to aim or upgrade it, stack towers on the wall for reach, and scroll up to look at the horde. Between waves, click a wall&rsquo;s Repair tag to patch it.</li>
-          <li>In a tight spot, click the <b>keep</b> (or press <kbd>Q</kbd>) to sound the call to arms: every defender shoots twice as fast for a few seconds. Build the tavern and the alchemist in the town for two more powers (<kbd>W</kbd> and <kbd>E</kbd>).</li>
+          <li>In a tight spot, click the <b>keep</b> (or press <kbd>Q</kbd>) to sound the call to arms: every defender shoots twice as fast for a few seconds.</li>
           <li>Three levels of five waves. Lose one and you are back in the town, where Renown buys upgrades that last for ever. Then the next run starts again from level 1.</li>
         </ul>
         <button id="play" type="button">Hold the wall!</button>
@@ -246,6 +252,12 @@
           <div><b id="lostCombo">0</b>best combo</div>
           <div><b id="lostRenown">0</b>Renown earned</div>
         </div>
+        <div class="stats">
+          <div><b id="lostParries">0</b>heaves landed</div>
+          <div><b id="lostPerfects">0</b>Perfect Returns</div>
+          <div><b id="lostGold">0</b>gold earned</div>
+        </div>
+        <p class="sub"><i id="lostQueen"></i></p>
         <p class="sub" id="bank"></p>
         <button id="again" type="button">To the town</button>
       </div>

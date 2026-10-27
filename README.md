@@ -21,6 +21,7 @@ A run is 25 waves. The War Council opens before wave 1 and after every third wav
 that loose volleys), catapults and crossbows anywhere on the castle grounds, raise soldier companies that hold the
 foot of the wall, raise each defender's damage, rate and special track, and repair walls. Defenders can be dragged
 to new spots between waves. Orc catapults come every wave, so the shield is busy. Kills and wave clears pay gold; calling a wave early pays bonus gold and Renown.
+Each field also carries pinball contraptions (layouts in `src/sim/contraptions.ts`, tuning under `contraptions` in config): spring bumpers that kick the ball away, a trio of bells that fires a free archer volley when all three are rung (then resets), and broken siege ramps that fly a ball 14 units up the field, past the orcs, to land with a splash. They sit off the road, orcs go round bumpers and bells, and `contraptions.enabled` switches them all off.
 Warlords lead waves 10, 20 and 25. Renown is banked at the end of a run (spending it comes with the research tree).
 
 ## Commands

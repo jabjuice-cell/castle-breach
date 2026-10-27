@@ -15,7 +15,7 @@ from pathlib import Path
 
 from PIL import Image
 
-args = [a for a in sys.argv[1:] if not a.startswith('--only')]
+args = [a for a in sys.argv[1:] if not a.startswith('--')]
 ONLY = next((set(a.split('=', 1)[1].split(',')) for a in sys.argv[1:] if a.startswith('--only=')), None)
 ART = Path(args[0] if args else '/mnt/project-files/art')
 OUT = Path(__file__).resolve().parent.parent / 'src' / 'assets'
@@ -29,7 +29,6 @@ ITEMS = [
         'enemy-ogre', 'enemy-warlord', 'enemy-catapult', 'defender-catapult']],
     ('castle/tower-crossbow.png', 'castle/tower-crossbow.webp', 768),
     ('castle/keep.png', 'castle/keep.webp', 1024),
-    ('castle/town-tavern.png', 'castle/tavern.webp', 768),
     ('fx/fx-bolt.png', 'fx/bolt.webp', 256),
     ('fx/fx-enemy-bolt.png', 'fx/enemy-bolt.webp', 256),
     ('fx/fx-royal-shield.png', 'fx/royal-shield.webp', 1024),
@@ -81,6 +80,29 @@ def save(im: Image.Image, dest: str, side: int, box=None) -> None:
     aspects[Path(dest).stem] = round(im.width / im.height, 4)
     print(f'{dest}: {im.size}')
 
+
+# The town's buildings: a 3 x 2 sheet (tavern, alchemist, blacksmith / chapel, forge), each drawn at its own angle.
+# Each cell is cropped to its pixels plus a small transparent margin. `--town-only` runs just this step.
+TOWN_SHEET = Path(__file__).resolve().parents[2] / 'output' / 'imagegen' / 'town-buildings-sheet-v2.png'
+TOWN_KINDS = ['tavern', 'alchemist', 'blacksmith', 'chapel', 'forge']
+
+
+def import_town():
+    sheet = Image.open(TOWN_SHEET).convert('RGBA')
+    w, h = sheet.width // 3, sheet.height // 2
+    for i, kind in enumerate(TOWN_KINDS):
+        cell = sheet.crop(((i % 3) * w, (i // 3) * h, (i % 3 + 1) * w, (i // 3 + 1) * h))
+        x0, y0, x1, y1 = cell.getchannel('A').getbbox()
+        m = 12
+        box = (max(0, x0 - m), max(0, y0 - m), min(w, x1 + m), min(h, y1 + m))
+        save(cell.crop(box), f'sprites/town-{kind}.webp', 768, (0, 0, box[2] - box[0], box[3] - box[1]))
+
+
+if '--town-only' in sys.argv:
+    aspects = {**json.loads((OUT / 'aspects.json').read_text())}
+    import_town()
+    (OUT / 'aspects.json').write_text(json.dumps(aspects, indent=2) + '\n')
+    sys.exit()
 
 for src, dest, side in ITEMS:
     save(Image.open(ART / src).convert('RGBA'), dest, side)
@@ -165,6 +187,7 @@ for i, box in enumerate(blobs):
 print('warlord plates:', len(blobs))
 save(Image.open(ART / 'maps/courtyard-ground.png').convert('RGB'), 'maps/courtyard.jpg', 1024)
 
+import_town()
 if ONLY is not None:
     aspects = {**json.loads((OUT / 'aspects.json').read_text()), **aspects}
 (OUT / 'aspects.json').write_text(json.dumps(aspects, indent=2) + '\n')

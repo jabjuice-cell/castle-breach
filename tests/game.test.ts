@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { averageBot } from '../src/sim/bot';
 import { makeConfig } from '../src/sim/config';
 import { type Ball, type Enemy, Game, type Projectile } from '../src/sim/game';
-import { applyMeta, buyMeta, metaCost, newProgress } from '../src/sim/meta';
-import { contact } from '../src/sim/obstacles';
+import { META_UPGRADES, applyMeta, buyMeta, metaCost, metaDepth, metaLocked, newProgress } from '../src/sim/meta';
+import { type Contraption, footprint } from '../src/sim/contraptions';
+import { LEVEL_OBSTACLES, contact } from '../src/sim/obstacles';
+import { Tutorial } from '../src/sim/tutorial';
 import { formation, planSize, planWave, waveBudget } from '../src/sim/waves';
 
 function run(game: Game, seconds: number) {
@@ -13,7 +15,7 @@ function run(game: Game, seconds: number) {
 function enemy(over: Partial<Enemy>): Enemy {
   return {
     kind: 'grunt', x: 0, y: 10, vx: 0, vy: 0, hp: 10, maxHp: 10, state: 'march', standY: 25, timer: 99, phase: 0,
-    burn: 0, burnTime: 0, rally: 1, foe: null, block: null, slotX: 0, slotY: 0, goldMult: 1, lastBall: -1, stagger: 0, blasted: false,
+    burn: 0, burnTime: 0, rally: 1, foe: null, block: null, slotX: 0, slotY: 0, goldMult: 1, lastBall: -1, stagger: 0, blasted: false, shielded: false,
     ...over,
   };
 }
@@ -28,6 +30,7 @@ const quiet = () => makeConfig({
   waves: { orcCatapultsBase: 0, orcCatapultsPerWave: 0, towerWaves: [], warlordWaves: [] },
   capsules: { chance: 0 },
   fieldTrees: { counts: [0] },
+  contraptions: { enabled: false },
 });
 
 /** Every defender for sale, as once the town has unlocked them. */
@@ -52,7 +55,7 @@ function battle(seed = 1, cfg = quiet()) {
 
 function ball(game: Game, over: Partial<Ball>): Ball {
   const b: Ball = {
-    id: 999, kind: 'claimed', x: 0, y: 10, vx: 0, vy: -20, primary: false, power: 1, combo: 0, behind: false, heaved: false,
+    id: 999, kind: 'claimed', x: 0, y: 10, vx: 0, vy: -20, primary: false, power: 1, combo: 0, behind: false, heaved: false, perfect: false,
     stuck: false, stuckOffset: 0, stuckAt: 0, hitShieldAt: -99, born: 0, passing: null, lines: 0, milestone: 0, banked: false, spin: 0, ...over,
   };
   game.balls.push(b);
@@ -68,14 +71,14 @@ describe('waves', () => {
   it('follows the threat budget, in 2 to 6 marching blocks', () => {
     const cfg = makeConfig();
     const w1 = planWave(1, 1, cfg);
-    expect(w1.totals).toMatchObject({ grunt: 55, chucker: 0, rider: 0, orcCatapult: 3 });
+    expect(w1.totals).toMatchObject({ grunt: 45, chucker: 5, rider: 0, orcCatapult: 3 });
     expect(w1.groups).toHaveLength(3);
     expect(Math.round(waveBudget(10, cfg))).toBe(583);
     const blocks = (n: number) => planWave(n, 1, cfg).groups.filter((g) => g.members.some((m) => m.kind === 'grunt')).length;
     expect(blocks(25)).toBe(6);
     for (const n of [5, 12, 19]) {
       const t = planWave(n, 2, cfg).totals;
-      const threat = (t.grunt + t.barrel + t.runner) * 1 + t.chucker * 2 + t.rider * 2 + t.ogre * 12;
+      const threat = (t.grunt + t.barrel + t.runner + t.shieldOrc) * 1 + t.chucker * 2 + t.rider * 2 + t.ogre * 12;
       expect(threat).toBeCloseTo(Math.round(waveBudget(n, cfg)), 0);
     }
   });
@@ -96,6 +99,25 @@ describe('waves', () => {
     expect(slots[0]).toEqual({ dx: 0, dy: 0 });
     expect(slots.filter((s) => s.dy === 0)).toHaveLength(1);
     expect(formation('rect', 20, 1).every((s) => s.dy >= 0)).toBe(true);
+  });
+
+  it('pins formations are triangles, point leading', () => {
+    const slots = formation('pins', 10, 1);
+    const rows = [0, 1, 2, 3].map((r) => slots.filter((s) => Math.abs(s.dy - r * 1.4 * 0.9) < 1e-9).length);
+    expect(rows).toEqual([1, 2, 3, 4]);
+  });
+
+  it('plans shield orcs and drummers from wave 3 with consistent totals', () => {
+    const cfg = makeConfig();
+    let shields = 0;
+    for (const seed of [1, 2, 3, 4, 5]) {
+      const p = planWave(6, seed, cfg);
+      const listed = p.groups.reduce((s, g) => s + g.members.reduce((t, m) => t + m.count, 0), 0);
+      expect(listed).toBe(planSize(p));
+      shields += p.totals.shieldOrc;
+    }
+    expect(shields).toBeGreaterThan(0);
+    expect(planWave(2, 1, cfg).totals.shieldOrc).toBe(0);
   });
 
   it('spawns exactly the previewed enemies', () => {
@@ -184,6 +206,40 @@ describe('the shield and the balls', () => {
     expect(b.combo).toBe(1);
   });
 
+  it('a shield orc shrugs off front hits but not back hits, and its drummer holds the formation', () => {
+    const front = battle();
+    const s1 = enemy({ kind: 'shieldOrc', x: 5, y: 30, hp: 14, maxHp: 14, shielded: true });
+    front.enemies.push(s1);
+    const fb = ball(front, { x: 5, y: 29.2, vx: 0, vy: 20 });
+    const events: string[] = [];
+    front.step();
+    events.push(...front.events.map((e) => e.type));
+    expect(s1.hp).toBe(14);
+    expect(events).toContain('clang');
+    expect(fb.vy).toBeLessThan(0);
+
+    const back = battle();
+    const s2 = enemy({ kind: 'shieldOrc', x: 5, y: 30, hp: 14, maxHp: 14, shielded: true });
+    back.enemies.push(s2);
+    ball(back, { x: 5, y: 30.8, vx: 0, vy: -20 });
+    back.step();
+    expect(s2.hp).toBeLessThan(14);
+  });
+
+  it('killing the drummer drops shields and frees the block', () => {
+    const game = battle();
+    game.plan.groups = [{ time: 0, lane: 2, x: 0, shape: 'rect', members: [{ kind: 'shieldOrc', count: 3 }, { kind: 'drummer', count: 1 }] }];
+    game.step();
+    const block = game.blocks[0];
+    const shields = game.enemies.filter((e) => e.kind === 'shieldOrc');
+    expect(shields).toHaveLength(3);
+    expect(shields.every((e) => e.shielded && e.block === block)).toBe(true);
+    game.enemies.find((e) => e.kind === 'drummer')!.hp = 0;
+    game.step();
+    expect(shields.every((e) => !e.shielded && e.block === null && e.hp > 0)).toBe(true);
+    expect(game.events.some((e) => e.type === 'formationBreak')).toBe(true);
+  });
+
   it('the Royal Ball rebounds off the tree lines and the top edge, and pays double behind the lines', () => {
     const game = battle();
     const b = ball(game, { kind: 'royal', x: 18, y: 66, vx: 20, vy: 20 });
@@ -261,7 +317,7 @@ describe('the shield and the balls', () => {
 
   it('a heave just before impact is a power shot that smashes through a whole orc line', () => {
     const game = battle();
-    const block = { id: 1, x: 0, y: 20, shape: 'line' as const, members: [] as Enemy[], start: 8, spacing: 1, speed: 0, homeX: 0, zig: false, phase: 0, dirty: false, regroupAt: 99 };
+    const block = { id: 1, x: 0, y: 20, shape: 'line' as const, members: [] as Enemy[], start: 8, spacing: 1, speed: 0, homeX: 0, zig: false, phase: 0, dirty: false, regroupAt: 99, drummed: false };
     for (let i = 0; i < 8; i++) {
       const e = enemy({ x: -3.5 + i, y: 20, block, slotX: -3.5 + i, slotY: 0, hp: 20, maxHp: 20 });
       block.members.push(e);
@@ -299,6 +355,85 @@ describe('the shield and the balls', () => {
     expect(game.canHeave).toBe(false);
     run(game, 2);
     expect(game.canHeave).toBe(true);
+  });
+
+  it('a heave pressed just before the ball lands is a Perfect Return', () => {
+    const game = battle();
+    game.events = [];
+    expect(game.heave()).toBe(true);
+    run(game, 0.05);
+    const b = ball(game, { x: 0, y: 4.9, vy: -20 });
+    run(game, 0.05);
+    expect(b.perfect).toBe(true);
+    expect(b.heaved).toBe(true);
+    expect(game.perfects).toBe(1);
+    expect(game.events.some((e) => e.type === 'perfect')).toBe(true);
+  });
+
+  it('a heave pressed too early, or after the ball landed, is not perfect', () => {
+    const early = battle();
+    early.heave();
+    run(early, 0.5);
+    const e = ball(early, { x: 0, y: 4.9, vy: -20 });
+    run(early, 0.05);
+    expect(e.perfect).toBe(false);
+    expect(early.perfects).toBe(0);
+    const late = battle();
+    const l = ball(late, { x: 0, y: 4.9, vy: -20 });
+    run(late, 0.05);
+    late.events = [];
+    expect(late.heave()).toBe(true);
+    expect(l.heaved).toBe(true);
+    expect(l.perfect).toBe(false);
+    expect(late.perfects).toBe(0);
+    expect(late.events.some((ev) => ev.type === 'perfect')).toBe(false);
+  });
+
+  it('one press makes only one ball perfect', () => {
+    const game = battle();
+    game.heave();
+    run(game, 0.05);
+    ball(game, { id: 1, x: -2, y: 4.9, vy: -20 });
+    ball(game, { id: 2, x: 2, y: 4.9, vy: -20 });
+    run(game, 0.1);
+    expect(game.perfects).toBe(1);
+    expect(game.balls.filter((b) => b.perfect)).toHaveLength(1);
+  });
+
+  it('a perfect ball hits an orc for 1.5x, once, and an ordinary return is never perfect', () => {
+    const hpLoss = (press: boolean) => {
+      const cfg = quiet();
+      cfg.shield.heaveLines = 0;
+      const game = battle(1, cfg);
+      const orc = enemy({ x: 0, y: 20, hp: 100, maxHp: 100, state: 'stand' });
+      game.enemies.push(orc);
+      if (press) game.heave();
+      const b = ball(game, { x: 0, y: 4.9, vy: -20 });
+      run(game, 0.05);
+      expect(b.perfect).toBe(press);
+      for (let i = 0; i < 90 && orc.hp === 100; i++) game.step();
+      expect(orc.hp).toBeLessThan(100);
+      expect(b.perfect).toBe(false);
+      return 100 - orc.hp;
+    };
+    expect(hpLoss(true)).toBeCloseTo(hpLoss(false) * makeConfig().shield.perfectDamage, 5);
+  });
+
+  it('a perfect ball that returns to the shield unpressed is no longer perfect', () => {
+    const game = battle();
+    game.heave();
+    const b = ball(game, { x: 0, y: 4.9, vy: -20 });
+    run(game, 0.05);
+    expect(b.perfect).toBe(true);
+    // Back down onto the shield with no press in the window.
+    game.shield.heaveAt = -99;
+    b.x = 0;
+    b.y = 4.9;
+    b.vx = 0;
+    b.vy = -20;
+    run(game, 0.05);
+    expect(b.perfect).toBe(false);
+    expect(game.perfects).toBe(1);
   });
 
   it('bank shots: tower turrets (when switched on) bounce balls back up for +2 combo', () => {
@@ -368,10 +503,9 @@ describe('the shield and the balls', () => {
     run(game, 0.3);
     expect(game.shieldHalfWidth()).toBeCloseTo(w * 1.5);
     // A missed capsule just falls away.
-    game.capsules.push({ kind: 'tea', x: 18, y: 5 });
+    game.capsules.push({ kind: 'grog', x: 18, y: 5 });
     run(game, 2);
     expect(game.capsules).toHaveLength(0);
-    expect(game.effects.tea).toBe(0);
   });
 
   it('the siege tower is chipped apart floor by floor, tipping out orcs', () => {
@@ -502,6 +636,7 @@ describe('run loop', () => {
     expect(buyMeta(p, 'power')).toBe(false);
     for (let i = 0; i < 3; i++) buyMeta(p, 'recovery');
     buyMeta(p, 'masonry');
+    buyMeta(p, 'archers');
     buyMeta(p, 'fletching');
     buyMeta(p, 'treasury');
     const plain = new Game(1, applyMeta({}, 2), 2);
@@ -513,6 +648,29 @@ describe('run loop', () => {
     expect(game.mult('crossbow', 'damage')).toBeCloseTo(1.15);
     expect(game.gold).toBe(plain.gold + 60);
     expect(plain.gold).toBe(750);
+  });
+
+  it('the research tree gates upgrades behind their prerequisites, and capstones pay off', () => {
+    const p = newProgress();
+    p.renown = 5000;
+    expect(buyMeta(p, 'fletching')).toBe(false);
+    expect(metaLocked(p.meta, 'fletching')).toMatch(/Archery/);
+    expect(p.renown).toBe(5000);
+    expect(buyMeta(p, 'archers') && buyMeta(p, 'fletching')).toBe(true);
+    expect(metaLocked(p.meta, 'fletching')).toBe('');
+    expect(metaDepth('archers')).toBe(0);
+    expect(metaDepth('doctrine')).toBeGreaterThan(metaDepth('drill'));
+    // A capstone needs every branch leading to it.
+    for (let i = 0; i < 2; i++) buyMeta(p, 'fletching');
+    expect(buyMeta(p, 'doctrine')).toBe(false);
+    for (let i = 0; i < 2; i++) buyMeta(p, 'drill');
+    expect(buyMeta(p, 'doctrine')).toBe(true);
+    const plain = applyMeta({}, 0);
+    const cfg = applyMeta(p.meta, 0);
+    expect(cfg.callToArms.rate).toBe(plain.callToArms.rate + 0.5);
+    expect(cfg.callToArms.cooldown).toBe(plain.callToArms.cooldown - 10);
+    // Every prerequisite names a real upgrade, and the tree has no cycles.
+    for (const u of META_UPGRADES) expect(metaDepth(u.id)).toBeLessThan(META_UPGRADES.length);
   });
 
   it('sells defenders back: in full during the setup, at half price once the level is under way', () => {
@@ -670,7 +828,7 @@ describe('run loop', () => {
     run(game, 0.1);
     expect(game.wavesSurvived).toBe(1);
     expect(game.gold - afterCall).toBeCloseTo(game.cfg.grunt.gold + 12); // grunt + 10 + 2 x wave
-    expect(game.renownEarned).toBe(Math.round(6 * (1 + 0.02 * 8)));
+    expect(game.renownEarned).toBe(Math.round(6 * (1 + 0.02 * (game.cfg.waves.previewSeconds - 4))));
   });
 
   it('calling a wave early from its tail pays a bonus and starts the next wave', () => {
@@ -787,7 +945,19 @@ describe('run loop', () => {
     game.skipPreview();
     game.enemies.push(enemy({ x: 0, y: 10, state: 'stand' }), enemy({ kind: 'orcCatapult', x: 5, y: 50, state: 'stand', hp: 60, maxHp: 60 }));
     run(game, 0.05);
-    expect(game.defenders[0].aimY).toBe(50);
+    expect(game.defenders[0].aimY).toBeCloseTo(50, 0);
+  });
+
+  it('a standing orc catapult keeps creeping toward the wall', () => {
+    const game = new Game(1, makeConfig({ archers: { range: -100 } }));
+    game.endSetup();
+    game.plan.groups = [];
+    game.skipPreview();
+    const cat = enemy({ kind: 'orcCatapult', x: 5, y: 50, state: 'stand', hp: 60, maxHp: 60, timer: 99 });
+    game.enemies.push(cat);
+    run(game, 5);
+    expect(cat.y).toBeLessThan(47);
+    expect(cat.y).toBeGreaterThan(44);
   });
 
   it('the call to arms doubles every defender\'s rate of fire for a while, then rests', () => {
@@ -803,49 +973,71 @@ describe('run loop', () => {
     expect(game.canCallToArms).toBe(true);
   });
 
-  it('the tavern stands a round: the fallen soldiers get up and fight harder, then it rests', () => {
+  const town = (...kinds: string[]) => {
     const cfg = veteran(quiet());
-    const game = new Game(1, cfg);
-    game.gold = 1000;
-    expect(game.whyNotPower('tavern')).toMatch(/build it/);
-    cfg.unlocks.buildings = ['keep', 'tavern'];
-    game.place('soldiers', 0, -1.2);
-    game.endSetup();
-    game.plan.groups = [];
-    game.skipPreview();
-    game.enemies.push(enemy({ x: 0, y: 60, state: 'stand', hp: 1e9 }));
-    const fallen = game.soldiers[3];
-    fallen.hp = 0;
-    fallen.x = 7;
-    expect(game.usePower('tavern')).toBe(true);
-    expect(fallen.hp).toBe(fallen.maxHp);
-    expect([fallen.x, fallen.y]).toEqual([fallen.postX, fallen.postY]);
-    expect(game.powerActive('tavern')).toBe(true);
-    expect(game.usePower('tavern')).toBe(false);
-    run(game, cfg.tavern.seconds + 0.1);
-    expect(game.powerActive('tavern')).toBe(false);
+    cfg.unlocks.buildings = ['keep', ...kinds] as typeof cfg.unlocks.buildings;
+    return cfg;
+  };
+
+  it('the tavern makes soldiers hit harder', () => {
+    const dealt = (cfg = veteran(quiet())) => {
+      const game = new Game(1, cfg);
+      game.gold = 1000;
+      game.place('soldiers', 0, -1.2);
+      game.endSetup();
+      game.plan.groups = [];
+      game.skipPreview();
+      const grunt = enemy({ x: game.soldiers[0].x, y: game.soldiers[0].y + 0.5, state: 'march', hp: 1e9, maxHp: 1e9 });
+      game.enemies.push(grunt, enemy({ x: 0, y: 60, state: 'stand', hp: 1e9 }));
+      run(game, 0.5);
+      return 1e9 - grunt.hp;
+    };
+    expect(dealt(town('tavern'))).toBeGreaterThan(dealt() * 1.2);
   });
 
-  it('the tavern needs soldiers to stand a round for', () => {
-    const cfg = quiet();
-    cfg.unlocks.buildings = ['keep', 'tavern'];
-    const game = battle(1, cfg);
-    expect(game.canUse('tavern')).toBe(false);
-    expect(game.whyNotPower('tavern')).toMatch(/soldiers/);
+  it('the alchemist makes every ball burn like a flask with no power used', () => {
+    const splashed = (cfg = quiet()) => {
+      const game = battle(1, cfg);
+      game.enemies.push(enemy({ x: 0, y: 20, hp: 1e9, state: 'stand' }));
+      ball(game, { x: 0, y: 16, vx: 0, vy: 20 });
+      run(game, 0.3);
+      return game.events.some((e) => e.type === 'splash');
+    };
+    expect(splashed()).toBe(false);
+    expect(splashed(town('alchemist'))).toBe(true);
   });
 
-  it('the alchemist\'s brew turns every ball into a fire flask', () => {
-    const cfg = quiet();
-    cfg.unlocks.buildings = ['keep', 'alchemist'];
-    const game = battle(1, cfg);
-    expect(game.usePower('alchemist')).toBe(true);
-    expect(game.effects.flask).toBeCloseTo(game.time + cfg.alchemist.seconds);
-    expect(game.events.some((e) => e.type === 'power' && e.kind === 'alchemist')).toBe(true);
+  it('the blacksmith sharpens crossbows and archers, not soldiers', () => {
+    const plain = new Game(1, veteran(quiet()));
+    const smith = new Game(1, town('blacksmith'));
+    for (const k of ['crossbow', 'archers'] as const) expect(smith.mult(k, 'damage')).toBeCloseTo(plain.mult(k, 'damage') * 1.25);
+    expect(smith.mult('soldiers', 'damage')).toBe(plain.mult('soldiers', 'damage'));
+    expect(smith.mult('catapult', 'damage')).toBe(plain.mult('catapult', 'damage'));
+  });
+
+  it('the forge hits the catapult 40% harder', () => {
+    const plain = new Game(1, veteran(quiet()));
+    const forge = new Game(1, town('forge'));
+    expect(forge.mult('catapult', 'damage')).toBeCloseTo(plain.mult('catapult', 'damage') * 1.4);
+    expect(forge.mult('crossbow', 'damage')).toBe(plain.mult('crossbow', 'damage'));
+  });
+
+  it('the chapel mends damaged wall segments in battle but not destroyed ones', () => {
+    const game = battle(1, town('chapel'));
+    game.segmentHp[0] = 300;
+    game.segmentHp[1] = 0;
+    const mend = (game as unknown as { healWall(dt: number): void }).healWall.bind(game);
+    mend(1);
+    expect(game.segmentHp[0]).toBeCloseTo(300 + game.cfg.buildings.chapel.healPerSec, 5);
+    expect(game.segmentHp[1]).toBe(0);
+    mend(60);
+    expect(game.segmentHp[0]).toBe(game.cfg.wall.segmentHp);
   });
 
   it('the town\'s buildings come from its upgrades', () => {
     expect(applyMeta({}, 0).unlocks.buildings).toEqual(['keep']);
-    expect(applyMeta({ tavern: 1, alchemist: 1 }, 0).unlocks.buildings).toEqual(['keep', 'tavern', 'alchemist']);
+    const all = { tavern: 1, alchemist: 1, blacksmith: 1, chapel: 1, forge: 1 };
+    expect(applyMeta(all, 0).unlocks.buildings).toEqual(['keep', 'tavern', 'alchemist', 'blacksmith', 'chapel', 'forge']);
   });
 
   it('killing a warlord pays boss Renown', () => {
@@ -884,7 +1076,7 @@ describe('the field\'s structures', () => {
 
   it('balls bank off a boulder, and orcs are pushed round it', () => {
     const cfg = quiet();
-    cfg.obstacles.levels = [[{ look: 'boulder', x: 0, y: 30, r: 1.5 }]];
+    cfg.obstacles.levels = [[{ look: 'stone', x: 0, y: 30, r: 1.5 }]];
     const game = battle(1, cfg);
     const b = ball(game, { x: 0, y: 25, vx: 0, vy: 20 });
     run(game, 0.3);
@@ -894,6 +1086,24 @@ describe('the field\'s structures', () => {
     game.enemies.push(orc);
     run(game, 0.05);
     expect(Math.hypot(orc.x, orc.y - 30)).toBeGreaterThanOrEqual(1.5 + cfg.grunt.radius - 0.01);
+  });
+
+  it('every obstacle breaks to a plain hit, except stone, which needs a heaved ball', () => {
+    const cfg = quiet();
+    cfg.obstacles.levels = [[{ look: 'boulder', x: 0, y: 30, r: 1.5 }, { look: 'stone', x: -10, y: 30, r: 1 }]];
+    const game = battle(1, cfg);
+    const a = ball(game, { x: 0, y: 25, vx: 0, vy: 20 });
+    const s = ball(game, { id: 1000, x: -10, y: 25, vx: 0, vy: 20 });
+    run(game, 0.3);
+    expect(a.vy).toBeLessThan(0);
+    expect(s.vy).toBeLessThan(0);
+    expect(game.obstacles[0].down).toBe(true);
+    expect(game.obstacles[1].down).toBeFalsy();
+    game.balls.splice(game.balls.indexOf(s), 1);
+    const h = ball(game, { id: 1001, x: -10, y: 25, vx: 0, vy: 20, heaved: true });
+    run(game, 0.3);
+    expect(h.vy).toBeLessThan(0);
+    expect(game.obstacles[1].down).toBe(true);
   });
 
   it('a slanted wall throws a straight ball off sideways', () => {
@@ -967,5 +1177,179 @@ describe('batch D', () => {
     expect(two.cfg.field.halfWidth).toBeGreaterThan(one.cfg.field.halfWidth);
     // Sections stay about the same width.
     expect(two.segmentWidth()).toBeCloseTo(one.segmentWidth(), 0);
+  });
+});
+
+describe('pinball contraptions', () => {
+  /** A quiet battle with contraptions on and a hand-placed layout. */
+  function pin(layout: Contraption[]) {
+    const cfg = quiet();
+    cfg.contraptions.enabled = true;
+    cfg.contraptions.levels = [layout];
+    return battle(1, cfg);
+  }
+  const bell = (x: number, y: number): Contraption => ({ kind: 'bell', x, y, group: 0 });
+
+  it('a bumper kicks the ball away faster, flashes and pays combo', () => {
+    const game = pin([{ kind: 'bumper', x: 0, y: 30 }]);
+    const b = ball(game, { x: 0.2, y: 26, vx: 0, vy: 20 });
+    game.events = [];
+    run(game, 0.3);
+    expect(b.vy).toBeLessThan(0);
+    expect(Math.hypot(b.vx, b.vy)).toBeGreaterThanOrEqual(20);
+    expect(Math.hypot(b.vx, b.vy)).toBeLessThanOrEqual(game.cfg.balls.maxSpeed + 1e-6);
+    expect(b.combo).toBe(game.cfg.contraptions.bumper.combo);
+    expect(game.events.filter((e) => e.type === 'bumper')).toHaveLength(1);
+  });
+
+  it('three bells rung fire one volley, then reset', () => {
+    const game = pin([bell(-10, 30), bell(-7, 30), bell(-4, 30)]);
+    game.enemies.push(enemy({ x: 0, y: 40 }));
+    game.events = [];
+    [-10, -7, -4].forEach((x, i) => ball(game, { id: 10 + i, x, y: 25 - i * 4, vx: 0, vy: 20 }));
+    run(game, 1);
+    const rungEvents = game.events.filter((e) => e.type === 'bell');
+    expect(rungEvents).toHaveLength(3);
+    expect(game.events.filter((e) => e.type === 'bellVolley')).toHaveLength(1);
+    expect(game.projectiles.some((p) => p.kind === 'arrow') || game.events.some((e) => e.type === 'hit')).toBe(true);
+    expect(game.bellRung.every((t) => t >= 0)).toBe(true);
+    run(game, game.cfg.contraptions.bell.resetSeconds);
+    expect(game.bellRung.every((t) => t < 0)).toBe(true);
+    expect(game.events.filter((e) => e.type === 'bellVolley')).toHaveLength(1);
+  });
+
+  it('a ball over a ramp flies past an orc, lands about 14 up and splashes', () => {
+    const game = pin([{ kind: 'ramp', x: -9, y: 22, hw: 2.2, hh: 1.6, angle: 0 }]);
+    const blocker = enemy({ x: -9, y: 26, hp: 10 });
+    const target = enemy({ x: -9, y: 20.4 + game.cfg.contraptions.ramp.distance, hp: 50, maxHp: 50 });
+    game.enemies.push(blocker, target);
+    const b = ball(game, { x: -9, y: 18, vx: 0, vy: 20 });
+    game.events = [];
+    let airborne = false;
+    for (let i = 0; i < 90; i++) {
+      game.step();
+      if (b.air) airborne = true;
+      if (game.events.some((e) => e.type === 'rampLand')) break;
+    }
+    expect(airborne).toBe(true);
+    expect(blocker.hp).toBe(10);
+    const land = game.events.find((e) => e.type === 'rampLand');
+    expect(land).toBeDefined();
+    if (land?.type === 'rampLand') {
+      expect(Math.abs(land.y - 34.4)).toBeLessThan(1);
+      expect(land.hits).toBeGreaterThanOrEqual(1);
+    }
+    expect(game.events.some((e) => e.type === 'rampLaunch')).toBe(true);
+    expect(target.hp).toBeLessThan(50);
+    expect(b.air).toBeUndefined();
+  });
+
+  it('a ramp near the top lands at the top and the ball is not stuck', () => {
+    const game = pin([{ kind: 'ramp', x: 0, y: 60, hw: 2, hh: 1.5, angle: 0 }]);
+    const b = ball(game, { id: 5, kind: 'royal', x: 0, y: 56, vx: 0, vy: 30 });
+    game.events = [];
+    run(game, 1.5);
+    expect(b.air).toBeUndefined();
+    expect(b.y).toBeLessThan(game.cfg.field.topY);
+    expect(game.events.some((e) => e.type === 'rampLand')).toBe(true);
+    expect(game.events.some((e) => e.type === 'rebound')).toBe(true);
+  });
+
+  it('lays out cleanly: no overlaps, inside the field, off the road', () => {
+    for (const level of [0, 1, 2]) {
+      const game = new Game(3, applyMeta({}, level), level);
+      const k = game.cfg.contraptions;
+      const hw = game.cfg.field.halfWidth;
+      const bound = (o: { r?: number; hw?: number; hh?: number }) => o.r ?? Math.hypot(o.hw ?? 1, o.hh ?? 1);
+      const shapes = k.levels[level].map((c) => footprint(c, k));
+      const solid = LEVEL_OBSTACLES[level];
+      expect(game.contraptions.length).toBe(shapes.length);
+      shapes.forEach((a, i) => {
+        expect(Math.abs(a.x) + bound(a)).toBeLessThanOrEqual(hw);
+        expect(a.y).toBeGreaterThanOrEqual(15);
+        expect(a.y).toBeLessThanOrEqual(55);
+        expect(a.y).toBeLessThan(game.cfg.field.topY);
+        expect(Math.abs(a.x)).toBeGreaterThanOrEqual(6);
+        if (level > 0) expect(Math.abs(a.x) - bound(a)).toBeGreaterThan(0);
+        shapes.slice(i + 1).forEach((o) => expect(Math.hypot(a.x - o.x, a.y - o.y)).toBeGreaterThan(bound(a) + bound(o)));
+        solid.forEach((o) => expect(Math.hypot(a.x - o.x, a.y - o.y)).toBeGreaterThan(bound(a) + bound(o)));
+      });
+      // Trees keep clear of every fixture.
+      for (const seed of [1, 2, 3, 4, 5]) {
+        const g = new Game(seed, applyMeta({}, level), level);
+        for (const t of g.obstacles.filter((o) => o.look === 'tree')) {
+          for (const a of shapes) expect(Math.hypot(a.x - t.x, a.y - t.y)).toBeGreaterThan(bound(a) + (t.r ?? 0));
+        }
+      }
+    }
+  });
+
+  it('every level has two or three kinds of contraption', () => {
+    for (const level of [0, 1, 2]) {
+      const kinds = new Set(new Game(1, applyMeta({}, level), level).contraptions.map((c) => c.kind));
+      expect(kinds.size).toBeGreaterThanOrEqual(2);
+    }
+  });
+
+  it('two balls hit contraptions in the same step', () => {
+    const game = pin([{ kind: 'bumper', x: -8, y: 30 }, { kind: 'ramp', x: 8, y: 30, hw: 2, hh: 1.5, angle: 0 }]);
+    const a = ball(game, { id: 1, x: -8, y: 28.9, vx: 0, vy: 20 });
+    const b = ball(game, { id: 2, kind: 'pebble', x: 8, y: 28.6, vx: 0, vy: 20 });
+    game.events = [];
+    game.step();
+    expect(game.events.some((e) => e.type === 'bumper')).toBe(true);
+    expect(game.events.some((e) => e.type === 'rampLaunch')).toBe(true);
+    expect(a.vy).toBeLessThan(0);
+    expect(b.air).toBeDefined();
+  });
+});
+
+describe('the guided first wave', () => {
+  it('takes the orc catapults out and keeps the wall standing', () => {
+    const game = new Game(3);
+    const t = Tutorial.begin(game);
+    expect(game.plan.totals.orcCatapult).toBe(0);
+    expect(game.plan.groups.some((g) => g.members.some((m) => m.kind === 'orcCatapult'))).toBe(false);
+    game.endSetup();
+    game.skipPreview();
+    game.segmentHp[0] = 0;
+    run(game, 0.1);
+    expect(game.phase).toBe('battle');
+    expect(game.segmentHp[0]).toBeGreaterThan(0);
+    expect(t.done).toBe(false);
+  });
+
+  it('moves from serving to heaving to a Perfect Return, then lets go of the wall', () => {
+    const game = new Game(3);
+    const t = Tutorial.begin(game);
+    game.endSetup();
+    game.skipPreview();
+    expect(t.step).toBe('serve');
+    game.balls.forEach((b) => (b.stuck = true));
+    t.update(game);
+    expect(t.step).toBe('serve');
+    game.balls.forEach((b) => (b.stuck = false));
+    t.update(game);
+    expect(t.step).toBe('heave');
+    game.parries = 1;
+    t.update(game);
+    expect(t.step).toBe('perfect');
+    game.perfects = 1;
+    expect(t.update(game)).toBe(true);
+    expect(game.forgiving).toBe(false);
+  });
+
+  it('gives up waiting on a step after a while', () => {
+    const game = new Game(3);
+    const t = Tutorial.begin(game);
+    game.endSetup();
+    game.skipPreview();
+    game.parries = 1;
+    t.update(game);
+    t.update(game);
+    expect(t.step).toBe('perfect');
+    game.time += 31;
+    t.update(game);
+    expect(t.done).toBe(true);
   });
 });

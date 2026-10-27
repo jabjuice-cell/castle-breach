@@ -3,16 +3,25 @@ import callWaveUrl from './assets/icons/call-wave.png';
 import goldUrl from './assets/icons/gold.png';
 import renownUrl from './assets/icons/renown.png';
 import shieldUrl from './assets/icons/shield.png';
+import gruntPortrait from './assets/sprites/enemy-grunt.webp';
+import chuckerPortrait from './assets/sprites/enemy-chucker.webp';
+import runnerPortrait from './assets/sprites/enemy-runner.webp';
+import riderPortrait from './assets/sprites/enemy-rider.webp';
+import catapultPortrait from './assets/sprites/enemy-catapult.webp';
+import ogrePortrait from './assets/sprites/enemy-ogre.webp';
+import warlordPortrait from './assets/sprites/enemy-warlord.webp';
+import barrelPortrait from './assets/sprites/powder-barrel.webp';
 import queenUrl from './assets/characters/queen.webp';
 import queenAngryUrl from './assets/characters/queen-angry.webp';
-import { queenAdvice, queenCross } from './queen';
+import { queenAdvice, queenCross, queenVerdict } from './queen';
 import { BattleScene, CAPSULE_LOOK, type PlanPreview, QUALITIES, type Quality } from './render/scene';
 import { Sounds } from './render/sound';
 import { BUILDINGS } from './render/world';
 import { DEFENDER_KINDS, type DefenderKind, type Ground, type PlacedKind, SPECIAL_NAMES, type Track, USEFUL_TRACKS, groundAt, stackAt } from './sim/defenders';
-import { BUILDING_KINDS, type BuildingKind, Game, STEP } from './sim/game';
-import { META_GROUPS, META_UPGRADES, type MetaGroup, type Progress, applyMeta, buyMeta, metaCost, newProgress } from './sim/meta';
-import { ENEMY_KINDS, type EnemyKind, planSize } from './sim/waves';
+import { BUILDING_KINDS, type PowerKind, Game, STEP } from './sim/game';
+import { Tutorial } from './sim/tutorial';
+import { META_GROUPS, META_UPGRADES, type MetaGroup, type Progress, applyMeta, buyMeta, metaCost, metaDepth, metaLocked, newProgress } from './sim/meta';
+import { ENEMY_KINDS, type EnemyKind } from './sim/waves';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -44,6 +53,8 @@ const calm = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 const canvas = $<HTMLCanvasElement>('game');
 const progress = loadProgress();
+/** The guided first wave, while a brand-new player has not finished it. */
+let tutorial: Tutorial | null = null;
 let game = newLevel();
 const view = new BattleScene(canvas, game, quality);
 
@@ -191,19 +202,20 @@ window.addEventListener('pointermove', (e) => {
   canvas.style.cursor = hovered ? 'pointer' : '';
 });
 
-// ---- the town's buildings: click one (or press its key) for its power ----------
+// ---- the keep: click it (or press Q) for the call to arms ----------
 
-const POWER_KEYS: Record<string, BuildingKind> = { KeyQ: 'keep', KeyW: 'tavern', KeyE: 'alchemist' };
-const POWER_KEY: Record<BuildingKind, string> = { keep: 'Q', tavern: 'W', alchemist: 'E' };
-/** The building under the mouse, lit up while it's there. */
-let hovered: BuildingKind | null = null;
+const POWER_KEYS: Record<string, PowerKind> = { KeyQ: 'keep' };
+const POWER_KEY: Record<PowerKind, string> = { keep: 'Q' };
+/** The keep under the mouse, lit up while it's there. */
+let hovered: PowerKind | null = null;
 
-function buildingAt(e: PointerEvent | MouseEvent): BuildingKind | null {
+function buildingAt(e: PointerEvent | MouseEvent): PowerKind | null {
   const r = canvas.getBoundingClientRect();
-  return view.pickBuilding(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+  const b = view.pickBuilding(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+  return b === 'keep' ? b : null;
 }
 
-function usePower(kind: BuildingKind) {
+function usePower(kind: PowerKind) {
   if (!game.usePower(kind)) toast(`${BUILDINGS[kind].name}: ${game.whyNotPower(kind)}`);
 }
 canvas.addEventListener('pointerdown', (e) => {
@@ -248,7 +260,7 @@ canvas.addEventListener('pointerdown', (e) => {
     }
   }
   selected = null;
-  // A click on the keep, tavern or alchemist uses its power instead of heaving.
+  // A click on the keep sounds the call to arms instead of heaving.
   const b = buildingAt(e);
   if (b && running) {
     usePower(b);
@@ -365,6 +377,8 @@ const ENEMY_NAMES: Record<EnemyKind, [string, string]> = {
   orcCatapult: ['orc catapult', 'orc catapults'],
   ogre: ['ogre', 'ogres'],
   warlord: ['WARLORD', 'WARLORDS'],
+  shieldOrc: ['Shield Orc', 'Shield Orcs'],
+  drummer: ['Drummer', 'Drummers'],
 };
 
 const DEFENDER_INFO: Record<DefenderKind, { name: string; blurb: string }> = {
@@ -386,6 +400,8 @@ const ENEMY_TRICKS: Partial<Record<EnemyKind, string>> = {
   orcCatapult: 'catapults lob boulders: block them to get balls',
   ogre: 'ogres take a beating and stun their row when they fall',
   warlord: 'the Warlord bats balls back and hurries his orcs',
+  shieldOrc: 'Shields stop balls head-on. Bank a shot around the side or behind.',
+  drummer: 'Kill the drummer and the formation breaks: shields drop and the block scatters.',
 };
 
 function trickText() {
@@ -444,12 +460,19 @@ const hud = {
   bottom: $('bottom'),
   queen: $('queen'),
   queenText: $('queenText'),
+  coach: $('coach'),
+  coachText: $('coachText'),
   buildTags: $('buildTags'),
 };
 
 /** Lane markers over the spawn line while the next wave lines up: what is coming down each lane. */
 /** The plan the labels were made for (the object, not its number: a restarted level plans the same wave number afresh). */
 let markerPlan: object | null = null;
+/** The portrait on each wave label: the group's lead enemy. */
+const PORTRAITS: Partial<Record<string, string>> = {
+  grunt: gruntPortrait, shieldOrc: gruntPortrait, drummer: gruntPortrait, chucker: chuckerPortrait, runner: runnerPortrait, rider: riderPortrait,
+  orcCatapult: catapultPortrait, ogre: ogrePortrait, warlord: warlordPortrait, barrel: barrelPortrait,
+};
 function updateMarkers() {
   const show = game.phase === 'preview' || game.phase === 'setup';
   if (!show) {
@@ -466,7 +489,14 @@ function updateMarkers() {
         const lead = g.members.find((m) => m.kind !== 'grunt')?.kind ?? 'grunt';
         const total = g.members.reduce((s, m) => s + m.count, 0);
         el.className = `marker ${lead}`;
-        el.textContent = g.members.length === 1 && g.members[0].kind !== 'grunt' ? count(total, lead) : `${total}${g.members.some((m) => m.kind === 'orcCatapult') ? ' + catapults' : ''}`;
+        const portrait = PORTRAITS[lead];
+        if (portrait) {
+          const img = document.createElement('img');
+          img.src = portrait;
+          img.alt = '';
+          el.append(img);
+        }
+        el.append(g.members.length === 1 && g.members[0].kind !== 'grunt' ? count(total, lead) : `${total}${g.members.some((m) => m.kind === 'orcCatapult') ? ' + catapults' : ''}`);
         return el;
       }),
     );
@@ -538,6 +568,8 @@ function toast(text: string) {
 const BAR_HOLD = 0.45;
 const BAR_DRAIN = 0.5;
 let wallLag: { frac: number; hold: number }[] = [];
+let lastStartHtml = '';
+let lastEarlyHtml = '';
 
 function updateHud(dt: number) {
   const c = game.cfg;
@@ -568,7 +600,6 @@ function updateHud(dt: number) {
   const left = (until: number) => Math.ceil(until - game.time);
   if (game.time < game.effects.banner) fx.push(`${CAPSULE_LOOK.banner.emoji} ${left(game.effects.banner)}s`);
   if (game.time < game.effects.flask) fx.push(`${CAPSULE_LOOK.flask.emoji} ${left(game.effects.flask)}s`);
-  if (game.time < game.effects.tea) fx.push(`${CAPSULE_LOOK.tea.emoji} ${left(game.effects.tea)}s`);
   if (game.time < game.effects.trick) fx.push(`${CAPSULE_LOOK.trick.emoji} ${left(game.effects.trick)}s`);
   if (game.stickyCatches > 0) fx.push(`${CAPSULE_LOOK.sticky.emoji} ×${game.stickyCatches}`);
   const fxText = fx.join('  ');
@@ -611,6 +642,7 @@ function updateHud(dt: number) {
   // Out of the way while the camera looks up the field at the horde.
   hud.preview.hidden = !previewing || view.lookAhead > 0;
   hud.queen.hidden = !previewing;
+  updateCoach();
   if (previewing) {
     const setup = game.phase === 'setup';
     const wave = `${game.plan.boss ? 'Boss wave! ' : ''}Wave ${game.levelWave}`;
@@ -621,7 +653,8 @@ function updateHud(dt: number) {
     const face = queenCross(game) ? queenAngryUrl : queenUrl;
     const portrait = hud.queen.querySelector('img')!;
     if (!portrait.src.endsWith(face)) portrait.src = face;
-    hud.startNow.innerHTML = setup ? 'To battle! <kbd>Enter</kbd>' : `${icon('call')}Start now, +${game.earlyCallGold()} gold <kbd>Enter</kbd>`;
+    const startHtml = setup ? 'To battle! <kbd>Enter</kbd>' : `${icon('call')}Start now, +${game.earlyCallGold()} gold <kbd>Enter</kbd>`;
+    if (startHtml !== lastStartHtml) hud.startNow.innerHTML = lastStartHtml = startHtml;
   }
 
   // Over each building: its power, its key, and a bar that refills while it rests.
@@ -634,6 +667,16 @@ function updateHud(dt: number) {
     el.hidden = !running || view.lookAhead > 0;
     if (el.hidden) return;
     const built = game.hasBuilding(kind);
+    const span = el.firstElementChild as HTMLElement;
+    const bar = el.lastElementChild!.firstElementChild as HTMLElement;
+    if (kind !== 'keep') {
+      // Passive buildings: just the name and the perk, once built.
+      const html = built ? `<b>${b.name}</b> ${b.power}` : `${b.name}: build it in the town`;
+      if (span.innerHTML !== html) span.innerHTML = html;
+      el.className = `btag${built ? ' ready' : ' locked'}`;
+      bar.style.transform = 'scaleX(0)';
+      return;
+    }
     const pw = game.powers[kind];
     const t = game.powerTiming(kind);
     const live = game.powerActive(kind);
@@ -650,17 +693,18 @@ function updateHud(dt: number) {
             : ready
               ? `<b>${b.power}</b> <kbd>${POWER_KEY[kind]}</kbd>`
               : `${b.power}: ${game.whyNotPower(kind)}`;
-    const span = el.firstElementChild as HTMLElement;
     if (span.innerHTML !== html) span.innerHTML = html;
     el.className = `btag${!built ? ' locked' : live ? ' live' : ready ? ' ready' : ''}${hovered === kind ? ' hover' : ''}`;
-    const bar = el.lastElementChild!.firstElementChild as HTMLElement;
     bar.style.transform = `scaleX(${!built ? 0 : live ? (pw.until - game.time) / t.seconds : 1 - rest / t.cooldown})`;
   });
   if (hovered) view.hoverBuilding(hovered);
 
   const tail = game.phase === 'battle' && game.canCallEarly();
   hud.callEarly.hidden = !tail;
-  if (tail) hud.callEarly.innerHTML = `${icon('call')}Sound the horn: call wave ${game.wave + 1} now, +${game.earlyCallGold()} gold <kbd>Enter</kbd>`;
+  if (tail) {
+    const earlyHtml = `${icon('call')}Sound the horn: call wave ${game.wave + 1} now, +${game.earlyCallGold()} gold <kbd>Enter</kbd>`;
+    if (earlyHtml !== lastEarlyHtml) hud.callEarly.innerHTML = lastEarlyHtml = earlyHtml;
+  }
 
   const lord = game.enemies.find((e) => e.kind === 'warlord');
   const tower = game.tower;
@@ -819,7 +863,7 @@ function startBattle() {
 
 hud.buildTags.addEventListener('click', (e) => {
   const tag = (e.target as HTMLElement).closest<HTMLElement>('[data-building]');
-  if (tag) usePower(tag.dataset.building as BuildingKind);
+  if (tag?.dataset.building === 'keep') usePower('keep');
 });
 
 for (const el of [hud.tray, hud.defPop, hud.wallBars]) {
@@ -836,7 +880,8 @@ function loadProgress(): Progress {
   const p = newProgress();
   try {
     const saved = localStorage.getItem('castle-breach:progress');
-    if (saved) return { ...p, ...JSON.parse(saved) };
+    // A save from before the tutorial belongs to someone who has already played.
+    if (saved) return { ...p, tutorialDone: true, ...JSON.parse(saved) };
     // Renown banked before the town existed carries over.
     p.renown = Number(localStorage.getItem('castle-breach:renown') ?? 0) || 0;
   } catch {
@@ -850,7 +895,25 @@ function saveProgress() {
 
 function newLevel(): Game {
   const level = progress.levelsBeaten;
-  return new Game(Math.floor(Math.random() * 1e9), applyMeta(progress.meta, level), level);
+  const g = new Game(Math.floor(Math.random() * 1e9), applyMeta(progress.meta, level), level);
+  tutorial = !progress.tutorialDone && level === 0 ? Tutorial.begin(g) : null;
+  return g;
+}
+
+/** Shows the Queen's coaching line over the battle, and banks the tutorial as done when it ends. */
+function updateCoach() {
+  const coaching = tutorial !== null && running && game.phase === 'battle';
+  if (tutorial && running && tutorial.update(game)) {
+    progress.tutorialDone = true;
+    saveProgress();
+    toast('Tutorial done. The real orcs are coming!');
+    tutorial = null;
+  }
+  hud.coach.hidden = !(coaching && tutorial);
+  if (coaching && tutorial) {
+    const line = tutorial.text;
+    if (hud.coachText.textContent !== line) hud.coachText.textContent = line;
+  }
 }
 
 function startLevel() {
@@ -875,15 +938,21 @@ function townHtml(): string {
     .map((n, i) => `<span class="${i < next ? 'done' : i === next ? 'next' : ''}">${i + 1}. ${n}</span>`)
     .join('');
   const groups = META_GROUPS.map((g) => {
+    // Roots first, each branch indented under what it grows from.
     const ups = META_UPGRADES.filter((u) => u.group === g)
+      .sort((a, b) => metaDepth(a.id) - metaDepth(b.id))
       .map((u) => {
         const lv = progress.meta[u.id] ?? 0;
         const cost = metaCost(progress.meta, u.id);
+        const locked = metaLocked(progress.meta, u.id);
         const pips = u.costs.map((_, i) => (i < lv ? '◆' : '◇')).join('');
-        const btn = Number.isFinite(cost)
-          ? `<button type="button" data-meta="${u.id}" ${cost > progress.renown ? 'disabled' : ''}>${icon('renown')}${cost}</button>`
-          : '<small>Done</small>';
-        return `<div class="up"><div class="row"><b>${u.name}</b>${btn}</div><small>${u.blurb}</small><span class="pips">${pips}</span></div>`;
+        const btn = !Number.isFinite(cost)
+          ? '<small>Done</small>'
+          : locked
+            ? '<small class="need">Locked</small>'
+            : `<button type="button" data-meta="${u.id}" ${cost > progress.renown ? 'disabled' : ''}>${icon('renown')}${cost}</button>`;
+        const need = locked && Number.isFinite(cost) ? `<small class="need">Needs ${locked}</small>` : '';
+        return `<div class="up${locked && !lv ? ' locked' : ''}" style="--depth:${metaDepth(u.id)}"><div class="row"><b>${u.name}</b>${btn}</div><small>${u.blurb}</small>${need}<span class="pips">${pips}</span></div>`;
       })
       .join('');
     return `<section><h2>${GROUP_NAMES[g]}</h2>${ups}</section>`;
@@ -934,6 +1003,10 @@ function showEnd(won: boolean, segment = 0) {
   $('lostKills').textContent = String(game.kills);
   $('lostCombo').textContent = String(game.bestCombo);
   $('lostRenown').textContent = String(game.renownEarned);
+  $('lostParries').textContent = String(game.parries);
+  $('lostPerfects').textContent = String(game.perfects);
+  $('lostGold').textContent = String(Math.round(game.goldEarned));
+  $('lostQueen').textContent = queenVerdict(game, won);
   $('endTitle').textContent = finale ? 'The wall holds!' : won ? `${names[game.level]} held!` : 'Breached!';
   $('lostText').textContent = finale
     ? 'All three levels beaten back. The orcs are already planning something stupider. A new run starts from level 1, with every upgrade you bought.'
@@ -1064,6 +1137,11 @@ function frame(now: number) {
           else sounds.clink();
           if (ev.trick) floater('Trick shot!', ev.x, game.cfg.shield.y, 'trick', 0.9);
           break;
+        case 'perfect':
+          // Heave timed just right: a second, heavier clang layered over the parry's.
+          sounds.clang(true);
+          floater('PERFECT!', ev.x, game.cfg.shield.y, 'trick', 0.9);
+          break;
         case 'rebound':
           floater('REBOUND!', ev.x, ev.y - 3, 'rebound', 1.1);
           sounds.clink();
@@ -1091,6 +1169,32 @@ function frame(now: number) {
             hitStop = Math.max(hitStop, 0.05);
             if (ev.hits >= 3) floater(`SLAM! ×${ev.hits}`, ev.x, game.cfg.shield.y + 1, 'smash', 0.9);
           }
+          break;
+        case 'clang':
+          sounds.clang(false);
+          break;
+        case 'formationBreak':
+          sounds.thunk();
+          floater('FORMATION BROKEN!', ev.x, ev.y + 1.5, 'smash', 1);
+          break;
+        case 'bumper':
+          sounds.clang(false);
+          floater('BUMP!', ev.x, ev.y + 1.5, 'bank', 0.8);
+          break;
+        case 'bell':
+          sounds.bell(ev.rung);
+          floater('DING!', ev.x, ev.y + 1.5, 'trick', 0.8);
+          break;
+        case 'bellVolley':
+          sounds.chime(2);
+          floater('VOLLEY!', ev.x, ev.y + 4, 'smash', 1.2);
+          break;
+        case 'rampLaunch':
+          sounds.thunk();
+          break;
+        case 'rampLand':
+          sounds.boom();
+          floater('DROP!', ev.x, ev.y + 1, 'smash', 1);
           break;
         case 'treeDown':
           sounds.crunch(12);
@@ -1122,16 +1226,8 @@ function frame(now: number) {
           toast(`Wave ${ev.wave} beaten back, +${ev.gold} gold`);
           break;
         case 'power':
-          if (ev.kind === 'keep') {
-            sounds.horn();
-            toast('To arms!');
-          } else if (ev.kind === 'tavern') {
-            sounds.cheer();
-            toast('A round on the house! The soldiers are back on their feet');
-          } else {
-            sounds.brew();
-            toast('Fire brew! Every ball burns');
-          }
+          sounds.horn();
+          toast('To arms!');
           break;
         case 'calledEarly':
           toast(`Early call! +${ev.gold} gold`);
@@ -1149,7 +1245,7 @@ function frame(now: number) {
   updateGhost();
   sounds.scrape(running && game.phase === 'battle' ? Math.abs(game.shield.vx) / game.cfg.shield.speed : 0);
   // The horde swells with the crowd on the field (and mutters while it waits up the far end).
-  const crowd = running && !game.over ? (game.phase === 'battle' ? game.enemies.length : 0.3 * planSize(game.plan)) : 0;
+  const crowd = running && !game.over ? (game.phase === 'battle' ? game.enemies.length : 0) : 0;
   sounds.horde(Math.sqrt(Math.min(1, crowd / 500)));
   view.render(dt, now / 1000);
   updateHud(dt);

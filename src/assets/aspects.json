@@ -11,7 +11,6 @@
   "defender-catapult": 0.9427,
   "tower-crossbow": 1.0213,
   "keep": 0.9027,
-  "tavern": 0.9779,
   "bolt": 0.9414,
   "royal-shield": 1.008,
   "royal-shield-hit": 0.999,
@@ -96,5 +95,10 @@
   "plate-10": 1.8824,
   "plate-11": 2.0513,
   "plate-12": 1.7391,
-  "courtyard": 1.0
+  "courtyard": 1.0,
+  "town-tavern": 1.0159,
+  "town-alchemist": 0.8646,
+  "town-blacksmith": 1.1797,
+  "town-chapel": 0.9036,
+  "town-forge": 1.0364
 }

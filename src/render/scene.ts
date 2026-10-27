@@ -50,7 +50,7 @@ import { ballistaModel } from './models';
 import { VoxelOrcs } from './orcs';
 import { VoxBatch } from './voxels';
 import { ShieldModel } from './shield';
-import { BUILDINGS, World } from './world';
+import { World } from './world';
 import {
   GroundCanvas, type SpriteArt, blobTexture, capsuleTexture, detailTexture, glowTexture, imageSprite, puffTexture, loadImage, setAnisotropy,
 } from './textures';
@@ -73,7 +73,7 @@ export const QUALITIES: Quality[] = ['low', 'medium', 'high'];
 const QUALITY: Record<Quality, { pixelRatio: number; groundWidth: number; cell: number; debris: number; upload: number; fx: number }> = {
   low: { pixelRatio: 1, groundWidth: 1280, cell: 1, debris: 400, upload: 0.5, fx: 0.35 },
   medium: { pixelRatio: 2, groundWidth: 2048, cell: 0.6, debris: 900, upload: 0.25, fx: 0.7 },
-  high: { pixelRatio: 3, groundWidth: 2560, cell: 0.4, debris: 1500, upload: 0.15, fx: 1 },
+  high: { pixelRatio: 2, groundWidth: 2560, cell: 0.4, debris: 1500, upload: 0.15, fx: 1 },
 };
 
 const VOXEL = 0.5;
@@ -91,6 +91,7 @@ const MAX_BARRELS = 300;
 /** Firework palettes. */
 const GOLD = ['#fff6c8', '#ffd34a', '#ffb43a'];
 const STEEL = ['#ffffff', '#d8f4ff', '#9cc8ff'];
+const ORANGE = ['#ffd08a', '#ff9a2a', '#ff7a1a'];
 const FIRE = ['#fff2a8', '#ffb43a', '#ff6a2a', '#e2331f'];
 const WOOD = ['#c8945a', '#8a5a2e', '#f2d29a'];
 const ROYAL = ['#2a4fb0', '#6a8cff', '#ffd34a', '#ffffff'];
@@ -103,7 +104,6 @@ export const CAPSULE_LOOK: Record<CapsuleKind, { color: string; emoji: string; n
   banner: { color: '#3a6ad8', emoji: '🚩', name: 'Banner: wide shield' },
   flask: { color: '#4fd06a', emoji: '🧪', name: 'Flask: exploding balls' },
   sticky: { color: '#a060e0', emoji: '🧤', name: 'Gauntlet: catch and aim' },
-  tea: { color: '#3ab8b0', emoji: '☕', name: "Queen's tea: slow time" },
   trick: { color: '#e2533f', emoji: '💀', name: 'Orc trick! Shield shrinks' },
 };
 
@@ -150,15 +150,17 @@ const HEAVE_SECONDS = 0.15;
 const SHIELD_FLASH_SECONDS = 0.25;
 /** Balls fly at this height, and are drawn this much bigger than their hit size so they read from up here. */
 const BALL_Y = 0.9;
+const SHIELD_HIDE_DEPTH = 3.4; // how far past the shield a ball is still hidden by it
+const PHASE_IN = 1.5; // seconds an enemy takes to phase in after spawning
 const BALL_DRAW = 1.7;
 
 /** Sprite height relative to the orc grunt (and defenders), from the art guide. */
-const SIZE: Record<EnemyKind, number> = { grunt: 1, chucker: 1, barrel: 1, runner: 0.85, rider: 1.4, orcCatapult: 2, ogre: 2.5, warlord: 3 };
+const SIZE: Record<EnemyKind, number> = { grunt: 1, chucker: 1, barrel: 1, runner: 0.85, rider: 1.4, orcCatapult: 2, ogre: 2.5, warlord: 3, shieldOrc: 1, drummer: 1.15 };
 const KILL_COLOR: Record<EnemyKind, string> = {
-  grunt: '#6f9a3c', chucker: '#8a9a42', barrel: '#8a5a2e', runner: '#9ac040', rider: '#6d4a32', orcCatapult: '#7a5530', ogre: '#8d9a6a', warlord: '#5d8a34',
+  grunt: '#6f9a3c', chucker: '#8a9a42', barrel: '#8a5a2e', runner: '#9ac040', rider: '#6d4a32', orcCatapult: '#7a5530', ogre: '#8d9a6a', warlord: '#5d8a34', shieldOrc: '#7a7a82', drummer: '#b8452a',
 };
 /** Kinds that climb the wall before hacking at it (the rest smash it from the ground). */
-const CLIMBERS = new Set<EnemyKind>(['grunt', 'chucker', 'barrel', 'runner', 'rider']);
+const CLIMBERS = new Set<EnemyKind>(['grunt', 'chucker', 'barrel', 'runner', 'rider', 'shieldOrc', 'drummer']);
 
 /** The castle's shape. Towers stand on the wall joints; defenders on them stand higher. */
 const WALL_H = 3;
@@ -299,6 +301,7 @@ export class BattleScene {
   private stackMesh: THREE.InstancedMesh | null = null;
   /** The coming wave, mustered beyond the top of the field while it waits (drawn only, not in the sim). */
   private horde: Enemy[] = [];
+  private firstSeen = new Map<Enemy, number>();
   private hordeFor = -1;
   /** Looking up the field at the horde: 0 is the battle view, 1 is the far end. lookAhead is where it is heading. */
   lookAhead = 0;
@@ -316,6 +319,8 @@ export class BattleScene {
   private soldierSprites: THREE.InstancedMesh;
   private archerSprites: THREE.InstancedMesh;
   private shadows: THREE.InstancedMesh;
+  /** Ground shadows under balls flying over a ramp. */
+  private ballShadows: THREE.InstancedMesh;
   /** Thrown things, as camera-facing sprites. */
   private thrown: Record<'rock' | 'boulder' | 'stone', THREE.InstancedMesh>;
   /** Bolts and arrows, as flat sprites lying along their flight. */
@@ -351,6 +356,9 @@ export class BattleScene {
   private shieldShadow: THREE.Mesh;
   private shieldJolt = 0;
   private shieldFlashT = 1;
+  /** A short bright streak on the shield showing which way a ball was deflected; a small pool, fading. */
+  private bounceCues: { mesh: THREE.Mesh; born: number }[] = [];
+  private bounceCueNext = 0;
   /** Time since the last heave, for the shove animation. */
   private heaveT = 9;
   private puffTex = puffTexture();
@@ -467,6 +475,9 @@ export class BattleScene {
       grunt: imageSprite(gruntUrl, aspects['enemy-grunt'], ORC_OUTLINE),
       // Placeholder: a grunt carrying a barrel, until sprites/enemy-barrel.webp arrives.
       barrel: imageSprite(gruntUrl, aspects['enemy-grunt'], ORC_OUTLINE),
+      // Placeholders: plain grunt art for the shield orc and the drummer.
+      shieldOrc: imageSprite(gruntUrl, aspects['enemy-grunt'], ORC_OUTLINE),
+      drummer: imageSprite(gruntUrl, aspects['enemy-grunt'], ORC_OUTLINE),
       chucker: imageSprite(chuckerUrl, aspects['enemy-chucker'], ORC_OUTLINE),
       runner: imageSprite(runnerUrl, aspects['enemy-runner'], ORC_OUTLINE),
       rider: imageSprite(riderUrl, aspects['enemy-rider'], ORC_OUTLINE),
@@ -491,6 +502,11 @@ export class BattleScene {
     this.shadows.frustumCulled = false;
     this.shadows.position.y = 0.04;
     this.scene.add(this.shadows);
+    this.ballShadows = new THREE.InstancedMesh(shadowGeo, this.shadows.material, MAX_BALLS);
+    this.ballShadows.frustumCulled = false;
+    this.ballShadows.position.y = 0.05;
+    this.ballShadows.count = 0;
+    this.scene.add(this.ballShadows);
 
     this.thrown = {
       rock: makeSprites(imageSprite(rockUrl, aspects.rock), 0.4, 600, true),
@@ -544,6 +560,14 @@ export class BattleScene {
     );
     this.shieldShadow.position.y = 0.05;
     this.scene.add(this.shieldShadow);
+    const cueGeo = new THREE.PlaneGeometry(1, 0.3).translate(0.5, 0, 0).rotateX(-Math.PI / 2);
+    for (let i = 0; i < 4; i++) {
+      const mesh = new THREE.Mesh(cueGeo, new THREE.MeshBasicMaterial({ color: '#fff2a8', transparent: true, depthWrite: false, depthTest: false }));
+      mesh.visible = false;
+      mesh.renderOrder = 4;
+      this.bounceCues.push({ mesh, born: -99 });
+      this.scene.add(mesh);
+    }
 
     // Balls: shiny spheres drawn over the field and the orcs (but under the shield), each with an additive halo.
     const r = game.cfg.balls.radius;
@@ -946,26 +970,28 @@ export class BattleScene {
           if (ev.parry) this.flash(0.18, '#fff6c8');
           break;
         }
+        case 'shieldBounce': {
+          const cue = this.bounceCues[this.bounceCueNext++ % this.bounceCues.length];
+          cue.born = this.time;
+          cue.mesh.position.set(ev.x, 0.6, -ev.y);
+          cue.mesh.rotation.y = Math.atan2(ev.vy, ev.vx);
+          cue.mesh.scale.set(1.2, 1, 1);
+          cue.mesh.visible = true;
+          break;
+        }
+        case 'perfect':
+          // A perfectly timed heave: a compact extra burst of orange on top of the parry.
+          fw.burst(ev.x, BALL_Y + 0.4, -sy - 0.3, { count: 36, colors: ORANGE, speed: 12, life: 0.4, size: 0.36, up: 0.5, gravity: 14 });
+          this.shieldJolt = Math.max(this.shieldJolt, 1.2);
+          this.shake = Math.max(this.shake, 0.35);
+          break;
         case 'power': {
-          const b = BUILDINGS[ev.kind];
           this.world.glow(ev.kind, 1);
           this.world.cheer();
-          if (ev.kind === 'keep') {
-            // Gold and blue bursts off every tower top, and a warm flash.
-            this.flash(0.25, '#ffe9a0');
-            for (const st of this.game.stacks) {
-              fw.burst(st.x, this.standHeight(st.x, TOWER_Z) + 0.5, -TOWER_Z, { count: 30, colors: ['#ffd34a', '#2a4fb0', '#ffffff'], speed: 7, life: 0.9, size: 0.45, up: 1, gravity: 8 });
-            }
-          } else if (ev.kind === 'tavern') {
-            // Foam and gold over the tavern, and a cheer along the soldiers' line.
-            this.flash(0.15, '#fff2c0');
-            fw.burst(b.x, b.top, b.z, { count: 60, colors: ['#fff6dc', '#ffd34a', '#e8a040'], speed: 9, life: 1, size: 0.5, up: 1, gravity: 9 });
-            for (const sol of this.game.soldiers) if (Math.random() < 0.15) fw.burst(sol.x, 1.2, -sol.y, { count: 4, colors: ['#ffd34a'], speed: 3, life: 0.5, size: 0.3, up: 1, gravity: 6 });
-          } else {
-            // A green fireball out of the alchemist's chimney, and every ball catches light.
-            this.flash(0.2, '#c8ffb0');
-            fw.burst(b.x, b.top, b.z, { count: 80, colors: ['#7dff3a', '#c8ff6a', '#ffffff'], speed: 11, life: 1.1, size: 0.55, up: 1, gravity: 6 });
-            for (const ball of this.game.balls) fw.burst(ball.x, BALL_Y, -ball.y, { count: 20, colors: ['#ff8a2a', '#ffd34a'], speed: 5, life: 0.5, size: 0.4, gravity: 0 });
+          // Gold and blue bursts off every tower top, and a warm flash.
+          this.flash(0.25, '#ffe9a0');
+          for (const st of this.game.stacks) {
+            fw.burst(st.x, this.standHeight(st.x, TOWER_Z) + 0.5, -TOWER_Z, { count: 30, colors: ['#ffd34a', '#2a4fb0', '#ffffff'], speed: 7, life: 0.9, size: 0.45, up: 1, gravity: 8 });
           }
           break;
         }
@@ -974,6 +1000,26 @@ export class BattleScene {
           break;
         case 'obstacle':
           this.world.chipObstacle(ev.index, ev.x, -ev.y);
+          break;
+        case 'bumper':
+          fw.burst(ev.x, 1.4, -ev.y, { count: 26, colors: ['#ffd34a', '#ffffff', '#5ad8ff'], speed: 9, life: 0.45, size: 0.4, up: 0.4, gravity: 6 });
+          this.shake = Math.max(this.shake, 0.12);
+          break;
+        case 'bell':
+          fw.burst(ev.x, 2.2, -ev.y, { count: 14, colors: ['#ffd34a', '#fff2a8'], speed: 5, life: 0.5, size: 0.3, up: 0.5, gravity: 2, twinkle: true });
+          break;
+        case 'bellVolley':
+          this.flash(0.12, '#ffd34a');
+          fw.burst(ev.x, 2, -2, { count: 40, colors: ['#ffd34a', '#ffffff'], speed: 8, life: 0.6, size: 0.4, up: 0.8, gravity: 4 });
+          break;
+        case 'rampLaunch':
+          this.burst(ev.x, 0.6, -ev.y, 5, '#a8783f', 7);
+          break;
+        case 'rampLand':
+          this.spawnEffect('explosion', ev.x, -ev.y, 0.35, ev.radius * 0.8);
+          this.ground.decal(ev.x, -ev.y, ev.radius * 0.5, this.crater, 0.7);
+          this.burst(ev.x, 0.4, -ev.y, 8, '#9a8f78', 7);
+          this.shake = Math.max(this.shake, 0.3);
           break;
         case 'treeDown':
           this.world.fellTree(ev.index);
@@ -1047,6 +1093,15 @@ export class BattleScene {
           break;
         case 'bounce':
           if (Math.random() < 0.6) fw.burst(ev.x, 0.9, -ev.y, { count: 8, colors: STEEL, speed: 6, life: 0.3, size: 0.3, gravity: 6 });
+          break;
+        case 'clang':
+          fw.burst(ev.x, 0.9, -ev.y, { count: 12, colors: STEEL, speed: 7, life: 0.3, size: 0.3, gravity: 6 });
+          this.spawnEffect('impact', ev.x, -ev.y, 0.2, 0.9);
+          break;
+        case 'formationBreak':
+          fw.burst(ev.x, 1, -ev.y, { count: 40, colors: [...WOOD, ...STEEL], speed: 9, life: 0.6, size: 0.4, up: 0.5 });
+          this.spawnEffect('impact', ev.x, -ev.y, 0.2, 1.8);
+          this.shake = Math.max(this.shake, 0.3);
           break;
         case 'ballLost':
           fw.burst(ev.x, 1.5, -0.2, { count: 30, colors: ['#ff6a5a', '#ffb43a', '#8c8a80'], speed: 7, life: 0.5, size: 0.4, up: 0.5 });
@@ -1192,10 +1247,25 @@ export class BattleScene {
     m.scale.setScalar(w);
     m.position.set(g.shield.x, SHIELD_LIFT + shove * 0.4 + this.shieldJolt * 0.15, -g.cfg.shield.y - shove * 1.6 + this.shieldJolt * 0.2);
     m.rotation.set(SHIELD_LEAN - shove * 0.3 + this.shieldJolt * 0.04, 0, this.shieldJolt * 0.03 * Math.sin(this.time * 60));
+    for (const cue of this.bounceCues) {
+      const k = 1 - (this.time - cue.born) / 0.35;
+      cue.mesh.visible = k > 0;
+      if (k > 0) (cue.mesh.material as THREE.MeshBasicMaterial).opacity = k;
+    }
     this.shieldFlashT += dt;
     const glint = Math.max(0, 1 - this.shieldFlashT / SHIELD_FLASH_SECONDS);
+    // A ball about to land lights the shield dimly, then brightly inside the heave window: click now.
+    let cue = 0;
+    if (g.phase === 'battle' && g.canHeave) {
+      const win = g.heaveWindow();
+      for (const b of g.balls) {
+        if (b.stuck || b.vy >= 0) continue;
+        const eta = (b.y - g.cfg.shield.y) / -b.vy;
+        if (eta > 0 && eta <= win * 3) cue = Math.max(cue, eta <= win ? 0.9 : 0.35);
+      }
+    }
     // Dimmed while it recovers from a heave.
-    this.shieldModel.shade(glint * glint, g.canHeave ? 1 : 0.72);
+    this.shieldModel.shade(Math.max(glint * glint, cue), 1, g.canHeave ? 1 : Math.max(0, 1 - (g.shield.readyAt - g.time) / g.heaveCooldown()));
     // Dragged hard along the ground, its point throws a spray of sparks behind it.
     const drag = g.phase === 'battle' ? g.shield.vx / g.cfg.shield.speed : 0;
     if (Math.abs(drag) > 0.2) {
@@ -1228,11 +1298,22 @@ export class BattleScene {
     const r = g.cfg.balls.radius;
     let n = 0;
     let h = 0;
+    let sh = 0;
     for (const b of g.balls) {
       if (n >= MAX_BALLS) break;
+      // A ball just beyond the shield (from the castle's view) is hidden by it.
+      if (!b.air && Math.abs(b.x - g.shield.x) < g.shieldHalfWidth() * SHIELD_OVERHANG && b.y > g.cfg.shield.y - 0.2 && b.y < g.cfg.shield.y + SHIELD_HIDE_DEPTH) continue;
       const color = this.ballColor(b);
-      const size = (b.kind === 'pebble' ? 0.75 : b.kind === 'royal' ? 1.25 : 1) * BALL_DRAW;
-      tmpV.set(b.x, BALL_Y, -b.y);
+      let size = (b.kind === 'pebble' ? 0.75 : b.kind === 'royal' ? 1.25 : 1) * BALL_DRAW;
+      let y = BALL_Y;
+      if (b.air) {
+        // Over a ramp: up in an arc, bigger, with its shadow left on the ground.
+        const arc = Math.sin(Math.PI * Math.min(1, Math.max(0, (b.y - b.air.fromY) / Math.max(0.1, b.air.landY - b.air.fromY))));
+        y += arc * 4;
+        size *= 1 + arc * 0.6;
+        this.ballShadows.setMatrixAt(sh++, tmpM.compose(tmpV.set(b.x, 0, -b.y), tmpQ.identity(), tmpS.setScalar(1.6 - arc * 0.5)));
+      }
+      tmpV.set(b.x, y, -b.y);
       this.balls.setMatrixAt(n, tmpM.compose(tmpV, tmpQ.setFromAxisAngle(FORWARD, this.time * 3 + b.id), tmpS.setScalar(size)));
       this.balls.setColorAt(n++, tmpC.set(color));
       const glow = (b.heaved && b.lines > 0 ? 6 : b.combo >= 10 ? 5 : 3.5) * r * size;
@@ -1254,6 +1335,8 @@ export class BattleScene {
     }
     this.balls.count = n;
     this.halos.count = h;
+    this.ballShadows.count = sh;
+    this.ballShadows.instanceMatrix.needsUpdate = true;
     for (const m of [this.balls, this.halos]) {
       m.instanceMatrix.needsUpdate = true;
       if (m.instanceColor) m.instanceColor.needsUpdate = true;
@@ -1893,7 +1976,7 @@ export class BattleScene {
         const x = Math.max(-g.cfg.field.halfWidth + 0.5, Math.min(g.cfg.field.halfWidth - 0.5, grp.x + (kind === 'orcCatapult' ? (i % 3 - 1) * 3 : s.dx)));
         this.horde.push({
           kind, x, y, vx: 0, vy: 0, hp: 1, maxHp: 1, state: 'stand', standY: y, timer: 0, phase: (i * 0.618) % 1,
-          burn: 0, burnTime: 0, rally: 1, foe: null, block: null, slotX: 0, slotY: 0, goldMult: 1, lastBall: -1, stagger: 0, blasted: false,
+          burn: 0, burnTime: 0, rally: 1, foe: null, block: null, slotX: 0, slotY: 0, goldMult: 1, lastBall: -1, stagger: 0, blasted: false, shielded: kind === 'shieldOrc',
         });
       });
       depth[grp.lane] = back + deepest + 4;
@@ -1910,12 +1993,20 @@ export class BattleScene {
     const voxel = this.orcStyle === 'voxel';
     const sets = voxel ? this.voxelOrcs.meshes : this.sprites;
     const lordCounts = this.warlordSprites.map(() => 0);
-    for (const e of horde.length ? [...this.game.enemies, ...horde] : this.game.enemies) {
+    const alive = horde.length ? [...this.game.enemies, ...horde] : this.game.enemies;
+    for (const k of this.firstSeen.keys()) if (!alive.includes(k)) this.firstSeen.delete(k);
+    for (const e of alive) {
+      let born = this.firstSeen.get(e);
+      if (born === undefined) this.firstSeen.set(e, (born = time));
+      const t = Math.min(1, (time - born) / PHASE_IN);
+      const phase = t >= 1 ? 1 : Math.max(0.05, 1 - (1 - t) * (1 - t));
       // The warlord is always his painted art, which loses armour as he loses health.
       const lord = e.kind === 'warlord';
       const stage = lord ? this.warlordStage(e) : 0;
-      const mesh = lord ? this.warlordSprites[stage] : sets[e.kind];
-      const i = lord ? lordCounts[stage]++ : counts[e.kind]++;
+      // A shield orc whose shield is down is drawn as a plain grunt-model orc.
+      const mk: EnemyKind = e.kind === 'shieldOrc' && !e.shielded ? 'grunt' : e.kind;
+      const mesh = lord ? this.warlordSprites[stage] : sets[mk];
+      const i = lord ? lordCounts[stage]++ : counts[mk]++;
       if (i >= mesh.instanceMatrix.count) continue;
       const size = SIZE[e.kind];
       const moving = e.state === 'march';
@@ -1950,8 +2041,13 @@ export class BattleScene {
         tmpS.set(2 - squash, squash, 1);
         tmpQ.copy(camQ).multiply(tmpQ2.setFromAxisAngle(FORWARD, roll));
       }
+      tmpS.multiplyScalar(phase);
       mesh.setMatrixAt(i, tmpM.compose(tmpV, tmpQ, tmpS));
-      mesh.setColorAt(i, burning ? tmpC.setRGB(1, 0.6, 0.3) : e.stagger > 0 ? tmpC.setRGB(0.7, 0.7, 1) : tmpC.setRGB(1, hurt, hurt));
+      // Orcs attacking the wall pulse red, with now and then a puff of dust and sparks at the stones.
+      const atWall = e.state === 'wall';
+      const rage = atWall ? 0.55 + 0.25 * Math.sin(time * 8 + e.phase * 9) : 1;
+      mesh.setColorAt(i, burning ? tmpC.setRGB(1, 0.6, 0.3) : e.stagger > 0 ? tmpC.setRGB(0.7, 0.7, 1) : tmpC.setRGB(1, hurt * rage, hurt * rage));
+      if (atWall && Math.random() < 0.05) this.fireworks.burst(e.x, tmpV.y + 1.2, -e.y - 0.6, { count: 3, colors: ['#ff7a3a', '#c9b79a'], speed: 3, life: 0.35, size: 0.3, gravity: 6 });
       if (e.kind === 'barrel' && voxel) {
         if (Math.random() < 0.35) this.fireworks.burst(e.x, tmpV.y + 1.8, -e.y - 0.55, { count: 1, colors: FIRE, speed: 1.5, life: 0.3, size: 0.25, gravity: -2 });
       } else if (e.kind === 'barrel' && barrels < MAX_BARRELS) {

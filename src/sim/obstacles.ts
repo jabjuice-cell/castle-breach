@@ -17,9 +17,14 @@ export interface Obstacle {
   hw?: number;
   hh?: number;
   angle?: number;
-  /** Goes down to one hit from a ball (a tree), and is then gone for the rest of the level. */
+  /** Goes down to one hit from a ball (a tree), and is then gone for the rest of the level. Every obstacle breaks, but see needsHeave. */
   breakable?: boolean;
   down?: boolean;
+}
+
+/** Stone structures only break to a heaved (charged) ball; the rest go down to any hit. */
+export function needsHeave(o: Obstacle): boolean {
+  return o.look === 'stone' || o.look === 'ruin';
 }
 
 /** The point of o's outline nearest (px, py), and whether (px, py) is inside it. */

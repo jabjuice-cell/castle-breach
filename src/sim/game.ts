@@ -3,7 +3,8 @@ import {
   type Defender, type DefenderKind, type Levels, type PlacedKind, type Track,
   type Stack, emptyLevels, groundAt, jointStacks, onWall, stackAt, trackMult, upgradeCost,
 } from './defenders';
-import { type Obstacle, contact, plantTrees } from './obstacles';
+import { type Contraption, footprint } from './contraptions';
+import { type Obstacle, contact, needsHeave, nearestOn, plantTrees } from './obstacles';
 import { Rng } from './rng';
 import { type EnemyKind, type Shape, type WavePlan, formation, planSize, planWave } from './waves';
 
@@ -52,7 +53,12 @@ export interface Enemy {
   stagger: number;
   /** Caught in a barrel blast: if it is a barrel too, it goes off after the chain delay. */
   blasted: boolean;
+  /** Shield orcs: front hits clang off while their block's drummer lives. */
+  shielded: boolean;
 }
+
+/** Units that march behind the foot formation and are not part of its shape. */
+const REAR_KINDS: ReadonlySet<EnemyKind> = new Set<EnemyKind>(['orcCatapult', 'drummer']);
 
 /** The siege tower boss: floors of plank bricks, bottom floor first. */
 export interface SiegeTower {
@@ -83,6 +89,8 @@ export interface Block {
   phase: number;
   dirty: boolean;
   regroupAt: number;
+  /** Spawned with a drummer that is still alive. */
+  drummed: boolean;
 }
 
 export interface Soldier {
@@ -137,6 +145,11 @@ export interface Ball {
   /** True after it bounces off the top edge, until it next touches the shield: hits pay double. */
   behind: boolean;
   heaved: boolean;
+  /**
+   * Empowered by a Perfect Return: the next damaging impact is harder and may start Orc Bowling.
+   * Kept through scenery rebounds; cleared by that impact, an ordinary shield return, or losing the ball.
+   */
+  perfect: boolean;
   /** Riding on the shield (being served, or caught by the sticky gauntlet). */
   stuck: boolean;
   stuckOffset: number;
@@ -153,6 +166,8 @@ export interface Ball {
   banked: boolean;
   /** Curve from the shield's movement: how fast its path bends (radians per second, + is anticlockwise). */
   spin: number;
+  /** Flying over a ramp: ignores orcs and scenery until it passes landY (or the time runs out). */
+  air?: { fromY: number; landY: number; until: number };
 }
 
 /** A tower turret jutting out in front of the shield: a round bumper for bank shots. */
@@ -164,7 +179,7 @@ export interface Bumper {
   manned: boolean;
 }
 
-export const CAPSULE_KINDS = ['grog', 'banner', 'flask', 'sticky', 'tea', 'trick'] as const;
+export const CAPSULE_KINDS = ['grog', 'banner', 'flask', 'sticky', 'trick'] as const;
 export type CapsuleKind = (typeof CAPSULE_KINDS)[number];
 
 export interface Capsule {
@@ -173,9 +188,11 @@ export interface Capsule {
   y: number;
 }
 
-/** The town's buildings behind the wall: click one in battle for its power. */
-export const BUILDING_KINDS = ['keep', 'tavern', 'alchemist'] as const;
+/** The town's buildings behind the wall: the keep has a power, the rest are passive boons. */
+export const BUILDING_KINDS = ['keep', 'tavern', 'alchemist', 'blacksmith', 'chapel', 'forge'] as const;
 export type BuildingKind = (typeof BUILDING_KINDS)[number];
+/** Buildings with a click power. */
+export type PowerKind = 'keep';
 
 export const SHIELD_TRACKS = ['width', 'window', 'power', 'recovery', 'plating'] as const;
 export type ShieldTrack = (typeof SHIELD_TRACKS)[number];
@@ -184,6 +201,8 @@ export type GameEvent =
   | { type: 'kill'; x: number; y: number; kind: EnemyKind }
   /** A ball or boulder hit the shield. parry: a heave power hit. trick: an edge-zone trick shot. */
   | { type: 'deflect'; x: number; y: number; parry: boolean; trick: boolean }
+  /** A ball left the shield at (x, y) with this velocity: the render shows the outgoing angle. */
+  | { type: 'shieldBounce'; x: number; y: number; vx: number; vy: number }
   /** A heave smashed through an orc line from x0 to x1. */
   | { type: 'line'; x0: number; x1: number; y: number }
   | { type: 'bank'; x: number; y: number }
@@ -198,11 +217,22 @@ export type GameEvent =
   | { type: 'plank'; x: number; y: number }
   | { type: 'floorDown'; x: number; y: number; floorsLeft: number }
   | { type: 'heave'; x: number }
-  /** A building's power: the keep's call to arms, the tavern's round, the alchemist's brew. */
-  | { type: 'power'; kind: BuildingKind }
+  /** A heave pressed just before contact: the ball is empowered (a Perfect Return). */
+  | { type: 'perfect'; x: number; y: number }
+  /** The keep's call to arms. */
+  | { type: 'power'; kind: PowerKind }
   /** A ball bounced off a tree line (side: -1 left, 1 right), or off one of the field's structures. */
   | { type: 'edge'; x: number; y: number; side: number }
   | { type: 'obstacle'; x: number; y: number; index: number }
+  /** A ball hit a spring bumper (contraption index). */
+  | { type: 'bumper'; x: number; y: number; index: number }
+  /** A ball rang a bell: rung is how many of its set are now ringing. */
+  | { type: 'bell'; x: number; y: number; index: number; rung: number }
+  /** A whole set of bells rang: the castle looses a free volley from the wall at x. */
+  | { type: 'bellVolley'; x: number; y: number; arrows: number }
+  | { type: 'rampLaunch'; x: number; y: number; index: number }
+  /** A ball dropped off a ramp: hits orcs were struck within radius. */
+  | { type: 'rampLand'; x: number; y: number; radius: number; hits: number }
   /** A ball smashed one of the trees on the field (obstacle index). */
   | { type: 'treeDown'; x: number; y: number; index: number }
   /** A heave slammed the shield into the orcs at the wall: hits orcs struck. */
@@ -214,6 +244,10 @@ export type GameEvent =
   /** combo: the ball's combo after this hit (only for ball hits). */
   | { type: 'hit'; x: number; y: number; combo?: number }
   | { type: 'bounce'; x: number; y: number }
+  /** A ball struck a shield orc's raised shield: no damage. */
+  | { type: 'clang'; x: number; y: number }
+  /** A block's drummer fell and the formation scattered. */
+  | { type: 'formationBreak'; x: number; y: number }
   | { type: 'splash'; x: number; y: number; radius: number }
   /** damage: how hard, so a boulder can throw more stone about than a pebble. */
   | { type: 'wallHit'; x: number; y: number; segment: number; damage: number }
@@ -282,6 +316,8 @@ export class Game {
   kills = 0;
   /** Power hits landed. */
   parries = 0;
+  /** Perfect Returns this run. */
+  perfects = 0;
   /** Enemy boulders and rocks the shield blocked, and those that got through. */
   blocked = 0;
   missed = 0;
@@ -298,18 +334,28 @@ export class Game {
   /** Barrel blasts waiting to go off (chain reactions run through this queue). */
   private blasts: { x: number; y: number; at: number; mult: number; ball: number }[] = [];
   /** Capsule effects: the game time each one runs out. */
-  effects = { banner: 0, flask: 0, tea: 0, trick: 0 };
+  effects = { banner: 0, flask: 0, trick: 0 };
   stickyCatches = 0;
   /** Orc tricks the shield plating can still shrug off this wave. */
   platingLeft = 0;
   private salvoTimer = 0;
   /** When the Royal Ball is served again after being lost. */
   royalDue = 0;
+  /** While true no wall segment can fall (the tutorial wave sets it). */
+  forgiving = false;
 
   /** Renown bonus for each wave called early, by wave number. */
   private earlyBonus = new Map<number, number>();
   /** The structures standing on this level's field. */
   readonly obstacles: Obstacle[];
+  /** The pinball fixtures on this level's field, and each one's outline (same index). */
+  readonly contraptions: Contraption[];
+  private readonly shapes: Obstacle[];
+  /** When each bell was rung (-1: not ringing), by contraption index, and when each ringing set resets (by group). */
+  readonly bellRung: number[];
+  private bellReset = new Map<number, number>();
+  /** When each bumper was last hit, by contraption index, so the render can squash it. */
+  readonly bumperHit: number[];
   private rng: Rng;
   private grid = new Map<number, Enemy[]>();
 
@@ -325,7 +371,12 @@ export class Game {
     this.stacks = jointStacks(cfg);
     // Copies: trees come down during the level, and the next level starts with its own.
     const fixed = (cfg.obstacles.levels[Math.min(level, cfg.obstacles.levels.length - 1)] ?? []).map((o) => ({ ...o }));
-    this.obstacles = [...fixed, ...plantTrees(cfg.fieldTrees, level, cfg.field.halfWidth, seed, fixed)];
+    const k = cfg.contraptions;
+    this.contraptions = k.enabled ? (k.levels[Math.min(level, k.levels.length - 1)] ?? []).map((c) => ({ ...c })) : [];
+    this.shapes = this.contraptions.map((c) => footprint(c, k));
+    this.bellRung = this.contraptions.map(() => -1);
+    this.bumperHit = this.contraptions.map(() => -99);
+    this.obstacles = [...fixed, ...plantTrees(cfg.fieldTrees, level, cfg.field.halfWidth, seed, [...fixed, ...this.shapes])];
     this.wave = this.cleared = this.firstWave - 1;
     this.plan = planWave(this.firstWave, seed, cfg);
   }
@@ -455,9 +506,9 @@ export class Game {
     this.events.push({ type: 'slam', x: s.x, hits });
   }
 
-  /** Each building's power: when it can be used again, and until when it lasts. */
-  powers: Record<BuildingKind, { readyAt: number; until: number }> = {
-    keep: { readyAt: 0, until: 0 }, tavern: { readyAt: 0, until: 0 }, alchemist: { readyAt: 0, until: 0 },
+  /** The buildings' powers: when each can be used again, and until when it lasts. */
+  powers: Record<PowerKind, { readyAt: number; until: number }> = {
+    keep: { readyAt: 0, until: 0 },
   };
 
   /** The keep's call to arms. */
@@ -478,52 +529,38 @@ export class Game {
     return this.cfg.unlocks.buildings.includes(kind);
   }
 
-  powerActive(kind: BuildingKind): boolean {
+  powerActive(kind: PowerKind): boolean {
     return this.time < this.powers[kind].until;
   }
 
   /** The power's length and rest, in seconds. */
-  powerTiming(kind: BuildingKind): { seconds: number; cooldown: number } {
-    return kind === 'keep' ? this.cfg.callToArms : this.cfg[kind];
+  powerTiming(_kind: PowerKind): { seconds: number; cooldown: number } {
+    return this.cfg.callToArms;
   }
 
-  /** Why a building's power can't be used right now, or '' if it can. */
-  whyNotPower(kind: BuildingKind): string {
+  /** Why the power can't be used right now, or '' if it can. */
+  whyNotPower(kind: PowerKind): string {
     if (!this.hasBuilding(kind)) return 'build it in the town';
     if (this.phase !== 'battle') return 'ready when the battle starts';
     if (this.time < this.powers[kind].readyAt) return `resting, ${Math.ceil(this.powers[kind].readyAt - this.time)} s`;
-    if (kind === 'tavern' && !this.defenders.some((d) => d.kind === 'soldiers')) return 'needs soldiers';
     return '';
   }
 
-  canUse(kind: BuildingKind): boolean {
+  canUse(kind: PowerKind): boolean {
     return this.whyNotPower(kind) === '';
   }
 
   /**
-   * Clicks a building. The keep sounds the horn: for a few seconds every defender shoots twice
-   * as fast and the soldiers run. The tavern stands a round: the fallen soldiers come back, and
-   * everyone fights harder. The alchemist's brew turns every ball into a fire flask.
-   * Then the building needs a long rest.
+   * Sounds the keep's horn: for a few seconds every defender shoots twice
+   * as fast and the soldiers run. Then the keep needs a long rest.
    */
-  usePower(kind: BuildingKind): boolean {
+  usePower(kind: PowerKind): boolean {
     if (!this.canUse(kind)) return false;
     const t = this.powerTiming(kind);
     this.powers[kind] = { readyAt: this.time + t.cooldown, until: this.time + t.seconds };
     if (kind === 'keep') {
       // Everyone fires at once as the horn sounds.
       for (const d of this.defenders) d.timer = Math.min(d.timer, 0.1);
-    } else if (kind === 'tavern') {
-      for (const s of this.soldiers) {
-        // The fallen come back to their posts from the tavern.
-        if (s.hp <= 0) {
-          s.x = s.postX;
-          s.y = s.postY;
-        }
-        s.hp = s.maxHp;
-      }
-    } else {
-      this.effects.flask = Math.max(this.effects.flask, this.time + t.seconds);
     }
     this.events.push({ type: 'power', kind });
     return true;
@@ -873,7 +910,20 @@ export class Game {
   mult(kind: DefenderKind, track: Track): number {
     const b = this.cfg.bonuses;
     const arms = track === 'rate' && this.armsActive ? this.cfg.callToArms.rate : 1;
-    return trackMult(this.levels[kind][track], this.cfg) * (track === 'damage' ? b.damage : track === 'rate' ? b.rate * arms : 1);
+    const bc = this.cfg.buildings;
+    let town = 1;
+    if (track === 'damage') {
+      if ((kind === 'crossbow' || kind === 'archers') && this.hasBuilding('blacksmith')) town = bc.blacksmith.arrowDamage;
+      else if (kind === 'catapult' && this.hasBuilding('forge')) town = bc.forge.catapultDamage;
+    }
+    return trackMult(this.levels[kind][track], this.cfg) * (track === 'damage' ? b.damage * town : track === 'rate' ? b.rate * arms : 1);
+  }
+
+  /** The chapel mends damaged (not destroyed) wall segments during battle. */
+  private healWall(dt: number): void {
+    if (this.phase !== 'battle' || !this.hasBuilding('chapel')) return;
+    const max = this.cfg.wall.segmentHp;
+    this.segmentHp = this.segmentHp.map((hp) => (hp > 0 && hp < max ? Math.min(max, hp + this.cfg.buildings.chapel.healPerSec * dt) : hp));
   }
 
   crossbowPierce(): number {
@@ -922,30 +972,31 @@ export class Game {
     if (this.over || this.phase === 'setup') return;
     this.time += dt;
     this.updateShield(dt);
-    // Queen's tea slows everything but the shield.
-    const edt = this.time < this.effects.tea ? dt * this.cfg.capsules.teaSpeed : dt;
 
     if (this.phase === 'preview') {
       this.phaseTimer -= dt;
       if (this.phaseTimer <= 0) this.startWave();
     } else {
-      this.phaseTimer += edt;
+      this.phaseTimer += dt;
       this.spawnDue();
     }
 
     this.rebuildGrid();
-    this.updateBlocks(edt);
-    this.updateEnemies(edt);
-    this.updateSoldiers(edt);
-    this.updateDefenders(edt);
-    this.updateProjectiles(edt);
-    this.updateTower(edt);
-    this.updateSalvo(edt);
-    this.updateBalls(edt);
-    this.updateCapsules(edt);
+    this.updateBlocks(dt);
+    this.updateEnemies(dt);
+    this.updateSoldiers(dt);
+    this.updateDefenders(dt);
+    this.updateProjectiles(dt);
+    this.updateTower(dt);
+    this.updateSalvo(dt);
+    this.updateBalls(dt);
+    this.updateCapsules(dt);
     this.removeDead();
     this.processBlasts();
+    this.healWall(dt);
 
+    // The guided first wave: the wall bends but cannot break.
+    if (this.forgiving) this.segmentHp.forEach((hp, i) => (this.segmentHp[i] = Math.max(hp, 1)));
     const broken = this.segmentHp.findIndex((hp) => hp <= 0);
     if (broken >= 0) {
       this.phase = 'lost';
@@ -1032,23 +1083,29 @@ export class Game {
     while (this.nextGroup < groups.length && groups[this.nextGroup].time <= this.phaseTimer) {
       const g = groups[this.nextGroup++];
       const lead = g.members[0].kind;
-      const foot = g.members.filter((m) => m.kind !== 'orcCatapult');
+      const foot = g.members.filter((m) => !REAR_KINDS.has(m.kind));
       const footCount = foot.reduce((s, m) => s + m.count, 0);
-      const radius = Math.max(...g.members.map((m) => (m.kind === 'orcCatapult' ? 0 : this.cfg[m.kind].radius)));
+      const radius = Math.max(...g.members.map((m) => (REAR_KINDS.has(m.kind) ? 0 : this.cfg[m.kind].radius)));
       const spacing = Math.max(radius, 0.45) * 2 * this.cfg.march.spacing;
       const speed = lead === 'runner' || lead === 'rider' || lead === 'ogre' || lead === 'warlord' ? this.cfg[lead].speed : this.cfg.march.speed;
       const block: Block = {
         id: this.nextBlockId++, x: g.x, y: this.cfg.field.spawnY, shape: g.shape, members: [], start: 0,
-        spacing, speed, homeX: g.x, zig: lead === 'rider', phase: this.rng.next() * Math.PI * 2, dirty: false, regroupAt: 0,
+        spacing, speed, homeX: g.x, zig: lead === 'rider', phase: this.rng.next() * Math.PI * 2, dirty: false, regroupAt: 0, drummed: false,
       };
-      // Chuckers are mixed through the block rather than all in one corner.
+      // Chuckers are mixed through the block rather than all in one corner; shield orcs take the front.
+      const shieldCount = foot.find((m) => m.kind === 'shieldOrc')?.count ?? 0;
       const kinds: EnemyKind[] = [];
-      for (const m of foot) for (let i = 0; i < m.count; i++) kinds.push(m.kind);
+      for (const m of foot) if (m.kind !== 'shieldOrc') for (let i = 0; i < m.count; i++) kinds.push(m.kind);
       this.rng.shuffle(kinds);
+      kinds.unshift(...Array<EnemyKind>(shieldCount).fill('shieldOrc'));
       const slots = formation(g.shape, footCount, spacing);
+      const drummers = g.members.find((m) => m.kind === 'drummer')?.count ?? 0;
+      block.drummed = drummers > 0;
       kinds.forEach((kind, i) => this.spawn(kind, block, slots[i].dx, slots[i].dy));
-      // Catapults trundle along behind.
-      const back = (slots.length ? Math.max(...slots.map((s) => s.dy)) : 0) + 2.5;
+      // The drummer follows the foot; catapults trundle along behind.
+      const footBack = slots.length ? Math.max(...slots.map((s) => s.dy)) : 0;
+      if (drummers > 0) this.spawn('drummer', block, 0, footBack + 1.2);
+      const back = footBack + 2.5 + (drummers > 0 ? 1.2 : 0);
       const cats = g.members.find((m) => m.kind === 'orcCatapult')?.count ?? 0;
       for (let i = 0; i < cats; i++) this.spawn('orcCatapult', block, (i - (cats - 1) / 2) * 3, back);
       block.start = block.members.length;
@@ -1071,7 +1128,7 @@ export class Game {
       timer: this.rng.range(0, kind === 'orcCatapult' ? cat.throwInterval : this.cfg.chucker.throwInterval),
       phase: this.rng.next(),
       burn: 0, burnTime: 0, rally: 1, foe: null, block, slotX, slotY, goldMult: 1,
-      lastBall: -1, stagger: 0, blasted: false,
+      lastBall: -1, stagger: 0, blasted: false, shielded: kind === 'shieldOrc' && block.drummed,
     };
     this.enemies.push(e);
     block.members.push(e);
@@ -1093,7 +1150,7 @@ export class Game {
 
   /** Closes ranks: re-packs the block's foot orcs into its shape, front rank first. */
   private regroup(b: Block): void {
-    const foot = b.members.filter((e) => e.kind !== 'orcCatapult');
+    const foot = b.members.filter((e) => !REAR_KINDS.has(e.kind));
     const slots = formation(b.shape, foot.length, b.spacing);
     // Orcs nearest the wall take the front slots, so nobody runs through the block.
     foot.sort((p, q) => p.y - q.y || p.x - q.x);
@@ -1112,6 +1169,15 @@ export class Game {
     const m = this.cfg.march;
     const keep: Block[] = [];
     for (const b of this.blocks) {
+      if (b.drummed && !b.members.some((e) => e.kind === 'drummer' && e.hp > 0)) {
+        // The drum falls silent: shields drop and the formation scatters.
+        b.drummed = false;
+        for (const e of b.members) {
+          e.shielded = false;
+          e.block = null;
+        }
+        this.events.push({ type: 'formationBreak', x: b.x, y: b.y });
+      }
       const before = b.members.length;
       b.members = b.members.filter((e) => e.hp > 0 && e.block === b);
       if (b.members.length === 0) continue;
@@ -1305,6 +1371,7 @@ export class Game {
           if (e.foe.hp <= 0) this.events.push({ type: 'soldierDown', x: e.foe.x, y: e.foe.y });
           break;
         case 'stand':
+          if (e.y > this.cfg.orcCatapult.creepMinY) my = -this.cfg.orcCatapult.standCreep;
           e.timer -= dt;
           if (e.timer <= 0) {
             e.timer = this.cfg.orcCatapult.throwInterval;
@@ -1338,6 +1405,14 @@ export class Game {
           e.y += hit.ny * hit.depth;
         }
       }
+      this.shapes.forEach((o, i) => {
+        if (this.contraptions[i].kind === 'ramp') return;
+        const hit = contact(o, e.x, e.y, stats.radius);
+        if (hit) {
+          e.x += hit.nx * hit.depth;
+          e.y += hit.ny * hit.depth;
+        }
+      });
       e.x = Math.max(-hw + 0.3, Math.min(hw - 0.3, e.x));
       e.y = Math.max(front, e.y);
       // Knocked back off the wall: start marching again.
@@ -1349,8 +1424,8 @@ export class Game {
   private updateSoldiers(dt: number): void {
     if (this.soldiers.length === 0) return;
     const c = this.cfg.soldiers;
-    const round = this.powerActive('tavern');
-    const dps = c.dps * this.mult('soldiers', 'damage') * this.mult('soldiers', 'rate') * (round ? this.cfg.tavern.dps : 1);
+    const tavern = this.hasBuilding('tavern');
+    const dps = c.dps * this.mult('soldiers', 'damage') * this.mult('soldiers', 'rate') * (tavern ? this.cfg.buildings.tavern.dps : 1);
     const heavies = this.enemies.filter((e) => e.kind === 'ogre' || e.kind === 'warlord');
     // Only orcs near the wall matter; bucket them into 1-wide columns so each soldier checks its own stretch.
     const hw = this.cfg.field.halfWidth;
@@ -1396,7 +1471,7 @@ export class Game {
       // They rush what is close to their post, but trudge along the wall to anything further.
       const near = Math.hypot(gx - s.postX, gy - s.postY) <= c.guard * (target && heavies.includes(target) ? c.heavyGuard : 1);
       if (dist > stopAt) {
-        const rush = Math.max(this.armsActive ? this.cfg.callToArms.run : 1, round ? this.cfg.tavern.run : 1);
+        const rush = Math.max(this.armsActive ? this.cfg.callToArms.run : 1, tavern ? this.cfg.buildings.tavern.run : 1);
         const stepLen = Math.min(dist - stopAt, (near ? c.speed : c.walk) * rush * dt);
         s.x += (dx / dist) * stepLen;
         s.y += (dy / dist) * stepLen;
@@ -1524,13 +1599,13 @@ export class Game {
    * The middle of the thickest crowd within range of a defender, or undefined.
    * Heavies and throwers count extra, so big targets and rock chuckers draw fire.
    */
-  private densestCrowd(def: Defender): { x: number; y: number; speed: number } | undefined {
+  private densestCrowd(def: Defender | null): { x: number; y: number; speed: number } | undefined {
     const size = 4;
     type Bucket = { weight: number; n: number; x: number; y: number; speed: number };
     const buckets = new Map<number, Bucket>();
     let best: Bucket | undefined;
     for (const e of this.enemies) {
-      if (e.y < 2 || !this.covers(def, e.x, e.y)) continue;
+      if (e.y < 2 || (def ? !this.covers(def, e.x, e.y) : e.y > this.cfg.field.topY)) continue;
       const k = Math.floor(e.y / size) * 1000 + Math.floor(e.x / size + 100);
       const b = buckets.get(k) ?? { weight: 0, n: 0, x: 0, y: 0, speed: 0 };
       b.weight += e.kind === 'warlord' || e.kind === 'ogre' ? 4 : e.kind === 'chucker' || e.state === 'stand' ? 3 : 1;
@@ -1546,7 +1621,7 @@ export class Game {
   }
 
   /** Lobs a projectile from a defender to land at (tx, ty) after a set flight time. */
-  private lob(def: Defender, kind: 'stone' | 'arrow', tx: number, ty: number, flightTime: number, damage: number, extra: Partial<Projectile>): void {
+  private lob(def: { x: number; y: number }, kind: 'stone' | 'arrow', tx: number, ty: number, flightTime: number, damage: number, extra: Partial<Projectile>): void {
     const dx = tx - def.x;
     const dy = ty - def.y;
     const d = Math.hypot(dx, dy) || 1;
@@ -1707,7 +1782,7 @@ export class Game {
 
   private addBall(kind: BallKind, x: number, y: number, vx: number, vy: number, primary = false): Ball {
     const b: Ball = {
-      id: this.nextBallId++, kind, x, y, vx, vy, primary, power: 1, combo: 0, behind: false, heaved: false,
+      id: this.nextBallId++, kind, x, y, vx, vy, primary, power: 1, combo: 0, behind: false, heaved: false, perfect: false,
       stuck: false, stuckOffset: 0, stuckAt: 0, hitShieldAt: -99, born: this.time, passing: null, lines: 0, milestone: 0, banked: false, spin: 0,
     };
     this.balls.push(b);
@@ -1809,10 +1884,18 @@ export class Game {
     b.lines = 0;
     b.banked = false;
     b.heaved = false;
+    b.perfect = false;
     b.hitShieldAt = this.time;
     b.passing = null;
     const heaved = this.time - s.heaveAt <= this.heaveWindow();
-    if (heaved) this.powerUp(b);
+    if (heaved) {
+      this.powerUp(b);
+      // A Perfect Return: the press timed just before contact. The first ball to land spends it.
+      b.perfect = true;
+      s.heaveAt = -99;
+      this.perfects++;
+      this.events.push({ type: 'perfect', x: b.x, y: this.cfg.shield.y });
+    }
     if (this.stickyCatches > 0 && !heaved) {
       this.stickyCatches--;
       b.stuck = true;
@@ -1820,6 +1903,7 @@ export class Game {
       b.stuckAt = this.time;
     }
     this.events.push({ type: 'deflect', x: b.x, y: this.cfg.shield.y, parry: heaved, trick });
+    this.events.push({ type: 'shieldBounce', x: b.x, y: this.cfg.shield.y, vx: b.vx, vy: b.vy });
   }
 
   /** Keeps a ball from skating sideways forever. */
@@ -1839,6 +1923,7 @@ export class Game {
     const r = c.radius;
     const keep: Ball[] = [];
     const bumpers = this.bumpers();
+    this.updateBells();
 
     if (this.phase === 'battle' && !this.balls.some((b) => b.primary) && this.time >= this.royalDue) this.serveRoyal();
 
@@ -1905,9 +1990,15 @@ export class Game {
           alive = false;
           break;
         }
+        if (b.air) {
+          // Over the ramp: nothing on the ground touches it until it drops.
+          if (b.y >= b.air.landY || b.vy <= 0 || this.time >= b.air.until) this.rampLand(b);
+          continue;
+        }
         if (bumpers.length && b.y < this.cfg.bumpers.y + 2) this.ballVsBumpers(b, bumpers);
         if (this.tower) this.ballVsTower(b);
         if (this.obstacles.length) this.ballVsObstacles(b);
+        if (this.contraptions.length) this.ballVsContraptions(b);
         this.ballVsOrcs(b);
       }
       if (alive) keep.push(b);
@@ -1919,7 +2010,7 @@ export class Game {
   /** Balls knock into each other: an equal-mass elastic bounce, with a hit size a touch smaller than they look. */
   private ballVsBalls(): void {
     const min = this.cfg.balls.radius * 2;
-    const free = this.balls.filter((b) => !b.stuck);
+    const free = this.balls.filter((b) => !b.stuck && !b.air);
     for (let i = 0; i < free.length; i++) {
       for (let j = i + 1; j < free.length; j++) {
         const a = free[i];
@@ -1992,14 +2083,116 @@ export class Game {
       b.y += hit.ny * (hit.depth + 0.01);
       b.banked = true;
       this.addCombo(b, this.cfg.bumpers.bankCombo);
-      if (o.breakable) {
-        // A tree takes one hit: it comes crashing down and is gone.
+      if (!needsHeave(o) || b.heaved) {
+        // One hit and it comes crashing down (stone needs a heaved ball) and is gone.
         o.down = true;
         this.events.push({ type: 'treeDown', x: o.x, y: o.y, index });
         return;
       }
       this.events.push({ type: 'obstacle', x: b.x - hit.nx * r, y: b.y - hit.ny * r, index });
     });
+  }
+
+  /** Bumpers kick, bells ring (and bounce lightly), ramps launch. A ball in the air touches none of them. */
+  private ballVsContraptions(b: Ball): void {
+    const r = this.cfg.balls.radius;
+    const k = this.cfg.contraptions;
+    this.contraptions.forEach((c, index) => {
+      const o = this.shapes[index];
+      if (b.air) return;
+      if (c.kind === 'ramp') {
+        if (b.vy > 0 && nearestOn(o, b.x, b.y).inside) {
+          const landY = Math.min(b.y + k.ramp.distance, this.cfg.field.topY - r);
+          b.air = { fromY: b.y, landY, until: this.time + ((landY - b.y) / b.vy) * 1.5 + 0.2 };
+          b.passing = null;
+          this.events.push({ type: 'rampLaunch', x: b.x, y: b.y, index });
+        }
+        return;
+      }
+      const hit = contact(o, b.x, b.y, r);
+      if (!hit || b.vx * hit.nx + b.vy * hit.ny >= 0) return;
+      this.reflect(b, hit.nx, hit.ny);
+      b.x += hit.nx * (hit.depth + 0.01);
+      b.y += hit.ny * (hit.depth + 0.01);
+      if (c.kind === 'bumper') {
+        const sp = Math.hypot(b.vx, b.vy) || 1;
+        const kicked = Math.max(sp, Math.min(this.cfg.balls.maxSpeed, sp * k.bumper.kick));
+        b.vx *= kicked / sp;
+        b.vy *= kicked / sp;
+        b.banked = true;
+        this.bumperHit[index] = this.time;
+        this.addCombo(b, k.bumper.combo);
+        this.events.push({ type: 'bumper', x: c.x, y: c.y, index });
+      } else if (this.bellRung[index] < 0) {
+        this.ringBell(b, index);
+      }
+    });
+  }
+
+  private ringBell(b: Ball, index: number): void {
+    const k = this.cfg.contraptions.bell;
+    const c = this.contraptions[index];
+    const set = this.contraptions.flatMap((o, i) => (o.kind === 'bell' && (o.group ?? 0) === (c.group ?? 0) ? [i] : []));
+    this.bellRung[index] = this.time;
+    this.addCombo(b, k.combo);
+    const rung = set.filter((i) => this.bellRung[i] >= 0).length;
+    this.events.push({ type: 'bell', x: c.x, y: c.y, index, rung });
+    if (rung < Math.min(k.count, set.length)) return;
+    // The whole set rang: a free volley from the wall below the bells, then the bells reset.
+    this.bellReset.set(c.group ?? 0, this.time + k.resetSeconds);
+    const x = set.reduce((n, i) => n + this.contraptions[i].x, 0) / set.length;
+    const crowd = this.densestCrowd(null);
+    let arrows = 0;
+    if (crowd) {
+      const ty = crowd.y - crowd.speed * k.flightTime;
+      arrows = k.arrows;
+      for (let i = 0; i < arrows; i++) {
+        const r = k.spread * Math.sqrt(this.rng.next());
+        const t = this.rng.next() * Math.PI * 2;
+        this.lob({ x, y: 0 }, 'arrow', crowd.x + Math.cos(t) * r, ty + Math.sin(t) * r, k.flightTime * this.rng.range(0.9, 1.1), k.damage, {});
+      }
+    }
+    this.events.push({ type: 'bellVolley', x, y: 0, arrows });
+  }
+
+  /** Rung bells hang there swinging until their set's reset time. */
+  private updateBells(): void {
+    for (const [group, at] of this.bellReset) {
+      if (this.time < at) continue;
+      this.bellReset.delete(group);
+      this.contraptions.forEach((c, i) => {
+        if (c.kind === 'bell' && (c.group ?? 0) === group) this.bellRung[i] = -1;
+      });
+    }
+  }
+
+  /** A ball drops off a ramp: a boulder-drop splash hurts every orc around the landing spot. */
+  private rampLand(b: Ball): void {
+    const k = this.cfg.contraptions.ramp;
+    const mult = this.ballGoldMult(b);
+    const dmg = k.damage * b.power;
+    let hits = 0;
+    b.air = undefined;
+    this.within(b.x, b.y, k.splashRadius + MAX_RADIUS, (o) => {
+      if (o.hp <= 0) return;
+      const dx = o.x - b.x;
+      const dy = o.y - b.y;
+      const d = Math.hypot(dx, dy);
+      if (d > k.splashRadius + this.cfg[o.kind].radius * 0.5) return;
+      hits++;
+      o.hp -= dmg;
+      o.goldMult = mult;
+      o.lastBall = b.id;
+      const kb = k.knockback / this.cfg[o.kind].mass;
+      o.vx += (dx / (d || 1)) * kb;
+      o.vy += (dy / (d || 1)) * kb;
+      if (o.state === 'wall' || o.state === 'climb' || o.state === 'fight') {
+        o.state = 'march';
+        o.foe = null;
+      }
+    });
+    if (hits) this.addCombo(b, k.combo * hits);
+    this.events.push({ type: 'rampLand', x: b.x, y: b.y, radius: k.splashRadius, hits });
   }
 
   /** Bank shots off the tower turrets: a free save, +2 combo and a harder next hit. */
@@ -2054,8 +2247,25 @@ export class Game {
     if (!hit) return;
     const e: Enemy = hit;
     const mult = this.ballGoldMult(b);
-    const boost = b.banked ? this.cfg.bumpers.bankDamage : 1;
+    const boost = (b.banked ? this.cfg.bumpers.bankDamage : 1) * (b.perfect ? this.cfg.shield.perfectDamage : 1);
     b.banked = false;
+    b.perfect = false;
+
+    // A raised shield: front hits do nothing at all, not even to a heave or the Royal Ball.
+    if (e.shielded) {
+      const cd = Math.hypot(b.x - e.x, b.y - e.y) || 1;
+      if ((b.y - e.y) / cd < -this.cfg.shieldOrc.shieldArc) {
+        const nx = (b.x - e.x) / cd;
+        const ny = (b.y - e.y) / cd;
+        this.reflect(b, nx, ny);
+        const min = r + this.cfg[e.kind].radius + 0.01;
+        b.x = e.x + nx * min;
+        b.y = e.y + ny * min;
+        b.passing = e;
+        this.events.push({ type: 'clang', x: b.x, y: b.y });
+        return;
+      }
+    }
 
     if (b.lines > 0 && e.kind !== 'warlord') {
       // Heave power shot: smash through the whole line without bouncing.
@@ -2081,7 +2291,8 @@ export class Game {
       return;
     }
 
-    const flask = this.time < this.effects.flask;
+    const flask = this.time < this.effects.flask || this.hasBuilding('alchemist');
+    const pinBlock = e.block?.shape === 'pins' ? e.block : null;
     // The Royal Ball flattens anything but a boss.
     e.hp -= b.kind === 'royal' && e.kind !== 'warlord' ? Math.max(e.hp, c.damage) : c.damage * b.power * boost;
     e.goldMult = mult;
@@ -2113,6 +2324,7 @@ export class Game {
     });
     if (flask) this.events.push({ type: 'splash', x: e.x, y: e.y, radius: sr });
     this.events.push({ type: 'hit', x: e.x, y: e.y, combo: b.combo });
+    if (pinBlock) this.topplePins(b, e, pinBlock, mult);
 
     if (e.kind === 'warlord') {
       // The Warlord bats it back down at the wall with his club.
@@ -2130,9 +2342,10 @@ export class Game {
       b.vx *= slow;
       b.vy *= slow;
       const sp = Math.hypot(b.vx, b.vy);
-      if (sp < c.speed * 0.6) {
-        b.vx *= (c.speed * 0.6) / sp;
-        b.vy *= (c.speed * 0.6) / sp;
+      const floor = b.kind === 'royal' ? c.royalSpeed : c.speed;
+      if (sp < floor) {
+        b.vx *= floor / sp;
+        b.vy *= floor / sp;
       }
     }
     // Bounce off it like a brick: mirror the velocity about the line between centres.
@@ -2147,6 +2360,37 @@ export class Game {
     b.y = e.y + ny * min;
     b.passing = e;
     this.events.push({ type: 'bounce', x: b.x, y: b.y });
+  }
+
+  /** Bowling pins: a hit orc topples its neighbours in a chain, each at most once. */
+  private topplePins(b: Ball, first: Enemy, block: Block, mult: number): void {
+    const w = this.cfg.waves;
+    const reach = block.spacing * 1.8;
+    const down = new Set<Enemy>([first]);
+    let frontier = [first];
+    for (let depth = 0; depth < w.pinChainDepth && frontier.length; depth++) {
+      const next: Enemy[] = [];
+      for (const from of frontier) {
+        for (const o of block.members) {
+          if (down.has(o) || o.hp <= 0) continue;
+          const dx = o.x - from.x;
+          const dy = o.y - from.y;
+          const d = Math.hypot(dx, dy);
+          if (d > reach) continue;
+          down.add(o);
+          next.push(o);
+          o.hp -= w.pinChainDamage;
+          o.goldMult = mult;
+          o.lastBall = b.id;
+          const kb = (this.cfg.balls.knockback * w.pinChainKnock) / this.cfg[o.kind].mass;
+          o.vx += (dx / (d || 1)) * kb;
+          o.vy += (dy / (d || 1)) * kb;
+          this.events.push({ type: 'hit', x: o.x, y: o.y });
+        }
+      }
+      frontier = next;
+    }
+    if (down.size > 1) this.addCombo(b, down.size - 1);
   }
 
   // ---- the siege tower ------------------------------------------------------
@@ -2208,7 +2452,7 @@ export class Game {
     this.events.push({ type: 'floorDown', x: tw.x, y: tw.y, floorsLeft: tw.floors.length });
     const block: Block = {
       id: this.nextBlockId++, x: tw.x, y: Math.max(2, tw.y - 2), shape: 'rect', members: [], start: 0,
-      spacing: 0.45 * 2 * this.cfg.march.spacing, speed: this.cfg.march.speed, homeX: tw.x, zig: false, phase: 0, dirty: false, regroupAt: 0,
+      spacing: 0.45 * 2 * this.cfg.march.spacing, speed: this.cfg.march.speed, homeX: tw.x, zig: false, phase: 0, dirty: false, regroupAt: 0, drummed: false,
     };
     const slots = formation('rect', t.floorOrcs, block.spacing);
     for (const s of slots) this.spawn('grunt', block, s.dx, s.dy);
@@ -2354,9 +2598,6 @@ export class Game {
         break;
       case 'sticky':
         this.stickyCatches += c.stickyCatches;
-        break;
-      case 'tea':
-        this.effects.tea = this.time + c.teaSeconds;
         break;
       case 'trick':
         if (this.platingLeft > 0) this.platingLeft--;

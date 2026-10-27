@@ -7,6 +7,7 @@
  * The wall's front face is at y = 0; enemies spawn near y = field.spawnY.
  * One design "tile" is about 2.2 units, so a grunt's 1 tile/s is speed 2.2.
  */
+import { type Contraption, LEVEL_CONTRAPTIONS } from './contraptions';
 import { LEVEL_OBSTACLES, type Obstacle } from './obstacles';
 
 export const defaultConfig = {
@@ -17,6 +18,20 @@ export const defaultConfig = {
   field: { halfWidth: 20, topY: 68, spawnY: 70 },
   /** Real structures on each level's field (see obstacles.ts): balls bank off them, orcs go round. */
   obstacles: { levels: LEVEL_OBSTACLES as Obstacle[][] },
+  /** Pinball fixtures on each level's field (layouts in contraptions.ts): bumpers, bell trios and ramps. */
+  contraptions: {
+    enabled: true,
+    levels: LEVEL_CONTRAPTIONS as Contraption[][],
+    /** A ball is reflected off the spring shield and sped up by kick (never above balls.maxSpeed). */
+    bumper: { radius: 1, kick: 1.12, combo: 3, squashSeconds: 0.35 },
+    /**
+     * Ring count bells of a group and the castle looses a free volley of arrows at the thickest
+     * crowd, from the wall below the group; the bells reset after resetSeconds.
+     */
+    bell: { radius: 0.55, count: 3, resetSeconds: 6, combo: 1, arrows: 30, damage: 10, spread: 2.6, flightTime: 1.7 },
+    /** A ball entering a ramp flies distance up the field, then drops, hurting orcs within splashRadius. */
+    ramp: { distance: 14, splashRadius: 3.5, damage: 30, knockback: 12, combo: 1 },
+  },
   /**
    * Trees dotted over the middle of the field, count per level. A ball smashes one in a single
    * hit (it still bounces off); orcs go round them. They keep off the road down the middle.
@@ -29,6 +44,10 @@ export const defaultConfig = {
   // mass divides knockback; climbSeconds 0 means it smashes the wall without climbing.
   // wallDps is damage per second once it has climbed. Speeds are for loose orcs; blocks march at march.speed.
   grunt: { hp: 10, speed: 1.8, radius: 0.45, mass: 1, wallDps: 1, meleeDps: 2, climbSeconds: 3, gold: 1, threat: 1 },
+  /** Shielded from the front while its block's drummer lives; hit it from the sides or back. */
+  shieldOrc: { hp: 14, speed: 1.8, radius: 0.55, mass: 2, wallDps: 1.5, meleeDps: 3, climbSeconds: 3, gold: 2, threat: 1, shieldArc: 0.35 },
+  /** Beats the drum that holds a block's shields up: kill it and the formation breaks. */
+  drummer: { hp: 8, speed: 1.8, radius: 0.5, mass: 1.5, wallDps: 0.5, meleeDps: 1, climbSeconds: 3, gold: 6, threat: 1 },
   /** A brick that shoots back: throws pebbles at the wall as its block marches, or (boltShare of them) fires fast bolts. */
   chucker: { hp: 10, speed: 1.8, radius: 0.5, mass: 1, wallDps: 1, meleeDps: 2, climbSeconds: 3, gold: 2, threat: 2, throwFromY: 44, throwInterval: 4, boltShare: 0.5 },
   /** Goblin runners: small, quick and fragile, sprinting down the side lanes in loose packs. */
@@ -39,6 +58,7 @@ export const defaultConfig = {
   orcCatapult: {
     hp: 60, speed: 1.2, radius: 1, mass: 6, wallDps: 5, meleeDps: 5, climbSeconds: 0, gold: 15, threat: 0,
     standMinY: 46, standMaxY: 58, throwInterval: 6,
+    standCreep: 0.9, creepMinY: 12,
   },
   /** Carries a powder barrel: a hit blows up the cluster around it, and setting off others in range. */
   barrel: {
@@ -96,8 +116,8 @@ export const defaultConfig = {
   /** A giant metal shield that follows the mouse along the battlements: the paddle. */
   shield: {
     y: 4,
-    /** 4 tiles wide. */
-    halfWidth: 3.33,
+    /** About 2.8 tiles wide. */
+    halfWidth: 2.3,
     /** 60 tiles/s, so it can't teleport. */
     speed: 100,
     /**
@@ -120,6 +140,8 @@ export const defaultConfig = {
     /** A heave is a big effort: one every 3 seconds. */
     heaveCooldown: 3,
     heaveSpeed: 1.5,
+    /** A Perfect Return (a heave pressed just before contact) makes the ball's next damaging impact this much harder. */
+    perfectDamage: 1.5,
     /** A heave ploughs through orc lines (up to lineMax orcs each) at heaveDamage each, instead of bouncing. */
     heaveLines: 3,
     heaveDamage: 20,
@@ -194,15 +216,13 @@ export const defaultConfig = {
     maxFalling: 2,
     fallSpeed: 5,
     radius: 0.8,
-    weights: { grog: 3, banner: 3, flask: 3, sticky: 3, tea: 2, trick: 1 },
+    weights: { grog: 3, banner: 3, flask: 3, sticky: 0, trick: 1 },
     grogSpread: 0.35,
     bannerSeconds: 15,
     bannerWidth: 1.5,
     flaskSeconds: 10,
     flaskRadius: 2.5,
     stickyCatches: 3,
-    teaSeconds: 6,
-    teaSpeed: 0.5,
     trickSeconds: 10,
     trickWidth: 0.7,
   },
@@ -237,13 +257,13 @@ export const defaultConfig = {
   },
   /** The call to arms from the keep: defenders fire this much faster and soldiers move this much quicker, for a while. */
   callToArms: { seconds: 6, cooldown: 45, rate: 2, run: 2.5 },
-  /**
-   * The other buildings' powers, once the town has built them. The tavern stands a round:
-   * the fallen soldiers come back and everyone fights harder and runs. The alchemist's brew
-   * turns every ball into a fire flask.
-   */
-  tavern: { seconds: 8, cooldown: 50, dps: 1.5, run: 2 },
-  alchemist: { seconds: 8, cooldown: 55 },
+  /** Permanent boons of the town's buildings, once built (the alchemist's has no number: every ball burns). */
+  buildings: {
+    tavern: { dps: 1.3, run: 1.5 },
+    blacksmith: { arrowDamage: 1.25 },
+    chapel: { healPerSec: 6 },
+    forge: { catapultDamage: 1.4 },
+  },
   /** Towers the player builds on the wall walk or stacks on the joints' towers, a storey at a time. */
   towers: { cost: 50, costGrowth: 1.3, maxStoreys: 3 },
   /**
@@ -329,7 +349,7 @@ export const defaultConfig = {
   },
   waves: {
     /** The lull between waves: time to repair, upgrade and buy before the next one marches. */
-    previewSeconds: 12,
+    previewSeconds: 30,
     /** Threat budget in grunt-equivalents: base * growth^(wave - 1). */
     budgetBase: 55,
     budgetGrowth: 1.3,
@@ -346,8 +366,8 @@ export const defaultConfig = {
     blocksBase: 3,
     blocksEvery: 5,
     blocksMax: 6,
-    chuckersFromWave: 3,
-    chuckerShare: 0.12,
+    chuckersFromWave: 1,
+    chuckerShare: 0.2,
     runnersFromWave: 2,
     runnerShare: 0.12,
     ridersFromWave: 6,
@@ -377,6 +397,14 @@ export const defaultConfig = {
     barrelsFromWave: 5,
     barrelsEvery: 10,
     barrelsMax: 3,
+    shieldsFromWave: 3,
+    shieldsMax: 8,
+    shieldsEvery: 2,
+    pinsFromWave: 5,
+    pinsChance: 0.15,
+    pinChainDepth: 3,
+    pinChainDamage: 6,
+    pinChainKnock: 0.6,
   },
   economy: {
     /** Gold to buy the level's load-out with (applyMeta sets it from levels.warChest and the Treasury). */

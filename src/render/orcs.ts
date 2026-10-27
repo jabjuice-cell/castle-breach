@@ -243,9 +243,37 @@ function warlord(): Vox {
   return v;
 }
 
-const MODELS: Record<EnemyKind, () => Vox> = { grunt, chucker, barrel, runner, rider, orcCatapult: catapult, ogre, warlord };
+function shieldOrc(): Vox {
+  const v = new Vox();
+  body(v, { helm: IRON, trim: '#c8c8c8', cloth: '#4a4a52' });
+  // A big iron-banded tower shield held in front, facing the wall, with a boss and a red stripe.
+  v.box(-5, 1, 4, 5, 13, 5, WOOD);
+  v.box(-5, 1, 6, 5, 1, 6, IRON);
+  v.box(-5, 13, 6, 5, 13, 6, IRON);
+  v.box(-5, 1, 6, -5, 13, 6, IRON);
+  v.box(5, 1, 6, 5, 13, 6, IRON);
+  v.box(0, 2, 6, 0, 12, 6, RED);
+  v.box(-1, 6, 6, 1, 8, 7, '#c8c8c8');
+  return v;
+}
+
+function drummer(): Vox {
+  const v = new Vox();
+  body(v, { helm: '#e8b730', trim: RED, cloth: '#7a1c18', skin: '#86b030' });
+  // A big war drum strapped in front: wooden barrel, pale skin heads, red rope lacing.
+  v.cyl(0, 2, 4, 3, 9, (x, y) => (y === 3 || y === 8 ? '#3a3a3a' : x % 2 ? '#8a5a2e' : '#7a4e26'), false);
+  v.box(-4, 9, 1, 4, 9, 7, '#e8dcb8');
+  v.box(-1, 9, 3, 1, 9, 5, '#c8b890');
+  // Two sticks, raised, with a bone feather plume on the helm.
+  v.box(-5, 10, 4, -5, 12, 4, BONE);
+  v.box(5, 10, 4, 5, 12, 4, BONE);
+  v.box(0, 15, -1, 0, 19, -1, RED);
+  return v;
+}
+
+const MODELS: Record<EnemyKind, () => Vox> = { grunt, chucker, barrel, runner, rider, orcCatapult: catapult, ogre, warlord, shieldOrc, drummer };
 /** Voxel size per kind: how big each model stands on the field. */
-const SCALE: Record<EnemyKind, number> = { grunt: 0.11, chucker: 0.11, barrel: 0.11, runner: 0.09, rider: 0.12, orcCatapult: 0.15, ogre: 0.17, warlord: 0.2 };
+const SCALE: Record<EnemyKind, number> = { grunt: 0.11, chucker: 0.11, barrel: 0.11, runner: 0.09, rider: 0.12, orcCatapult: 0.15, ogre: 0.17, warlord: 0.2, shieldOrc: 0.11, drummer: 0.125 };
 
 export class VoxelOrcs {
   readonly meshes = {} as Record<EnemyKind, THREE.InstancedMesh>;

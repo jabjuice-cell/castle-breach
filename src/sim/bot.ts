@@ -222,8 +222,6 @@ export function paddleBot(skill: PaddleSkill, strong: boolean, placement: Placem
     if (strong && game.canCallEarly()) game.callEarly();
     // Sound the horn when the field is crowded or orcs are on the wall.
     if (strong && game.canCallToArms && (game.enemies.length >= 25 || game.enemies.some((e) => e.state === 'wall'))) game.callToArms();
-    if (strong && game.canUse('tavern') && game.soldiers.filter((s) => s.hp <= 0).length > game.soldiers.length * 0.4) game.usePower('tavern');
-    if (strong && game.canUse('alchemist') && game.enemies.length >= 30) game.usePower('alchemist');
 
     let next: Incoming | undefined;
     const consider = (key: object, hit: { x: number; eta: number } | null) => {

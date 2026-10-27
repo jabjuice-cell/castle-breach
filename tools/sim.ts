@@ -11,7 +11,7 @@
 import { type Bot, averageBot, expertBot, expertRandomBot, idleBot } from '../src/sim/bot';
 import { makeConfig } from '../src/sim/config';
 import { Game } from '../src/sim/game';
-import { META_UPGRADES, type Progress, applyMeta, buyMeta, metaCost, newProgress } from '../src/sim/meta';
+import { META_UPGRADES, type Progress, applyMeta, buyMeta, metaCost, metaLocked, newProgress } from '../src/sim/meta';
 
 const runs = Number(process.argv[2] ?? 10);
 const overrides = process.argv[3] ? JSON.parse(process.argv[3]) : {};
@@ -34,7 +34,7 @@ function playLevel(make: () => Bot, seed: number, progress: Progress) {
 /** The town: buys the cheapest upgrade it can, over and over. */
 function shop(p: Progress) {
   for (;;) {
-    const options = META_UPGRADES.filter((u) => u.id !== 'plating' && metaCost(p.meta, u.id) <= p.renown);
+    const options = META_UPGRADES.filter((u) => u.id !== 'plating' && metaCost(p.meta, u.id) <= p.renown && !metaLocked(p.meta, u.id));
     if (!options.length) return;
     options.sort((a, b) => metaCost(p.meta, a.id) - metaCost(p.meta, b.id));
     buyMeta(p, options[0].id);

@@ -259,6 +259,7 @@ export class ShieldModel {
   private back: THREE.MeshLambertMaterial;
   private rim: THREE.MeshPhongMaterial;
   private face: THREE.MeshLambertMaterial;
+  private charge = { value: 1 };
 
   /** front: the painted royal shield art, turned to the orcs. */
   constructor(front: THREE.Texture) {
@@ -284,6 +285,16 @@ export class ShieldModel {
     geo.computeVertexNormals();
     front.colorSpace = THREE.SRGBColorSpace;
     this.face = new THREE.MeshLambertMaterial({ map: front });
+    // While the heave recharges the face lights up from the bottom to the top: above the charge line it stays dim.
+    this.face.onBeforeCompile = (shader) => {
+      shader.uniforms.uCharge = this.charge;
+      shader.vertexShader = shader.vertexShader
+        .replace('#include <common>', '#include <common>\nvarying float vShieldY;')
+        .replace('#include <begin_vertex>', '#include <begin_vertex>\nvShieldY = position.y;');
+      shader.fragmentShader = shader.fragmentShader
+        .replace('#include <common>', '#include <common>\nvarying float vShieldY;\nuniform float uCharge;')
+        .replace('#include <dithering_fragment>', `#include <dithering_fragment>\nif (vShieldY / ${SHIELD_SHAPE_H.toFixed(4)} > uCharge) gl_FragColor.rgb *= 0.4;`);
+    };
     this.back = new THREE.MeshLambertMaterial({ map: backTexture() });
     this.rim = new THREE.MeshPhongMaterial({ color: '#c3c9cf', specular: '#ffffff', shininess: 60 });
     const mesh = new THREE.Mesh(geo, [this.face, this.rim, this.back]);
@@ -291,7 +302,8 @@ export class ShieldModel {
   }
 
   /** A hit glint (0 to 1) and how bright it is (1 normally, dimmer while it recovers from a heave). */
-  shade(glint: number, light: number): void {
+  shade(glint: number, light: number, charge = 1): void {
+    this.charge.value = charge;
     for (const m of [this.back, this.rim, this.face]) {
       m.emissive.setRGB(glint * 0.7, glint * 0.65, glint * 0.45);
       m.color.setScalar(m === this.rim ? light * 0.85 : light);

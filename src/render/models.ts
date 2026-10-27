@@ -205,115 +205,11 @@ function windowZ(v: Vox, x: number, y: number, z: number): void {
   v.set(x + 3, y + 1, z, PAL.woodDark);
 }
 
-function windowX(v: Vox, x: number, y: number, z: number): void {
-  v.box(x, y - 1, z - 1, x, y + 2, z + 2, PAL.timber);
-  v.box(x, y, z, x, y + 1, z + 1, PAL.glow);
-}
-
-function barrel(v: Vox, x: number, z: number, y = 0, h = 3): void {
-  v.cyl(x, z, 1.3, y, y + h - 1, (_, yy) => (yy === y || yy === y + h - 1 ? PAL.iron : PAL.wood), false);
-}
-
 function markGlow(v: Vox, ...colors: string[]): void {
   const cs = colors.map((c) => new THREE.Color(c));
   v.each((_x, _y, _z, c) => {
     if (cs.some((k) => k.equals(c.c))) c.glow = true;
   });
-}
-
-/** The Rusty Tankard: two half-timbered storeys under orange tiles, a porch, a chimney and a tankard sign. */
-export function tavernModel(): Vox {
-  const v = new Vox();
-  const rnd = seeded(23);
-  v.box(-9, 0, -7, 9, 3, 7, () => jitter(PAL.stone, 0.12, rnd));
-  v.shell(-9, 4, -7, 9, 19, 7, halfTimber(-9, -7, 9, 7, [4, 11, 19], rnd));
-  for (const x of [-6, 4]) {
-    windowZ(v, x, 14, 7);
-    windowZ(v, x, 7, 7);
-  }
-  windowX(v, 9, 14, -2);
-  windowX(v, 9, 14, 3);
-  windowX(v, 9, 7, 3);
-  // The door under a porch roof.
-  v.box(-2, 4, 7, 1, 9, 7, () => jitter(PAL.stone, 0.1, rnd));
-  v.box(-1, 4, 8, 0, 8, 8, (_, y) => (y === 6 ? PAL.iron : jitter(PAL.woodDark, 0.08, rnd)));
-  v.box(-4, 10, 8, 3, 10, 10, tiles(PAL.tile, rnd));
-  v.box(-4, 4, 10, -4, 9, 10, PAL.timber);
-  v.box(3, 4, 10, 3, 9, 10, PAL.timber);
-  // A ginger cat asleep on the porch roof.
-  v.box(1, 11, 9, 2, 11, 9, '#e08a2a');
-  v.set(3, 11, 9, '#e08a2a');
-  v.set(3, 12, 9, '#c8701e');
-  // The roof, with a dormer on the front slope.
-  v.gable(-10, 10, -9, 9, 20, tiles(PAL.tile, rnd), PAL.plaster);
-  v.box(-3, 22, 6, 1, 25, 6, PAL.plaster);
-  v.box(-2, 23, 7, 0, 24, 7, PAL.glow);
-  v.gable(-4, 2, 3, 8, 25, tiles(PAL.tileLight, rnd));
-  // The chimney.
-  v.box(5, 18, -3, 6, 32, -2, () => jitter('#cfcac0', 0.1, rnd));
-  // The sign: a beam out of the corner and a foaming tankard, with an orc's helmet nailed up as a trophy.
-  v.box(10, 16, 7, 13, 16, 7, PAL.timber);
-  v.box(12, 11, 7, 13, 14, 7, PAL.wood);
-  v.box(12, 11, 7, 13, 11, 7, PAL.iron);
-  v.box(12, 15, 7, 13, 15, 7, '#fff6dc');
-  v.set(14, 13, 7, PAL.wood);
-  v.box(10, 13, 8, 10, 14, 8, '#7a3a2a');
-  v.set(10, 15, 8, '#e8e0d0');
-  // Barrels by the door and round the side.
-  barrel(v, -7, 9);
-  barrel(v, -10, 6);
-  barrel(v, 8, 9, 0, 3);
-  barrel(v, 8, 9, 3, 2);
-  markGlow(v, PAL.glow);
-  return v;
-}
-
-/** The alchemist's workshop: a patched cottage with a scorch mark, potion shelves and a green-smoking chimney. */
-export function alchemistModel(): Vox {
-  const v = new Vox();
-  const rnd = seeded(37);
-  v.box(-8, 0, -6, 8, 2, 6, () => jitter(PAL.stone, 0.12, rnd));
-  const walls = halfTimber(-8, -6, 8, 6, [3, 12], rnd);
-  v.shell(-8, 3, -6, 8, 12, 6, (x, y, z) => {
-    // Soot from the time the cauldron went up.
-    if (x === 8 && Math.hypot(z - 1, y - 8) < 2.6 - rnd()) return '#2a2420';
-    return walls(x, y, z);
-  });
-  windowZ(v, 3, 7, 6);
-  windowX(v, 8, 7, -3);
-  v.box(-5, 3, 6, -2, 9, 6, () => jitter(PAL.stone, 0.1, rnd));
-  v.box(-4, 3, 7, -3, 8, 7, (_, y) => (y === 5 ? PAL.iron : jitter(PAL.woodDark, 0.08, rnd)));
-  // The roof, patched with slates and a riveted iron plate.
-  const roof = tiles(PAL.tile, rnd);
-  v.gable(-9, 9, -8, 8, 13, (x, y, z) => {
-    if (x > 1 && x < 6 && y > 15 && y < 19 && z > 0) return y === 16 && x % 2 === 0 ? PAL.gold : '#7c7c84';
-    if (x < -3 && x > -7 && y > 14 && y < 18) return jitter(PAL.slate, 0.1, rnd);
-    return roof(x, y, z);
-  }, PAL.plaster);
-  v.box(-6, 14, -2, -5, 25, -1, () => jitter('#cfcac0', 0.1, rnd));
-  v.box(-6, 26, -2, -5, 26, -1, '#7dff3a');
-  // Shelves of potions out front, glowing.
-  const potions = ['#59ff4a', '#3a8cff', '#ff4a4a', '#b45aff', '#ffe14a'];
-  for (const sx of [-12, 10]) {
-    v.box(sx, 0, 4, sx + 2, 0, 7, PAL.wood);
-    v.box(sx, 3, 4, sx + 2, 3, 7, PAL.wood);
-    v.box(sx, 0, 4, sx, 6, 4, PAL.wood);
-    v.box(sx + 2, 0, 4, sx + 2, 6, 4, PAL.wood);
-    for (let i = 0; i < 4; i++) {
-      v.set(sx + (i % 2) * 2, 1 + Math.floor(i / 2) * 3, 5 + (i % 3), potions[(i + sx) % potions.length]);
-      v.set(sx + 1, 4, 5 + (i % 3), potions[(i + 2) % potions.length]);
-    }
-  }
-  // A frog on the shelf, who may once have been an apprentice.
-  v.set(11, 4, 6, '#3f9a2a');
-  v.set(11, 5, 6, '#4fb83a');
-  // The cauldron, bubbling.
-  v.cyl(-10, 10, 2.2, 0, 2, '#2a2a30', false);
-  v.cyl(-10, 10, 2.2, 3, 3, '#2a2a30', true);
-  v.cyl(-10, 10, 1.5, 3, 3, '#7dff3a', false);
-  barrel(v, 7, 9);
-  markGlow(v, PAL.glow, '#7dff3a', ...potions);
-  return v;
 }
 
 /** An empty plot waiting for the town to pay: a stone footing, scaffold poles, planks and a sign. */
@@ -716,5 +612,73 @@ export function ballistaModel(): Vox {
   v.box(-5, 2, 4, -5, 13, 4, PAL.woodDark);
   v.box(-5, 11, 0, -5, 13, 3, PAL.blue);
   v.box(-5, 12, 1, -5, 12, 2, PAL.gold);
+  return v;
+}
+
+// ---- pinball contraptions ------------------------------------------------------
+
+/** The coiled spring of a bumper, standing on a stone plate (r voxels wide). */
+export function bumperSpringModel(r: number): Vox {
+  const v = new Vox();
+  v.cyl(0, 0, r - 0.5, 0, 0, PAL.stoneDark, false);
+  for (let y = 1; y <= 6; y++) v.cyl(0, 0, y % 2 ? 1.8 : 1.2, y, y, y % 2 ? '#d4d9e0' : '#8a909a', false);
+  return v;
+}
+
+/** A chunky round royal shield, gold rim, blue face with a red cross: built flat, y 0 at its underside. */
+export function bumperShieldModel(r: number): Vox {
+  const v = new Vox();
+  v.cyl(0, 0, r, 0, 1, (x, _, z) => {
+    const d = Math.hypot(x, z);
+    if (d > r - 1 || d < 1) return PAL.gold;
+    return Math.abs(x) < 1 || Math.abs(z) < 1 ? '#d8302a' : PAL.blueLight;
+  }, false);
+  v.set(0, 2, 0, PAL.gold);
+  return v;
+}
+
+/** Two wooden posts and a crossbeam (the beam at y = 10, the bell hangs from the middle). */
+export function bellPostModel(): Vox {
+  const v = new Vox();
+  v.box(-4, 0, -1, -3, 10, 0, PAL.wood);
+  v.box(3, 0, -1, 4, 10, 0, PAL.wood);
+  v.box(-4, 10, -1, 4, 11, 0, PAL.woodDark);
+  v.box(-5, 0, -2, 5, 0, 1, PAL.stoneDark);
+  return v;
+}
+
+/** A small bell with its top at y = 0, hanging down. */
+export function bellModel(): Vox {
+  const v = new Vox();
+  const radii = [1.2, 2, 2, 2.5, 3, 3.5];
+  radii.forEach((r, i) => v.cyl(0, 0, r, -1 - i, -1 - i, i === 5 ? '#c9981c' : PAL.gold, false));
+  v.cyl(0, 0, 3.5, -7, -7, '#c9981c', false);
+  v.box(0, -9, 0, 0, -8, 0, PAL.woodDark);
+  v.set(0, 0, 0, PAL.woodDark);
+  return v;
+}
+
+/** A broken siege ramp built flat: the front (nearest the castle) is +z and low, the far end -z and high. */
+export function rampModel(size: number, hw: number, hh: number, seed: number): Vox {
+  const v = new Vox();
+  const rnd = seeded(seed);
+  const W = Math.max(2, Math.round(hw / size));
+  const D = Math.max(2, Math.round(hh / size));
+  const rise = (z: number) => 6 - Math.round(((D - z) / (2 * D)) * 6);
+  for (let z = -D; z <= D; z++) {
+    const top = rise(z);
+    // Planks across, a gap or two where they have broken, timber trestles underneath.
+    for (let x = -W; x <= W; x++) {
+      if (rnd() < 0.04) continue;
+      v.set(x, top, z, jitter((x + z) % 3 ? PAL.wood : '#8a5a2e', 0.1, rnd));
+    }
+    v.box(-W, top, z, -W, top + 1, z, PAL.woodDark);
+    v.box(W, top, z, W, top + 1, z, PAL.woodDark);
+    if (z % 3 === 0) for (const x of [-W + 1, 0, W - 1]) v.box(x, 0, z, x, top - 1, z, PAL.timber);
+  }
+  // Cross battens nailed on the slope, and a torn orc banner on the high end.
+  for (let z = -D + 1; z <= D; z += 3) v.box(-W + 1, rise(z) + 1, z, W - 1, rise(z) + 1, z, PAL.woodDark);
+  v.box(0, 7, -D, 0, 12, -D, PAL.woodDark);
+  v.box(1, 9, -D, 3, 12, -D, '#a02a2a');
   return v;
 }

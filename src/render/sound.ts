@@ -218,6 +218,17 @@ export class Sounds {
     for (let i = 0; i < 2 + level; i++) this.tone(notes[i % notes.length], now + i * 0.07, 0.35, 0.12, 'triangle');
   }
 
+  /** A bell ring: a bright strike with a bronze overtone, a step higher for each bell of the set already rung. */
+  bell(n: number) {
+    const ctx = this.ctx;
+    if (!ctx || this.muted) return;
+    const now = ctx.currentTime;
+    const f = 523 * 2 ** ((Math.max(1, n) - 1) * 0.25);
+    this.tone(f, now, 0.9, 0.16, 'sine');
+    this.tone(f * 2.76, now, 0.5, 0.07, 'sine');
+    this.tone(f * 0.5, now, 0.7, 0.08, 'triangle');
+  }
+
   /** The call to arms: a brassy two-note horn over a drum roll. */
   horn() {
     const ctx = this.ctx;
@@ -327,7 +338,7 @@ export class Sounds {
       band.frequency.value = 650;
       band.Q.value = 0.7;
       const cg = ctx.createGain();
-      cg.gain.value = 0.25;
+      cg.gain.value = 0.05;
       crowd.connect(band).connect(cg).connect(this.hordeGain);
       crowd.start();
     }
@@ -402,67 +413,6 @@ export class Sounds {
       data[i] = (Math.random() * 2 - 1) * (0.15 + env);
     }
     return buf;
-  }
-
-  /** The tavern's round: a crowd's "hurrah!" and the clink of tankards. */
-  cheer() {
-    const ctx = this.ctx;
-    if (!ctx || this.muted) return;
-    const now = ctx.currentTime;
-    for (let i = 0; i < 9; i++) {
-      const at = now + Math.random() * 0.12;
-      const o = ctx.createOscillator();
-      o.type = 'sawtooth';
-      const f = 160 + Math.random() * 160;
-      o.frequency.setValueAtTime(f, at);
-      o.frequency.linearRampToValueAtTime(f * 1.5, at + 0.25);
-      o.frequency.linearRampToValueAtTime(f * 1.3, at + 0.8);
-      const vowel = ctx.createBiquadFilter();
-      vowel.type = 'bandpass';
-      vowel.frequency.setValueAtTime(700, at);
-      vowel.frequency.linearRampToValueAtTime(1100, at + 0.3);
-      vowel.Q.value = 2.5;
-      const g = ctx.createGain();
-      g.gain.setValueAtTime(0.0001, at);
-      g.gain.exponentialRampToValueAtTime(0.05, at + 0.06);
-      g.gain.exponentialRampToValueAtTime(0.0001, at + 0.9);
-      o.connect(vowel).connect(g).connect(ctx.destination);
-      o.start(at);
-      o.stop(at + 1);
-    }
-    for (let i = 0; i < 3; i++) setTimeout(() => this.clink(), 120 + i * 90);
-  }
-
-  /** The alchemist's brew: a fast bubbling and a fiery whoosh. */
-  brew() {
-    const ctx = this.ctx;
-    if (!ctx || this.muted) return;
-    const now = ctx.currentTime;
-    for (let i = 0; i < 14; i++) {
-      const at = now + i * 0.035 + Math.random() * 0.02;
-      const o = ctx.createOscillator();
-      const f = 300 + Math.random() * 500;
-      o.frequency.setValueAtTime(f, at);
-      o.frequency.exponentialRampToValueAtTime(f * 2.2, at + 0.05);
-      const g = ctx.createGain();
-      g.gain.setValueAtTime(0.0001, at);
-      g.gain.exponentialRampToValueAtTime(0.12, at + 0.01);
-      g.gain.exponentialRampToValueAtTime(0.0001, at + 0.06);
-      o.connect(g).connect(ctx.destination);
-      o.start(at);
-      o.stop(at + 0.08);
-    }
-    const noise = ctx.createBufferSource();
-    noise.buffer = this.noise(0.9, 1.2);
-    const band = ctx.createBiquadFilter();
-    band.type = 'bandpass';
-    band.Q.value = 1.2;
-    band.frequency.setValueAtTime(300, now + 0.3);
-    band.frequency.exponentialRampToValueAtTime(3000, now + 1);
-    const g = ctx.createGain();
-    g.gain.value = 0.4;
-    noise.connect(band).connect(g).connect(ctx.destination);
-    noise.start(now + 0.3);
   }
 
   /** A wooden thunk when a defender is set down. */

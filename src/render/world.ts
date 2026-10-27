@@ -1,5 +1,10 @@
 import * as THREE from 'three';
 import aspects from '../assets/aspects.json';
+import townTavern from '../assets/sprites/town-tavern.webp';
+import townAlchemist from '../assets/sprites/town-alchemist.webp';
+import townBlacksmith from '../assets/sprites/town-blacksmith.webp';
+import townChapel from '../assets/sprites/town-chapel.webp';
+import townForge from '../assets/sprites/town-forge.webp';
 import tf1 from '../assets/sprites/townsfolk-1.webp';
 import tf2 from '../assets/sprites/townsfolk-2.webp';
 import tf3 from '../assets/sprites/townsfolk-3.webp';
@@ -8,11 +13,11 @@ import tf5 from '../assets/sprites/townsfolk-5.webp';
 import tf6 from '../assets/sprites/townsfolk-6.webp';
 import tf7 from '../assets/sprites/townsfolk-7.webp';
 import tf8 from '../assets/sprites/townsfolk-8.webp';
-import { type BuildingKind, type Game } from '../sim/game';
+import { BUILDING_KINDS, type BuildingKind, type Game } from '../sim/game';
 import { roadAt } from './ground';
 import {
-  LEAF, type RoofKind, type TreeKind, alchemistModel, campfireModel, clutterModel, cottageModel, keepModel, obstacleModel,
-  palisadeModel, plotModel, scatterModel, stallModel, tavernModel, tentModel, totemModel, treeModel, wellModel,
+  LEAF, type RoofKind, type TreeKind, bellModel, bellPostModel, bumperShieldModel, bumperSpringModel, rampModel, campfireModel, clutterModel, cottageModel, keepModel, obstacleModel,
+  palisadeModel, plotModel, scatterModel, stallModel, tentModel, totemModel, treeModel, wellModel,
 } from './models';
 import { type SpriteArt, imageSprite } from './textures';
 import { type Vox, VoxBatch, seeded } from './voxels';
@@ -35,10 +40,18 @@ const PROP_VOX = 0.3;
 const FIELD_TREE_VOX = 0.42;
 
 /** Where each building with a power stands (world x, z), and how high its top is, for the tag over it. */
-export const BUILDINGS: Record<BuildingKind, { x: number; z: number; top: number; name: string; power: string }> = {
+export const BUILDINGS: Record<BuildingKind, { x: number; z: number; top: number; name: string; power: string; w?: number }> = {
   keep: { x: 0, z: 14.5, top: 14.5, name: 'The keep', power: 'Call to arms' },
-  tavern: { x: -14.5, z: 13.5, top: 13.5, name: 'The Rusty Tankard', power: 'Stand a round' },
-  alchemist: { x: 14.5, z: 13.5, top: 10.5, name: 'The alchemist', power: 'Fire brew' },
+  // The five sprite buildings (w = world width of the sprite): a crooked street, back row z 9-11, front row z 15-19.
+  tavern: { x: -17.5, z: 10, top: 8.2, w: 7.1, name: 'The Rusty Tankard', power: 'Stand a round' },
+  alchemist: { x: 17.5, z: 18.5, top: 7.8, w: 6.4, name: 'The alchemist', power: 'Every ball burns' },
+  blacksmith: { x: -12.8, z: 16.5, top: 6.6, w: 7.3, name: 'The Blacksmith', power: 'Arrows +25%' },
+  chapel: { x: 12.8, z: 15.3, top: 8.4, w: 7.2, name: 'The Chapel', power: 'Mends the wall' },
+  forge: { x: 17, z: 9.5, top: 7.8, w: 7.6, name: 'The Siege Forge', power: 'Catapult +40%' },
+};
+const TOWN_ART: Partial<Record<BuildingKind, [string, string]>> = {
+  tavern: [townTavern, 'town-tavern'], alchemist: [townAlchemist, 'town-alchemist'], blacksmith: [townBlacksmith, 'town-blacksmith'],
+  chapel: [townChapel, 'town-chapel'], forge: [townForge, 'town-forge'],
 };
 
 export interface WorldFx {
@@ -48,7 +61,7 @@ export interface WorldFx {
 
 interface Spot {
   kind: BuildingKind;
-  group: THREE.Group;
+  group: THREE.Object3D;
   box: THREE.Box3;
   built: boolean;
   glow: number;
@@ -82,7 +95,7 @@ const NODES: [number, number][] = [
   // 9-11: lanes either side of the keep, past the stalls, to the back street.
   [-8.5, 12.5], [8.5, 12.5], [0, 8.4],
   // 12-14: doors (tavern, keep, alchemist), 15: the gate.
-  [-16, 19.2], [0, 22.2], [14, 18],
+  [-17.5, 15.5], [0, 22.2], [17.5, 21.5],
   [0, 3.4],
   // 16-19: cottage doors.
   [-24, 15.5], [-22, 22], [23.5, 15.5], [24.5, 22],
@@ -113,6 +126,9 @@ export class World {
   private field = new THREE.Group();
   /** The trees standing on the field, by obstacle index, each its own model so it can come down. */
   private fieldTrees = new Map<number, THREE.Object3D>();
+  /** The pinball fixtures on the field, by contraption index; the bumpers squash and the bells swing. */
+  private fixtures = new THREE.Group();
+  private fixtureParts: { kind: 'bumper' | 'bell' | 'ramp'; spring?: THREE.Object3D; pivot?: THREE.Object3D; phase: number }[] = [];
   private treeMesh!: THREE.InstancedMesh;
   private treeVoxels: LeafVoxel[] = [];
   /** Leaf voxel ids by side and 2-unit slice of z, for finding the ones a ball hits. */
@@ -137,7 +153,7 @@ export class World {
       this.adj[b].push(a);
     }
     this.folkArt = FOLK.map((url, i) => imageSprite(url, (aspects as Record<string, number>)[`townsfolk-${i + 1}`] ?? 1));
-    this.root.add(this.base, this.props, this.field);
+    this.root.add(this.base, this.props, this.field, this.fixtures);
     this.buildField();
     this.buildTown();
     this.buildProps();
@@ -183,16 +199,30 @@ export class World {
       this.base.add(g);
       return g;
     };
-    const models: Record<BuildingKind, () => Vox> = { keep: keepModel, tavern: tavernModel, alchemist: alchemistModel };
-    for (const kind of ['keep', 'tavern', 'alchemist'] as const) {
+    for (const kind of BUILDING_KINDS) {
       const b = BUILDINGS[kind];
       const built = this.game.hasBuilding(kind);
-      const group = place(built ? models[kind]() : plotModel(), b.x, b.z, 0, kind === 'keep' ? KEEP_VOX : BUILD_VOX);
-      const box = new THREE.Box3().setFromObject(group);
-      this.spots.push({ kind, group, box, built, glow: 0 });
+      const art = TOWN_ART[kind];
+      if (!built || !art) {
+        const group = place(built ? keepModel() : plotModel(), b.x, b.z, 0, kind === 'keep' ? KEEP_VOX : BUILD_VOX);
+        this.spots.push({ kind, group, box: new THREE.Box3().setFromObject(group), built, glow: 0 });
+        continue;
+      }
+      // A built town building is a painted sprite, upright and facing the camera (its angle is drawn in).
+      const sprite = imageSprite(art[0], (aspects as Record<string, number>)[art[1]] ?? 1);
+      const w = b.w ?? 7;
+      const h = w / sprite.aspect;
+      const mesh = new THREE.Mesh(
+        new THREE.PlaneGeometry(w, h).translate(0, h / 2, 0),
+        new THREE.MeshBasicMaterial({ map: sprite.texture, alphaTest: 0.5, side: THREE.DoubleSide }),
+      );
+      mesh.position.set(b.x, 0, b.z);
+      mesh.onBeforeRender = () => mesh.quaternion.copy(this.camera.quaternion);
+      this.base.add(mesh);
+      // The sprite leans back with the camera, so its pick box reaches back by most of its height.
+      const box = new THREE.Box3(new THREE.Vector3(b.x - w / 2, 0, b.z - h * 0.75), new THREE.Vector3(b.x + w / 2, h, b.z + 1));
+      this.spots.push({ kind, group: mesh, box, built, glow: 0 });
     }
-    if (this.game.hasBuilding('tavern')) this.chimneys.push({ x: BUILDINGS.tavern.x + 5.5 * BUILD_VOX, y: 13.2, z: BUILDINGS.tavern.z - 1, color: '#e8e4dc', rate: 2 });
-    if (this.game.hasBuilding('alchemist')) this.chimneys.push({ x: BUILDINGS.alchemist.x - 5.5 * BUILD_VOX, y: 10.8, z: BUILDINGS.alchemist.z - 0.6, color: '#8aff5a', rate: 2.5 });
     // Cottages round the edges, stalls in the lanes by the keep, a well and clutter.
     const cottages: [number, number, number, number, RoofKind][] = [
       [-24, 12, 15, 11, 'slate'], [-22.5, 19.5, 13, 9, 'thatch'], [23.5, 12, 15, 11, 'tile'], [24.5, 19.5, 13, 9, 'thatch'],
@@ -205,7 +235,7 @@ export class World {
     place(stallModel(201, '#c8322a'), -8.5, 9.5);
     place(stallModel(202, '#2a4fb0'), 8.5, 9.5);
     place(wellModel(), -27.5, 25.5);
-    const clutter: [number, number][] = [[-11, 21], [11.5, 22], [-19.5, 9.5], [20, 9], [-28, 9], [28.5, 9.5], [-36, 19], [37, 20]];
+    const clutter: [number, number][] = [[-11, 21], [11.5, 22], [-22.5, 7.5], [22.2, 15.8], [-28, 9], [28.5, 9.5], [-36, 19], [37, 20]];
     clutter.forEach(([x, z], i) => place(clutterModel(300 + i), x, z, (i * 1.3) % Math.PI));
     // Trees round the town's edge, and a line of them outside the wall's ends.
     const tb = new VoxBatch();
@@ -261,9 +291,26 @@ export class World {
     this.treeBuckets.clear();
     this.campfires = [];
     this.buildTreeLines();
+    this.buildBackFence();
     this.buildFarForest();
     this.buildCamp();
     this.buildScatter();
+  }
+
+  /** A low wooden rail fence along the back edge (field.topY) where the ball bounces. */
+  private buildBackFence(): void {
+    const hw = this.hw;
+    const z = -this.game.cfg.field.topY;
+    const wood = new THREE.MeshLambertMaterial({ color: '#8a5a32' });
+    const n = Math.max(2, Math.round((2 * hw) / 3) + 1);
+    const posts = new THREE.InstancedMesh(new THREE.BoxGeometry(0.4, 1.2, 0.4), wood, n);
+    for (let i = 0; i < n; i++) posts.setMatrixAt(i, tmpM.makeTranslation(-hw + (2 * hw * i) / (n - 1), 0.6, z));
+    this.field.add(posts);
+    for (const y of [0.5, 0.95]) {
+      const rail = new THREE.Mesh(new THREE.BoxGeometry(2 * hw, 0.15, 0.2), wood);
+      rail.position.set(0, y, z);
+      this.field.add(rail);
+    }
   }
 
   /** Three staggered rows of voxel trees down each side of the field, their crowns just over its edge. */
@@ -429,7 +476,7 @@ export class World {
       });
     }
     this.fieldTrees.clear();
-    const batch = new VoxBatch();
+    this.buildFixtures();
     const r = seeded(4100 + this.game.level * 17 + this.game.seed % 1000);
     const kinds: TreeKind[] = ['oak', 'oak', 'pine', 'birch', 'oak', 'pine'];
     this.game.obstacles.forEach((o, i) => {
@@ -441,9 +488,85 @@ export class World {
         return;
       }
       const v = obstacleModel(o.look, PROP_VOX, o.r ?? 1, o.hw ?? 1, o.hh ?? 1, 700 + i + this.game.level * 31);
-      batch.add(v, PROP_VOX, new THREE.Vector3(o.x, 0, -o.y), o.angle ?? 0);
+      // Each structure is its own model too, so a ball can smash it.
+      const prop = new VoxBatch().add(v, PROP_VOX, new THREE.Vector3(o.x, 0, -o.y), o.angle ?? 0).build();
+      this.fieldTrees.set(i, prop);
+      this.props.add(prop);
     });
-    this.props.add(batch.build());
+  }
+
+  /** The bumpers, bells and ramps of this level (rebuilt with the props). */
+  private buildFixtures(): void {
+    for (const c of [...this.fixtures.children]) {
+      this.fixtures.remove(c);
+      c.traverse((o) => {
+        if (o instanceof THREE.Mesh) {
+          o.geometry.dispose();
+          (o.material as THREE.Material).dispose();
+        }
+      });
+    }
+    this.fixtureParts = [];
+    const k = this.game.cfg.contraptions;
+    const one = (v: Vox, size: number) => new VoxBatch().add(v, size, new THREE.Vector3()).build();
+    const bells = this.game.contraptions.flatMap((c, i) => (c.kind === 'bell' ? [i] : []));
+    this.game.contraptions.forEach((c, i) => {
+      const g = new THREE.Group();
+      g.position.set(c.x, 0, -c.y);
+      this.fixtures.add(g);
+      if (c.kind === 'bumper') {
+        const size = 0.3;
+        const R = k.bumper.radius / size;
+        const spring = one(bumperSpringModel(R), size);
+        const shield = one(bumperShieldModel(R), size);
+        // The shield rides the top of the spring, so squashing the spring's group squashes both.
+        shield.position.y = 7 * size;
+        spring.add(shield);
+        g.add(spring);
+        this.fixtureParts[i] = { kind: 'bumper', spring, phase: 0 };
+      } else if (c.kind === 'bell') {
+        const size = 0.2;
+        g.add(one(bellPostModel(), size));
+        const pivot = new THREE.Group();
+        pivot.position.y = 10 * size;
+        pivot.add(one(bellModel(), size));
+        g.add(pivot);
+        this.fixtureParts[i] = { kind: 'bell', pivot, phase: i * 1.7 };
+      } else {
+        const size = 0.3;
+        g.add(new VoxBatch().add(rampModel(size, c.hw ?? 2, c.hh ?? 1.5, 90 + i), size, new THREE.Vector3(), c.angle ?? 0).build());
+        this.fixtureParts[i] = { kind: 'ramp', phase: 0 };
+      }
+    });
+    // The trio is strung together with a rope along the crossbeams.
+    for (let j = 1; j < bells.length; j++) {
+      const a = this.game.contraptions[bells[j - 1]];
+      const b = this.game.contraptions[bells[j]];
+      const rope = new THREE.Mesh(new THREE.BoxGeometry(Math.hypot(b.x - a.x, b.y - a.y), 0.08, 0.08), new THREE.MeshLambertMaterial({ color: '#c8a868' }));
+      rope.position.set((a.x + b.x) / 2, 10 * 0.2 + 0.1, -(a.y + b.y) / 2);
+      rope.rotation.y = Math.atan2(b.y - a.y, b.x - a.x);
+      this.fixtures.add(rope);
+    }
+  }
+
+  /** Squashes struck bumpers (from the sim's hit time) and swings rung bells until their set resets. */
+  private animateFixtures(): void {
+    const g = this.game;
+    const sq = g.cfg.contraptions.bumper.squashSeconds;
+    this.fixtureParts.forEach((p, i) => {
+      if (p.kind === 'bumper' && p.spring) {
+        const age = g.time - g.bumperHit[i];
+        const k = age >= 0 && age < sq ? Math.sin((Math.PI * age) / sq) : 0;
+        p.spring.scale.y = 1 - 0.5 * k;
+        p.spring.traverse((o) => {
+          if (o instanceof THREE.Mesh && o.material instanceof THREE.MeshLambertMaterial) o.material.emissive.setRGB(k * 0.5, k * 0.4, k * 0.1);
+        });
+      } else if (p.kind === 'bell' && p.pivot) {
+        const at = g.bellRung[i];
+        const amp = at < 0 ? 0 : 0.25 + 0.5 * Math.exp(-(g.time - at) * 1.2);
+        p.pivot.rotation.z = amp * Math.sin(g.time * 9 + p.phase);
+      }
+    });
   }
 
   /** A ball smashed a tree on the field: it bursts into leaves and splinters and is gone. */
@@ -461,10 +584,12 @@ export class World {
     });
     const x = o.x;
     const z = -o.y;
-    for (let i = 0; i < 6; i++) this.fx.burst(x + (Math.random() - 0.5) * 2, 2 + Math.random() * 3, z + (Math.random() - 0.5) * 2, 2, i % 3 ? '#5a9a32' : '#7ab83e', 9);
-    this.fx.burst(x, 0.8, z, 6, '#6b4424', 8);
+    const leafy = o.look === 'tree';
+    const stone = o.look === 'boulder' || o.look === 'milestone' || o.look === 'stone' || o.look === 'ruin' || o.look === 'well';
+    for (let i = 0; i < 6; i++) this.fx.burst(x + (Math.random() - 0.5) * 2, 2 + Math.random() * 3, z + (Math.random() - 0.5) * 2, 2, leafy ? (i % 3 ? '#5a9a32' : '#7ab83e') : stone ? '#a8a49a' : '#7a4a24', 9);
+    this.fx.burst(x, 0.8, z, 6, stone ? '#8c877c' : '#6b4424', 8);
     this.fx.puff(x, 1.5, z, 3, '#8a7a5a', 1.4);
-    this.fx.puff(x, 3, z, 3.5, '#7aa848', 1.2);
+    if (leafy) this.fx.puff(x, 3, z, 3.5, '#7aa848', 1.2);
   }
 
   /** A ball glanced off one of the field's structures: chips of stone (or wood) fly. */
@@ -510,6 +635,7 @@ export class World {
   }
 
   update(dt: number, time: number): void {
+    this.animateFixtures();
     // Smoke from the chimneys and campfires.
     for (const c of [...this.chimneys, ...this.campfires]) if (Math.random() < dt * c.rate) this.fx.puff(c.x, c.y, c.z, 1.4, c.color, 2.4);
     // Buildings glow while hovered or just used, and the ones ready to use breathe gently in battle.
@@ -517,7 +643,9 @@ export class World {
       s.glow = Math.max(0, s.glow - dt * 1.5);
       const k = s.glow;
       s.group.traverse((o) => {
-        if (o instanceof THREE.Mesh && o.material instanceof THREE.MeshLambertMaterial) o.material.emissive.setRGB(k * 0.16, k * 0.13, k * 0.04);
+        if (!(o instanceof THREE.Mesh)) return;
+        if (o.material instanceof THREE.MeshLambertMaterial) o.material.emissive.setRGB(k * 0.16, k * 0.13, k * 0.04);
+        else if (o.material instanceof THREE.MeshBasicMaterial) o.material.color.setRGB(1 + k * 0.3, 1 + k * 0.25, 1 + k * 0.1);
       });
     }
     // The townsfolk wander from door to stall to gate.

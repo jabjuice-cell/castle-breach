@@ -37,12 +37,62 @@ export const META_UPGRADES: MetaUpgrade[] = [
   { id: 'window', group: 'shield', name: 'Battle drums', blurb: 'A wider window to time a heave, per level.', costs: [25, 60, 130] },
   { id: 'power', group: 'shield', name: 'Iron boss', blurb: 'A heave smashes through one more orc line, per level.', costs: [80, 200] },
   { id: 'plating', group: 'shield', name: 'Plating', blurb: 'Shrugs off one orc trick a wave, per level.', costs: [60, 150] },
-  // Town: money, and buildings with powers to click in battle.
-  { id: 'tavern', group: 'town', name: 'The Rusty Tankard', blurb: 'Builds the tavern. Click it in battle to stand a round: fallen soldiers come back and everyone fights harder.', costs: [35] },
-  { id: 'alchemist', group: 'town', name: 'Alchemist\'s workshop', blurb: 'Builds the alchemist. Click it in battle and every ball burns like a fire flask for 8 s.', costs: [50] },
+  // Town: money and buildings with permanent boons.
+  { id: 'tavern', group: 'town', name: 'The Rusty Tankard', blurb: 'Builds the tavern. Soldiers fight 30% harder and march 50% faster.', costs: [35] },
+  { id: 'alchemist', group: 'town', name: 'Alchemist\'s workshop', blurb: 'Builds the alchemist. Every ball burns like a fire flask.', costs: [50] },
+  { id: 'blacksmith', group: 'town', name: 'Blacksmith', blurb: 'Builds the blacksmith. Arrows and bolts are sharpened: +25% damage.', costs: [45] },
+  { id: 'chapel', group: 'town', name: 'Chapel', blurb: 'Builds the chapel. Damaged wall segments mend themselves in battle.', costs: [55] },
+  { id: 'forge', group: 'town', name: 'Siege Forge', blurb: 'Builds the Siege Forge. The castle catapult hits 40% harder.', costs: [70] },
   { id: 'treasury', group: 'town', name: 'Treasury', blurb: '+60 gold in the war chest for every level, per level.', costs: [20, 45, 100, 220] },
   { id: 'market', group: 'town', name: 'Market', blurb: '+15% gold from kills, per level.', costs: [40, 90, 200] },
+  // Capstones: the far ends of the tree.
+  { id: 'doctrine', group: 'defence', name: 'Volley doctrine', blurb: 'The horn lasts longer: call to arms fires 0.5 faster and rests 10 s less.', costs: [300] },
+  { id: 'bastion', group: 'wall', name: 'Bastion', blurb: '+50% wall strength and climbing orcs take 3 more damage a second.', costs: [260] },
+  { id: 'guild', group: 'town', name: 'Merchants\' guild', blurb: '+25% gold from kills and +100 gold in the war chest.', costs: [350] },
 ];
+
+/**
+ * The research tree: what must be owned (upgrade, level) before an upgrade can be bought.
+ * Upgrades with no entry are roots. Owned levels are never taken away, so these only gate buying.
+ */
+const PREREQS: Record<string, [id: string, level: number][]> = {
+  catapult: [['archers', 1]],
+  fletching: [['archers', 1]],
+  drill: [['fletching', 1]],
+  doctrine: [['fletching', 3], ['drill', 2]],
+  spikes: [['masonry', 1]],
+  mortar: [['masonry', 1]],
+  bastion: [['masonry', 3], ['spikes', 2]],
+  recovery: [['width', 1]],
+  power: [['width', 1]],
+  window: [['recovery', 1]],
+  plating: [['power', 1]],
+  market: [['treasury', 1]],
+  guild: [['market', 3], ['treasury', 3]],
+  tavern: [['soldiers', 1]],
+  alchemist: [['catapult', 1]],
+  blacksmith: [['fletching', 1]],
+  chapel: [['masonry', 1]],
+  forge: [['blacksmith', 1], ['catapult', 1]],
+};
+
+/** What an upgrade needs first, as [upgrade, level] pairs. */
+export function metaNeeds(id: string): readonly [string, number][] {
+  return PREREQS[id] ?? [];
+}
+
+/** How far down the tree an upgrade sits: roots are 0. */
+export function metaDepth(id: string): number {
+  return metaNeeds(id).reduce((d, [need]) => Math.max(d, metaDepth(need) + 1), 0);
+}
+
+/** The prerequisites not yet met, as text for the town screen; empty once the upgrade can be bought. */
+export function metaLocked(meta: MetaLevels, id: string): string {
+  return metaNeeds(id)
+    .filter(([need, level]) => (meta[need] ?? 0) < level)
+    .map(([need, level]) => `${metaUpgrade(need).name}${metaUpgrade(need).costs.length > 1 ? ` ${level}` : ''}`)
+    .join(', ');
+}
 
 export type MetaLevels = Record<string, number>;
 
@@ -66,16 +116,18 @@ export interface Progress {
   levelsBeaten: number;
   /** The last level's defenders, so the setup can put them back in one click. */
   lastLoadout: { kind: DefenderKind; x: number; y: number }[];
+  /** True once the guided first wave has been played (or skipped by an older save). */
+  tutorialDone: boolean;
 }
 
 export function newProgress(): Progress {
-  return { renown: 0, meta: {}, levelsBeaten: 0, lastLoadout: [] };
+  return { renown: 0, meta: {}, levelsBeaten: 0, lastLoadout: [], tutorialDone: false };
 }
 
 /** Spends Renown on the next level of an upgrade. */
 export function buyMeta(p: Progress, id: string): boolean {
   const cost = metaCost(p.meta, id);
-  if (p.renown < cost) return false;
+  if (p.renown < cost || metaLocked(p.meta, id)) return false;
   p.renown -= cost;
   p.meta[id] = (p.meta[id] ?? 0) + 1;
   return true;
@@ -89,14 +141,16 @@ export function applyMeta(meta: MetaLevels, level: number, base: Config = makeCo
   const cfg = structuredClone(base);
   const lv = (id: string) => meta[id] ?? 0;
   cfg.unlocks.defenders = ['crossbow', ...(['archers', 'soldiers', 'catapult'] as const).filter((k) => lv(k) > 0)];
-  cfg.unlocks.buildings = ['keep', ...(['tavern', 'alchemist'] as const).filter((k) => lv(k) > 0)];
+  cfg.unlocks.buildings = ['keep', ...(['tavern', 'alchemist', 'blacksmith', 'chapel', 'forge'] as const).filter((k) => lv(k) > 0)];
   cfg.bonuses.damage *= 1 + 0.15 * lv('fletching');
   cfg.bonuses.rate *= 1 + 0.12 * lv('drill');
-  cfg.wall.segmentHp = Math.round(cfg.wall.segmentHp * (1 + 0.2 * lv('masonry')));
-  cfg.bonuses.spikesDps += 2 * lv('spikes');
+  cfg.wall.segmentHp = Math.round(cfg.wall.segmentHp * (1 + 0.2 * lv('masonry') + 0.5 * lv('bastion')));
+  cfg.bonuses.spikesDps += 2 * lv('spikes') + 3 * lv('bastion');
   cfg.economy.repairGoldPerHp *= 1 - 0.25 * lv('mortar');
-  cfg.bonuses.killGold *= 1 + 0.15 * lv('market');
-  cfg.economy.warChest = cfg.levels.warChest[Math.min(level, cfg.levels.warChest.length - 1)] + 60 * lv('treasury');
+  cfg.bonuses.killGold *= (1 + 0.15 * lv('market')) * (1 + 0.25 * lv('guild'));
+  cfg.economy.warChest = cfg.levels.warChest[Math.min(level, cfg.levels.warChest.length - 1)] + 60 * lv('treasury') + 100 * lv('guild');
+  cfg.callToArms.rate += 0.5 * lv('doctrine');
+  cfg.callToArms.cooldown -= 10 * lv('doctrine');
   // Each level's own field: the first is narrow, later ones wider behind a longer wall.
   const at = <T>(list: T[]) => list[Math.min(level, list.length - 1)];
   cfg.field.halfWidth = at(cfg.levels.halfWidth);

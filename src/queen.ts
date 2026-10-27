@@ -47,6 +47,9 @@ const RULES: Rule[] = [
     "Some of them carry barrels. Of what, I couldn't say, but a ball in the right place and the whole block goes up. Do aim for the barrels.",
     "Barrel orcs! Hit one in the middle of a crowd. It's like a party popper, only with orcs.",
   ] : null),
+  (g) => (g.plan.totals.shieldOrc > 0 || g.plan.totals.drummer > 0 ? [
+    "Orcs with shields! Balls bounce right off the front, so go round the side. And find the one banging the drum. Silence him and the lot of them fall apart.",
+  ] : null),
   (g) => (g.plan.totals.orcCatapult >= 4 ? [
     `${g.plan.totals.orcCatapult} catapults! Every boulder you block becomes one of your balls. More rocks, more balls. I believe that's called economics.`,
     "So many rocks this time. Click just as a ball lands on the shield and it smashes through a whole line. I read that on a tapestry.",
@@ -85,4 +88,12 @@ export function queenAdvice(game: Game): string {
 /** She's cross when the wall is crumbling or a boss is at the gates. */
 export function queenCross(game: Game): boolean {
   return Boolean(game.plan.boss || game.plan.tower) || game.segmentHp.some((hp) => hp < game.cfg.wall.segmentHp * 0.5);
+}
+
+/** Her verdict on a finished level, picked from how it went. */
+export function queenVerdict(game: Game, won: boolean): string {
+  if (game.perfects >= 5) return `${game.perfects} Perfect Returns! I shall tell everyone I taught you.`;
+  if (game.parries === 0) return won ? 'You never heaved once, and yet here we are. Do try it; it is terribly satisfying.' : 'You never heaved once, darling. The click is rather the point.';
+  if (game.bestCombo >= 10) return `A combo of ${game.bestCombo}! The orcs looked quite dizzy.`;
+  return won ? 'Acceptable. I have had worse afternoons.' : 'Chin up. Walls are only stones, and stones are cheap.';
 }

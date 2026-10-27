@@ -1,11 +1,11 @@
 import type { Config } from './config';
 import { Rng } from './rng';
 
-export const ENEMY_KINDS = ['grunt', 'chucker', 'barrel', 'runner', 'rider', 'orcCatapult', 'ogre', 'warlord'] as const;
+export const ENEMY_KINDS = ['grunt', 'chucker', 'barrel', 'runner', 'rider', 'orcCatapult', 'ogre', 'warlord', 'shieldOrc', 'drummer'] as const;
 export type EnemyKind = (typeof ENEMY_KINDS)[number];
 
 /** The outline a block of orcs keeps as it marches: the bricks of the Breakout wall. */
-export const SHAPES = ['rect', 'wedge', 'column', 'line'] as const;
+export const SHAPES = ['rect', 'wedge', 'column', 'line', 'pins'] as const;
 export type Shape = (typeof SHAPES)[number];
 
 /** One marching block: a formation of orcs that arrives together and keeps its shape. */
@@ -51,6 +51,15 @@ export function formation(shape: Shape, n: number, spacing: number): { dx: numbe
     }
     return out;
   }
+  if (shape === 'pins') {
+    // A triangle, point leading: row r holds r + 1 orcs.
+    const sp = spacing * 1.4;
+    for (let r = 0; out.length < n; r++) {
+      const inRow = Math.min(r + 1, n - out.length);
+      for (let i = 0; i < inRow; i++) out.push({ dx: (i - (inRow - 1) / 2) * sp, dy: r * sp * 0.9 });
+    }
+    return out;
+  }
   const cols = shape === 'column'
     ? Math.max(2, Math.ceil(Math.sqrt(n / 2.5)))
     : shape === 'line'
@@ -72,7 +81,7 @@ export function planWave(n: number, seed: number, cfg: Config): WavePlan {
   const rng = new Rng(seed * 7919 + n * 104729);
   const w = cfg.waves;
   const budget = Math.round(waveBudget(n, cfg));
-  const totals: Record<EnemyKind, number> = { grunt: 0, chucker: 0, barrel: 0, runner: 0, rider: 0, orcCatapult: 0, ogre: 0, warlord: 0 };
+  const totals: Record<EnemyKind, number> = { grunt: 0, chucker: 0, barrel: 0, runner: 0, rider: 0, orcCatapult: 0, ogre: 0, warlord: 0, shieldOrc: 0, drummer: 0 };
 
   // Specialists take a share of the budget each (at least one once unlocked); grunts fill the rest.
   const shares: [EnemyKind, number, number][] = [
@@ -115,15 +124,32 @@ export function planWave(n: number, seed: number, cfg: Config): WavePlan {
   const path = [...Array(segs).keys()].slice(1, segs - 1);
   const lanes = rng.shuffle([...path]);
   while (lanes.length < blocks) lanes.push(path[rng.int(0, path.length - 1)]);
+  // Pins blocks and shield guards are decided on their own stream, so earlier waves and streams are unchanged.
+  const cfgGrunt = totals.grunt;
+  const srng = new Rng(seed * 31 + n * 977 + 5);
+  const pins: boolean[] = [];
+  const shields: number[] = [];
+  const guard = Math.min(w.shieldsMax, 3 + Math.floor((n - w.shieldsFromWave) / w.shieldsEvery));
+  for (let i = 0; i < blocks; i++) {
+    const isPins = n >= w.pinsFromWave && srng.next() < w.pinsChance;
+    pins.push(isPins);
+    shields.push(!isPins && n >= w.shieldsFromWave ? Math.min(guard, split(totals.grunt, i)) : 0);
+  }
+  totals.shieldOrc = shields.reduce((s, c) => s + c, 0);
+  totals.drummer = shields.filter((c) => c >= 3).length;
+  totals.grunt -= totals.shieldOrc;
   for (let i = 0; i < blocks; i++) {
     const members = [
-      { kind: 'grunt' as const, count: split(totals.grunt, i) },
+      { kind: 'grunt' as const, count: Math.floor((cfgGrunt * (i + 1)) / blocks) - Math.floor((cfgGrunt * i) / blocks) - shields[i] },
+      { kind: 'shieldOrc' as const, count: shields[i] },
       { kind: 'chucker' as const, count: split(totals.chucker, i) },
       { kind: 'barrel' as const, count: split(totals.barrel, i) },
+      { kind: 'drummer' as const, count: shields[i] >= 3 ? 1 : 0 },
       { kind: 'orcCatapult' as const, count: split(totals.orcCatapult, i) },
     ].filter((m) => m.count > 0);
     if (members.length === 0) continue;
-    const shape = (['rect', 'wedge', 'column'] as const)[rng.int(0, 2)];
+    const picked = (['rect', 'wedge', 'column'] as const)[rng.int(0, 2)];
+    const shape: Shape = pins[i] ? 'pins' : picked;
     const time = i === 0 ? 0 : rng.range(0, duration);
     groups.push({ time, lane: lanes[i], x: laneX(lanes[i]) + rng.range(-1.5, 1.5), shape, members });
   }
