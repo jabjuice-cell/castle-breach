@@ -31,16 +31,18 @@ export const PAL = {
 };
 
 /** Cream ashlar: rows of blocks two voxels high with staggered joints, each block its own shade. */
-function brick(base: string, rnd: () => number, joints = 0.82): (x: number, y: number, z: number) => THREE.Color {
+function brick(base: string, rnd: () => number, joints = 0.82): (x: number, y: number, z: number, at?: THREE.Vector3) => THREE.Color {
   const shades = new Map<string, number>();
-  return (x, y, z) => {
+  return (x, y, z, at) => {
     const row = Math.floor(y / 2);
     const along = (x + z + (row % 2) * 2) / 4;
     const block = `${row}:${Math.floor(along)}`;
     if (!shades.has(block)) shades.set(block, 0.9 + rnd() * 0.18);
     const c = new THREE.Color(base).multiplyScalar(shades.get(block)!);
-    // A darker mortar line under each row and at each joint.
-    if (y % 2 === 0 || (x + z + (row % 2) * 2) % 4 === 0) c.multiplyScalar(joints + rnd() * 0.06);
+    // A darker mortar line under each row and at each joint (a single small cell thick on a finer model).
+    const bed = y % 2 === 0 && (!at || at.y <= y);
+    const joint = (x + z + (row % 2) * 2) % 4 === 0 && (!at || at.x <= x || at.z <= z);
+    if (bed || joint) c.multiplyScalar(joints + rnd() * 0.06);
     return c;
   };
 }
@@ -66,7 +68,7 @@ function crenellate(v: Vox, x0: number, z0: number, x1: number, z1: number, y: n
 function roundTower(v: Vox, cx: number, cz: number, r: number, top: number, roof: boolean, rnd: () => number): void {
   const wall = brick(PAL.cream, rnd);
   v.cyl(cx, cz, r + 1, 0, 2, () => jitter(PAL.stone, 0.1, rnd));
-  v.cyl(cx, cz, r, 3, top, (x, y, z) => (y % 9 === 0 ? jitter(PAL.creamDark, 0.05, rnd) : wall(x, y, z)));
+  v.cyl(cx, cz, r, 3, top, (x, y, z, at) => (y % 9 === 0 ? jitter(PAL.creamDark, 0.05, rnd) : wall(x, y, z, at)));
   // Glowing slit windows facing the camera and the sides.
   for (const wy of [Math.round(top * 0.45), Math.round(top * 0.75)]) {
     v.set(cx, wy, cz + Math.round(r), PAL.glow, true);
@@ -174,6 +176,13 @@ export function keepModel(): Vox {
   v.each((_x, _y, _z, c) => {
     if (c.c.equals(new THREE.Color(PAL.glow))) c.glow = true;
   });
+  if (v.res > 1) {
+    // Iron studs on the oak door and its ring handles; stone sills under the windows.
+    for (let x = -3; x <= 3; x += 2) for (const y of [4, 7]) v.dot(x + 0.25, y + 0.5, 12, PAL.iron);
+    v.dot(-0.5, 6.5, 12, PAL.gold);
+    v.dot(1, 6.5, 12, PAL.gold);
+    for (const x of [-7, 7]) for (const y of [14, 20]) for (const dx of [-0.5, 0, 0.5, 1]) v.dot(x + dx, y - 0.5, 11, PAL.creamDark);
+  }
   // A crow on the lookout, eyeing the battlefield.
   v.set(2, 38 - 2, 3, '#1e1e24');
   v.set(2, 37, 3, '#1e1e24');
@@ -662,7 +671,7 @@ export function ballistaModel(): Vox {
   const v = new Vox();
   // The turntable: oak planks in an iron ring, on a stone footing.
   v.cyl(0, 0, 6.5, 0, 0, PAL.stoneDark, false);
-  v.cyl(0, 0, 6, 1, 1, (x, _y, z) => (Math.hypot(x, z) > 5 ? PAL.iron : (x + 20) % 3 === 0 ? '#5a3a1c' : '#7a5230'), false);
+  v.cyl(0, 0, 6, 1, 1, (x, _y, _z, at) => (Math.hypot(at.x, at.z) > 5 ? PAL.iron : (x + 20) % 3 === 0 ? '#5a3a1c' : '#7a5230'), false);
   // The post and the stock along it, with a dark groove for the bolt.
   v.box(-1, 2, -1, 1, 5, 1, PAL.woodDark);
   v.box(-2, 6, -9, 2, 6, 6, '#8a5a30');
@@ -696,6 +705,21 @@ export function ballistaModel(): Vox {
   v.box(-5, 2, 4, -5, 13, 4, PAL.woodDark);
   v.box(-5, 11, 0, -5, 13, 3, PAL.blue);
   v.box(-5, 12, 1, -5, 12, 2, PAL.gold);
+  if (v.res > 1) {
+    // Rivets round the turntable's iron ring, a honed bright edge on the bow arms, a pointed bolt head.
+    for (let a = 0; a < 12; a++) {
+      const ang = (a / 12) * Math.PI * 2;
+      v.dot(Math.round(Math.cos(ang) * 5.6 * 2) / 2 + 0.25, 2, Math.round(Math.sin(ang) * 5.6 * 2) / 2 + 0.25, '#d8dde2');
+    }
+    for (let x = -9; x <= 9; x++) {
+      if (Math.abs(x) < 2) continue;
+      const z = -8 + Math.round((x * x) / 30);
+      v.dot(x, 7.5, z - 1, '#eef2f5');
+      v.dot(x + 0.5, 7.5, z - 1, '#eef2f5');
+    }
+    for (const [x, y] of [[0, 7.5], [0.5, 7.5], [0.5, 7]]) v.undot(x, y, -16);
+    v.dot(0, 7, -16.5, '#ffffff');
+  }
   return v;
 }
 
@@ -712,12 +736,21 @@ export function bumperSpringModel(r: number): Vox {
 /** A chunky round royal shield, gold rim, blue face with a red cross: built flat, y 0 at its underside. */
 export function bumperShieldModel(r: number): Vox {
   const v = new Vox();
-  v.cyl(0, 0, r, 0, 1, (x, _, z) => {
-    const d = Math.hypot(x, z);
+  v.cyl(0, 0, r, 0, 1, (_x, _y, _z, at) => {
+    const d = Math.hypot(at.x, at.z);
     if (d > r - 1 || d < 1) return PAL.gold;
-    return Math.abs(x) < 1 || Math.abs(z) < 1 ? '#d8302a' : PAL.blueLight;
+    return Math.abs(at.x) < 0.5 || Math.abs(at.z) < 0.5 ? '#d8302a' : PAL.blueLight;
   }, false);
   v.set(0, 2, 0, PAL.gold);
+  if (v.res > 1) {
+    // Rivets round the rim, standing proud of it, and a pointed boss.
+    for (let a = 0; a < 10; a++) {
+      const ang = (a / 10) * Math.PI * 2;
+      v.dot(Math.round(Math.cos(ang) * (r - 0.6) * 2) / 2 + 0.25, 2, Math.round(Math.sin(ang) * (r - 0.6) * 2) / 2 + 0.25, '#fff2b0');
+    }
+    for (const [x, z] of [[0.5, 0], [0, 0.5], [0.5, 0.5]]) v.undot(x, 2.5, z);
+    v.dot(0, 3, 0, '#fff2b0');
+  }
   return v;
 }
 
@@ -738,6 +771,10 @@ export function bellPostModel(): Vox {
   // A peaked plank roof over the beam.
   v.box(-7, 12, -2, 7, 12, 1, PAL.wood);
   v.box(-5, 13, -1, 5, 13, 0, '#8a5a2e');
+  if (v.res > 1) {
+    // Iron nail heads where the posts meet the beam.
+    for (const x of [-5, -4, 4, 5]) v.dot(x + 0.25, 10.5, 1, PAL.iron);
+  }
   return v;
 }
 
@@ -774,10 +811,31 @@ export function rampModel(size: number, hw: number, hh: number, seed: number): V
   for (let z = -D + 1; z <= D; z += 3) v.box(-W + 1, rise(z) + 1, z, W - 1, rise(z) + 1, z, PAL.woodDark);
   v.box(0, 7, -D, 0, 12, -D, PAL.woodDark);
   v.box(1, 9, -D, 3, 12, -D, '#a02a2a');
+  if (v.res > 1) {
+    for (let z = -D + 1; z <= D; z += 3) for (const x of [-W + 1, W - 1]) v.dot(x + 0.25, rise(z) + 2, z + 0.25, PAL.iron);
+  }
   return v;
 }
 
 // ---- the four newer defenders (placeholder voxel art) ----------------------------
+
+/**
+ * A finer figure's face (High detail), the figure facing -z with its face at z: dark eyes in the inner halves
+ * of the eye voxels at x = -1 and 1, a nose standing out, a mouth below. y is the eye row.
+ */
+function fineFace(v: Vox, y: number, z: number, skin: string): void {
+  for (const ex of [-1, 1]) {
+    for (const [dx, dy] of [[0, 0], [0.5, 0], [0, 0.5], [0.5, 0.5]]) v.dot(ex + dx, y + dy, z, skin);
+    const inner = ex < 0 ? -0.5 : 1;
+    v.dot(inner, y, z, '#1a1a22');
+    v.dot(inner, y + 0.5, z, '#1a1a22');
+  }
+  const nose = new THREE.Color(skin).multiplyScalar(0.88);
+  v.dot(0, y - 0.5, z - 0.5, nose);
+  v.dot(0.5, y - 0.5, z - 0.5, nose);
+  v.dot(0, y - 1, z, '#a0503e');
+  v.dot(0.5, y - 1, z, '#a0503e');
+}
 
 /** A mage: blue robe and pointed hat, a staff topped with a glowing orb (the orb is glow voxels). Faces -z. */
 export function mageModel(): Vox {
@@ -803,6 +861,15 @@ export function mageModel(): Vox {
   v.blob(4, 22, -2, 2, 2, 2, '#c07aff', () => 0, 0);
   v.set(4, 22, -2, '#ffffff');
   v.glowNext = false;
+  if (v.res > 1) {
+    fineFace(v, 14, -2, '#e8c9a0');
+    v.dot(0, 13, -2, '#e8e8e8');
+    v.dot(0.5, 13, -2, '#e8e8e8');
+    // Gold stars on the hat, a buckle on the belt.
+    for (const [x, y, z] of [[-1, 18, -2.5], [1, 19.5, -1.5], [2.5, 17, 0]]) v.dot(x, y, z, PAL.gold);
+    v.dot(0, 7, -2.5, '#fff2b0');
+    v.dot(0.5, 7, -2.5, '#fff2b0');
+  }
   return v;
 }
 
@@ -810,7 +877,7 @@ export function mageModel(): Vox {
 export function bigBallistaModel(): Vox {
   const v = new Vox();
   const lift = 5;
-  ballistaModel().each((x, y, z, c) => v.set(x, y + lift, z, c.c));
+  v.paste(ballistaModel(), 0, lift, 0);
   // Four stout legs braced on a base frame, and two cart wheels.
   for (const [x, z] of [[-6, -5], [6, -5], [-6, 5], [6, 5]]) v.box(x, 0, z, x, lift, z, PAL.woodDark);
   v.box(-6, 1, -5, 6, 1, -5, PAL.wood);
@@ -842,6 +909,14 @@ export function oilModel(): Vox {
   v.box(-1, 6, -7, 1, 8, -5, '#26282c');
   v.box(-1, 5, -7, 1, 5, -6, '#26282c');
   v.box(5, 4, 0, 9, 4, 0, PAL.woodDark);
+  if (v.res > 1) {
+    // Rivets round the cauldron's belly, and bubbles bursting on the oil.
+    for (let a = 0; a < 14; a++) {
+      const ang = (a / 14) * Math.PI * 2;
+      v.dot(Math.round(Math.cos(ang) * 5 * 2) / 2 + 0.25, 5.5, Math.round(Math.sin(ang) * 5 * 2) / 2 + 0.25, '#6a6e78');
+    }
+    for (const [x, z] of [[-1, 2], [2, -1], [0.5, -2.5]]) v.dot(x, 8, z, '#fff2a8', true);
+  }
   return v;
 }
 
@@ -855,8 +930,11 @@ export function spikeTrapModel(): Vox {
       if (Math.hypot(x, z) > 5.4) continue;
       v.box(x, 1, z, x, 2, z, '#c8ccd2');
       v.set(x, 3, z, '#ffffff');
+      // On a finer model each spike narrows to a single point.
+      if (v.res > 1) for (const [dx, dz] of [[0.5, 0], [0, 0.5], [0.5, 0.5]]) v.undot(x + dx, 3.5, z + dz);
     }
   }
+  if (v.res > 1) for (let a = 0; a < 8; a++) v.dot(Math.round(Math.cos(a * 0.785) * 6.3 * 2) / 2 + 0.25, 1.5, Math.round(Math.sin(a * 0.785) * 6.3 * 2) / 2 + 0.25, '#9aa0a8');
   return v;
 }
 
@@ -895,6 +973,19 @@ export function archerModel(): Vox {
   v.box(-1, 9, 1, 1, 12, 1, '#6b4423');
   v.box(1, 6, 1, 1, 10, 1, PAL.wood);
   v.set(1, 11, 1, '#ffffff');
+  if (v.res > 1) {
+    fineFace(v, 12, -1, SKIN);
+    // A gold buckle on the belt, a thin bowstring, the bow bending out at the middle.
+    v.dot(0, 6, -1.5, '#fff2b0');
+    v.dot(0.5, 6, -1.5, '#fff2b0');
+    for (let y = 4; y < 11; y += 0.5) {
+      v.undot(-3.5, y, -1);
+      v.undot(-3.5, y, -0.5);
+      v.undot(-4, y, -0.5);
+    }
+    for (let y = 6; y < 9; y += 0.5) v.dot(-4, y, -3.5, PAL.woodDark);
+    for (const y of [11, 11.5]) v.dot(1, y, 1.5, '#e04040');
+  }
   return v;
 }
 
@@ -932,7 +1023,49 @@ export function soldierModel(): Vox {
   v.box(4, 21, -1, 4, 23, -1, '#c8ccd2');
   v.set(4, 7, -1, SKIN);
   v.set(4, 8, -1, SKIN);
+  if (v.res > 1) fineSoldier(v);
   return v;
+}
+
+/**
+ * The finer footman (High detail): a face under a nose guard, rivets on the helmet, a buckle on the belt,
+ * a round shield traced smoothly with a rim of rivets and a domed boss, a slim spear with a leaf-shaped head.
+ */
+function fineSoldier(v: Vox): void {
+  fineFace(v, 12, -1, SKIN);
+  v.dot(0, 13, -1.5, STEEL);
+  v.dot(0.5, 13, -1.5, STEEL);
+  v.dot(0, 12.5, -1.5, STEEL);
+  for (let x = -2; x <= 2; x++) v.dot(x + 0.25, 14, -2.5, '#dfe4ea');
+  v.dot(0, 6, -1.5, PAL.gold);
+  v.dot(0.5, 6, -1.5, PAL.gold);
+  // The shield: cleared and traced again on the finer grid.
+  for (let x = -7; x <= -1; x++) for (let y = 4; y <= 10; y++) v.del(x, y, -2);
+  for (let x = -7; x < 0; x += 0.5) {
+    for (let y = 4; y < 11; y += 0.5) {
+      const d = Math.hypot(x - 0.25 + 4, y - 0.25 - 7);
+      if (d > 2.85) continue;
+      v.dot(x, y, -2, d > 2.2 ? STEEL : d < 0.9 ? PAL.gold : PAL.blue);
+      v.dot(x, y, -1.5, d > 2.2 ? STEEL : PAL.blue);
+      if (d < 0.6) v.dot(x, y, -2.5, '#fff2b0');
+    }
+  }
+  for (let a = 0; a < 6; a++) {
+    const ang = (a / 6) * Math.PI * 2 + 0.3;
+    v.dot(Math.round((Math.cos(ang) * 2.5 - 4 + 0.25) * 2) / 2, Math.round((Math.sin(ang) * 2.5 + 7 + 0.25) * 2) / 2, -2.5, '#ffffff');
+  }
+  // A slim shaft and a leaf-shaped spearhead with bright edges.
+  for (let y = 0; y < 21; y += 0.5) {
+    if (y >= 7 && y < 9) continue;
+    v.undot(4.5, y, -1);
+    v.undot(4.5, y, -0.5);
+  }
+  for (const y of [21.5, 22]) {
+    v.dot(3.5, y, -1, '#eef2f5');
+    v.dot(5, y, -1, '#eef2f5');
+  }
+  for (const [x, z] of [[4, -1], [4.5, -1], [4.5, -0.5]]) v.undot(x, 23.5, z);
+  v.dot(4, 23.5, -0.5, '#ffffff');
 }
 
 /** The castle's wooden catapult: wheeled frame, throwing arm with a bucket holding a gold royal ball. Throws toward -z. */
@@ -971,6 +1104,36 @@ export function castleCatapultModel(): Vox {
   // A royal pennant on the front beam.
   v.box(-1, 5, -8, 1, 7, -8, PAL.blue);
   v.set(0, 6, -8, PAL.gold);
+  if (v.res > 1) {
+    // Spoked wheels, traced again on the finer grid with iron studs round the tyres; bolts along the frame.
+    for (const z of [-5, 5]) {
+      for (const x of [-6, 5]) {
+        for (let dy = -3; dy <= 3; dy++) {
+          for (let dz = -3; dz <= 3; dz++) {
+            v.del(x, 3 + dy, z + dz);
+            v.del(x + 1, 3 + dy, z + dz);
+          }
+        }
+        for (let y = -0.5; y < 7; y += 0.5) {
+          for (let zz = z - 3.5; zz < z + 4; zz += 0.5) {
+            const [py, pz] = [y + 0.25 - 3.5, zz + 0.25 - (z + 0.5)];
+            const d = Math.hypot(py, pz);
+            if (d > 3.55) continue;
+            const spoke = Math.abs(py) < 0.3 || Math.abs(pz) < 0.3 || Math.abs(Math.abs(py) - Math.abs(pz)) < 0.35;
+            if (d > 1.1 && d <= 2.6 && !spoke) continue;
+            const c = d < 1.1 ? PAL.gold : d > 2.6 ? '#5a3a1a' : '#8a5a2e';
+            for (let xx = x; xx < x + 2; xx += 0.5) v.dot(xx, y, zz, c);
+          }
+        }
+        for (let a = 0; a < 8; a++) {
+          const ang = (a / 8) * Math.PI * 2;
+          const out = x < 0 ? x - 0.5 : x + 2;
+          v.dot(out, Math.round((Math.sin(ang) * 3.1 + 3.25) * 2) / 2, Math.round((Math.cos(ang) * 3.1 + z + 0.25) * 2) / 2, PAL.iron);
+        }
+      }
+    }
+    for (const z of [-7, 0, 7]) for (const x of [-4, 3]) v.dot(x + (x < 0 ? -0.5 : 2), 3.5, z + 0.25, '#c8ccd2');
+  }
   return v;
 }
 

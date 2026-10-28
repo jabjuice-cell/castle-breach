@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { jitter, seeded, Vox, VoxBatch } from './voxels';
+import { atRes, jitter, seeded, Vox, VoxBatch } from './voxels';
 
 /**
  * The royal shield as a voxel metal shield: a giant steel-rimmed heater shield of royal-blue enamel,
@@ -46,11 +46,11 @@ function crestAt(x: number, y: number): string | null {
   return ch && ch !== '.' ? ch : null;
 }
 
-/** True for a cell of the heater shape: square shoulders with an arched top, narrowing to a rounded point. */
-function inShape(x: number, y: number): boolean {
-  if (x < 0 || x >= NX || y < 0 || y >= NY) return false;
-  const cx = x + 0.5 - NX / 2;
-  const cy = y + 0.5;
+/** True for a point (in cells) inside the heater shape: square shoulders with an arched top, narrowing to a rounded point. */
+function inside(px: number, py: number): boolean {
+  if (px < 0 || px >= NX || py < 0 || py >= NY) return false;
+  const cx = px - NX / 2;
+  const cy = py;
   if (cy > 14.2 + 1.2 * (1 - (cx / (NX / 2)) ** 2)) return false;
   const half = NX / 2;
   if (cy >= 8) return Math.abs(cx) <= half;
@@ -58,12 +58,16 @@ function inShape(x: number, y: number): boolean {
   return Math.abs(cx) <= half * Math.sqrt(Math.max(0, 1 - t ** 1.7));
 }
 
+/** True for a cell of the heater shape. */
+const inShape = (x: number, y: number) => inside(x + 0.5, y + 0.5);
+
 const isRim = (x: number, y: number) => inShape(x, y) && !(inShape(x - 1, y) && inShape(x + 1, y) && inShape(x, y - 1) && inShape(x, y + 1));
 
 /** The shield's cells. Cells run x 0..23, y 0..14, z -1 (front lip) to 2 (back lip). */
 export function buildShieldVox(): Vox {
   const rnd = seeded(23);
   const v = new Vox();
+  if (v.res > 1) return fineShield(v, rnd);
   for (let x = 0; x < NX; x++) {
     for (let y = 0; y < NY; y++) {
       if (!inShape(x, y)) continue;
@@ -89,13 +93,68 @@ export function buildShieldVox(): Vox {
   return v;
 }
 
+/**
+ * The finer shield (High detail), on a grid of half cells: the outline traced smoothly, the steel lip
+ * bevelled (a step down from its outer edge), round rivets standing proud of it, and the crest raised
+ * off the enamel with a darker lower edge, on both faces.
+ */
+function fineShield(v: Vox, rnd: () => number): Vox {
+  const h = 1 / v.res;
+  const near = (px: number, py: number, d: number) => !(inside(px - d, py) && inside(px + d, py) && inside(px, py - d) && inside(px, py + d));
+  let rivets = 0;
+  for (let x = 0; x < NX; x += h) {
+    for (let y = 0; y < NY; y += h) {
+      const [px, py] = [x + h / 2, y + h / 2];
+      if (!inside(px, py)) continue;
+      const rim = near(px, py, 1);
+      const crest = crestAt(Math.floor(x), Math.floor(y));
+      let c: THREE.Color;
+      if (crest) c = new THREE.Color(crest === 'R' ? RED : crest === 'D' ? GOLD_DARK : GOLD);
+      else c = jitter(rim ? STEEL : BLUE, rim ? 0.05 : 0.07, rnd);
+      for (let z = 0; z < 2; z += h) v.dot(x, y, z, c);
+      if (rim) {
+        const outer = near(px, py, h);
+        const lip = jitter(outer ? STEEL : '#aeb6be', 0.04, rnd);
+        v.dot(x, y, -h, lip);
+        v.dot(x, y, 2, lip);
+        if (near(px, py, 0.5)) {
+          v.dot(x, y, -1, lip);
+          v.dot(x, y, 2 + h, lip);
+        }
+      } else if (crest) {
+        // The crest stands out of the enamel, its lower edge in shadow.
+        const raised = crestAt(Math.floor(x), Math.floor(y - h)) === null ? new THREE.Color(GOLD_DARK) : c;
+        v.dot(x, y, -h, raised);
+        v.dot(x, y, 2, raised);
+      }
+    }
+  }
+  // Rivets round the lip: a bright stud standing out of the outer step, one every two cells or so.
+  for (let x = 0; x < NX; x += h) {
+    for (let y = 0; y < NY; y += h) {
+      const [px, py] = [x + h / 2, y + h / 2];
+      if (!inside(px, py) || !near(px, py, 0.5) || near(px, py, h)) continue;
+      if ((Math.round(px * 3) + Math.round(py * 3)) % 7 !== 0 || rivets++ % 2) continue;
+      v.dot(x, y, -1, STEEL_BRIGHT);
+      v.dot(x, y, -1 - h, STEEL_BRIGHT);
+      v.dot(x, y, 2 + h, STEEL_BRIGHT);
+      v.dot(x, y, 2 + 2 * h, STEEL_BRIGHT);
+    }
+  }
+  // The bearers' grip on the back: a stitched leather bar low down.
+  for (let x = 8; x < 16; x += h) {
+    for (let y = 2; y < 4; y += h) if (v.hasDot(x, y, 2 - h)) v.dot(x, y, 2, (x * 4) % 2 === 0 && y === 3 ? '#c8a070' : jitter(LEATHER, 0.1, rnd));
+  }
+  return v;
+}
+
 export class ShieldModel {
   readonly group = new THREE.Group();
   private mesh: THREE.Mesh;
   private mat: THREE.MeshLambertMaterial;
   private charge = { value: 1 };
 
-  constructor() {
+  constructor(res = 1) {
     this.mat = new THREE.MeshLambertMaterial({ vertexColors: true });
     // While the heave recharges, the shield lights up from the bottom to the top: below the charge line it
     // glows (brightest right at the line), above it stays dim.
@@ -118,8 +177,14 @@ if (uCharge < 0.999) {
     };
     this.mesh = new THREE.Mesh(new THREE.BufferGeometry(), this.mat);
     this.group.add(this.mesh);
+    this.setRes(res);
+  }
+
+  /** Rebuilds the shield at a resolution (2 on High detail). */
+  setRes(res: number): void {
     const batch = new VoxBatch();
-    buildShieldVox().meshInto(batch, S, new THREE.Vector3(-0.5, 0, 0));
+    atRes(res, buildShieldVox).meshInto(batch, S, new THREE.Vector3(-0.5, 0, 0));
+    this.mesh.geometry.dispose();
     this.mesh.geometry = batch.geometries().solid ?? new THREE.BufferGeometry();
   }
 

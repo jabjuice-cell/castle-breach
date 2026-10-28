@@ -41,7 +41,7 @@ import { paintGround } from './ground';
 import { Terrain } from './terrain';
 import { archerModel, ballistaModel, bigBallistaModel, castleCatapultModel, mageModel, obstacleModel, oilModel, soldierModel, spikeTrapModel } from './models';
 import { VoxelOrcs } from './orcs';
-import { VoxBatch, type Vox } from './voxels';
+import { VoxBatch, atRes, type Vox } from './voxels';
 import { ShieldModel } from './shield';
 import { ballGeometry, rockGeometry, ROCK_DEBRIS } from './voxelBalls';
 import { World } from './world';
@@ -62,13 +62,17 @@ export const QUALITIES: Quality[] = ['low', 'medium', 'high'];
 /**
  * What each Detail level costs: render resolution (up to the screen's own pixel density, so
  * High is pin sharp on a retina screen), ground texture width, terrain grid spacing, debris
- * cap, how often ground marks upload, and how many firework particles each burst throws.
+ * cap, how often ground marks upload, how many firework particles each burst throws, and how finely the
+ * voxel models are built (High builds the balls, rocks, orcs, defenders, shield, contraptions and castle
+ * from voxels half the size: the same models, rounder, with rivets, faces and edges drawn in).
  */
-const QUALITY: Record<Quality, { pixelRatio: number; groundWidth: number; cell: number; debris: number; upload: number; fx: number }> = {
-  low: { pixelRatio: 1, groundWidth: 1280, cell: 1, debris: 400, upload: 0.5, fx: 0.35 },
-  medium: { pixelRatio: 2, groundWidth: 2048, cell: 0.6, debris: 900, upload: 0.25, fx: 0.7 },
-  high: { pixelRatio: 2, groundWidth: 2560, cell: 0.4, debris: 1500, upload: 0.15, fx: 1 },
+const QUALITY: Record<Quality, { pixelRatio: number; groundWidth: number; cell: number; debris: number; upload: number; fx: number; voxelRes: number }> = {
+  low: { pixelRatio: 1, groundWidth: 1280, cell: 1, debris: 400, upload: 0.5, fx: 0.35, voxelRes: 1 },
+  medium: { pixelRatio: 2, groundWidth: 2048, cell: 0.6, debris: 900, upload: 0.25, fx: 0.7, voxelRes: 1 },
+  high: { pixelRatio: 2, groundWidth: 2560, cell: 0.4, debris: 1500, upload: 0.15, fx: 1, voxelRes: 2 },
 };
+/** How tall each kind of thrown rock is drawn. */
+const THROWN_HEIGHT = { rock: 0.8, boulder: 1.8, stone: 1.2 } as const;
 
 const VOXEL = 0.5;
 const MAX_ENEMIES = 4000;
@@ -200,18 +204,66 @@ function hash3(a: number, b: number, c: number): number {
   return h - Math.floor(h);
 }
 
+/**
+ * True on a mortar line: under each course of stone and at each joint. On High detail sx and sy pick the
+ * small cell of the stone (0 is its left and bottom), so the lines are a single small cell thick.
+ */
+function mortar(ix: number, iy: number, sx = 0, sy = 0): boolean {
+  const run = ix + (Math.floor(iy / 2) % 2) * 2;
+  return (run % 4 === 0 && sx === 0) || (iy % 2 === 0 && sy === 0);
+}
+
 /** Grey castle stone, varying stone by stone (a few blue-grey or warm ones), with darker mortar joints. */
 const STONE_GREYS = ['#a3a19c', '#94928d', '#8b8a85', '#aba9a3', '#9c9a95', '#8f959b', '#a39c90'];
-function masonry(ix: number, iy: number, salt: number): THREE.Color {
+function masonry(ix: number, iy: number, salt: number, sx = 0, sy = 0): THREE.Color {
   const course = Math.floor(iy / 2);
   const run = ix + (course % 2) * 2;
   const brick = Math.floor(run / 4);
   const pick = hash3(brick, course, salt);
   const c = new THREE.Color(STONE_GREYS[Math.floor(pick * STONE_GREYS.length)]);
-  c.multiplyScalar(0.94 + hash3(ix, iy, salt + 3) * 0.1);
-  if (run % 4 === 0) c.multiplyScalar(0.78);
-  else if (iy % 2 === 0) c.multiplyScalar(0.88);
+  c.multiplyScalar(0.94 + hash3(ix + sx * 0.37, iy + sy * 0.53, salt + 3) * 0.1);
+  if (run % 4 === 0 && sx === 0) c.multiplyScalar(0.78);
+  else if (iy % 2 === 0 && sy === 0) c.multiplyScalar(0.88);
   return c;
+}
+
+/** A stone of the wall or a tower: its lowest corner, and the colour of each of its small cells (null leaves one out). */
+interface Stone {
+  o: THREE.Vector3;
+  paint: (sx: number, sy: number, sz: number) => THREE.Color | null;
+}
+
+const SIDES: [number, number, number][] = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
+
+/**
+ * The instances for some stones, each a box res times smaller than a stone, scaled by s: one per stone
+ * normally. On High detail (res 2) each stone is cut into res x res x res small ones, so the mortar can sit
+ * back and the gate and banners are drawn finer, except stones buried inside the wall: those stay whole
+ * (they only show once it crumbles), which keeps the count down.
+ */
+function cutStones(stones: Stone[], res: number): { p: THREE.Vector3; c: THREE.Color; s: number }[] {
+  const V = WALL_VOX;
+  const f = V / res;
+  const out: { p: THREE.Vector3; c: THREE.Color; s: number }[] = [];
+  const grid = (o: THREE.Vector3) => [Math.round(o.x / V), Math.round(o.y / V), Math.round(o.z / V)];
+  const filled = new Set(res > 1 ? stones.map((st) => grid(st.o).join()) : []);
+  for (const st of stones) {
+    const [x, y, z] = res > 1 ? grid(st.o) : [0, 0, 0];
+    if (res === 1 || SIDES.every(([dx, dy, dz]) => filled.has([x + dx, y + dy, z + dz].join()))) {
+      const c = st.paint(0, 0, 0) ?? (res > 1 ? new THREE.Color(STONE_GREYS[2]) : null);
+      if (c) out.push({ p: st.o.clone().addScalar(V / 2), c, s: res });
+      continue;
+    }
+    for (let sx = 0; sx < res; sx++) {
+      for (let sy = 0; sy < res; sy++) {
+        for (let sz = 0; sz < res; sz++) {
+          const c = st.paint(sx, sy, sz);
+          if (c) out.push({ p: st.o.clone().add(new THREE.Vector3((sx + 0.5) * f, (sy + 0.5) * f, (sz + 0.5) * f)), c, s: 1 });
+        }
+      }
+    }
+  }
+  return out;
 }
 const TOWER_HALF = 1.5;
 const TOWER_Z = 1;
@@ -294,6 +346,8 @@ export class BattleScene {
   /** Balls and rocks, drawn over everything else (so they stay visible over orcs) with their own depth. */
   private topScene = new THREE.Scene();
   private quality: Quality;
+  /** Small cells per voxel in the voxel models: 2 on High detail. */
+  private voxelRes: number;
   private ground!: GroundCanvas;
   private terrain!: Terrain;
   private world!: World;
@@ -344,8 +398,8 @@ export class BattleScene {
     fireball: imageSprite(fireballUrl, aspects.fireball),
     barrelBlast: imageSprite(barrelBlastUrl, aspects['barrel-explosion']),
   };
-  /** The giant crossbow is a voxel ballista, so it sits properly on the wall walk or a tower top. */
-  private ballista = new VoxBatch().add(ballistaModel(), BALLISTA_VOX, new THREE.Vector3()).geometries().solid!;
+  /** The giant crossbow is a voxel ballista, so it sits properly on the wall walk or a tower top (built on first use). */
+  private ballistaGeo: THREE.BufferGeometry | null = null;
   /** Lit and glowing geometry for the mage, ballista, cauldron and spike trap, built on first use. */
   private newGeo = new Map<PlacedKind, { solid: THREE.BufferGeometry | null; glow: THREE.BufferGeometry | null }>();
   /** The see-through defender that follows the mouse while placing or moving one, by kind. */
@@ -443,6 +497,7 @@ export class BattleScene {
     quality: Quality = 'medium',
   ) {
     this.quality = quality;
+    this.voxelRes = QUALITY[quality].voxelRes;
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, QUALITY[quality].pixelRatio));
     // Sprites seen at a slant stay crisp with the GPU's best filtering.
@@ -484,7 +539,7 @@ export class BattleScene {
     this.world = new World(game, this.camera, {
       puff: (x, y, z, size, color, life) => this.puff(x, y, z, size, color, life),
       burst: (x, y, z, n, color, speed) => this.burst(x, y, z, n, color, speed),
-    });
+    }, this.voxelRes);
     this.scene.add(this.world.root);
 
     const makeSprites = (art: SpriteArt, size: number, max: number, centred = false) => {
@@ -516,7 +571,7 @@ export class BattleScene {
     };
     for (const kind of ENEMY_KINDS) this.sprites[kind] = makeSprites(art[kind], SIZE[kind], kind === 'grunt' ? MAX_ENEMIES : 800);
     this.warlordSprites = WARLORD_STAGES.map((st) => makeSprites(imageSprite(st.url, 1, ORC_OUTLINE), SIZE.warlord * 1.15, 4));
-    this.voxelOrcs = new VoxelOrcs(this.scene, (kind) => (kind === 'grunt' ? MAX_ENEMIES : 800));
+    this.voxelOrcs = new VoxelOrcs(this.scene, (kind) => (kind === 'grunt' ? MAX_ENEMIES : 800), this.voxelRes);
     // Soldiers and archers come in big crowds: small voxel figures, one instanced mesh each.
     const crowd = (kind: PlacedKind, max: number) => {
       const mesh = new THREE.InstancedMesh(this.figureGeo(kind).solid!, new THREE.MeshLambertMaterial({ vertexColors: true }), max);
@@ -547,14 +602,14 @@ export class BattleScene {
 
     // Thrown rocks are chunky voxel shapes. They are what you're trying to catch, so they draw over everything.
     const voxelThrown = (kind: 'rock' | 'boulder' | 'stone', height: number, max: number) => {
-      const mesh = new THREE.InstancedMesh(rockGeometry(kind, height), new THREE.MeshLambertMaterial({ vertexColors: true }), max);
+      const mesh = new THREE.InstancedMesh(rockGeometry(kind, height, this.voxelRes), new THREE.MeshLambertMaterial({ vertexColors: true }), max);
       mesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(max * 3).fill(1), 3);
       mesh.frustumCulled = false;
       mesh.count = 0;
       this.topScene.add(mesh);
       return mesh;
     };
-    this.thrown = { rock: voxelThrown('rock', 0.8, 600), boulder: voxelThrown('boulder', 1.8, 300), stone: voxelThrown('stone', 1.2, 200) };
+    this.thrown = { rock: voxelThrown('rock', THROWN_HEIGHT.rock, 600), boulder: voxelThrown('boulder', THROWN_HEIGHT.boulder, 300), stone: voxelThrown('stone', THROWN_HEIGHT.stone, 200) };
     const arrowArt = imageSprite(arrowUrl, aspects.arrow);
     const makeFlat = (length: number, max: number, art = arrowArt, pointsDown = false) => {
       // Lies flat with the head pointing along -z (away from the castle), whichever way the art points.
@@ -583,7 +638,7 @@ export class BattleScene {
 
     // The royal shield: a real steel shield standing out in front of the wall, its painted face
     // to the orcs, so from the castle we see its back. Balls are drawn over it, so none hide behind it.
-    this.shieldModel = new ShieldModel();
+    this.shieldModel = new ShieldModel(this.voxelRes);
     this.scene.add(this.shieldModel.group);
     const bearerGeo = this.figureGeo('soldiers').solid!;
     for (let i = 0; i < 2; i++) {
@@ -609,7 +664,7 @@ export class BattleScene {
     // Balls: chunky voxel spheres (round physics) drawn over the field and the orcs, each with an additive halo.
     const r = game.cfg.balls.radius;
     this.balls = new THREE.InstancedMesh(
-      ballGeometry(r),
+      ballGeometry(r, this.voxelRes),
       new THREE.MeshLambertMaterial({ vertexColors: true }),
       MAX_BALLS,
     );
@@ -756,10 +811,14 @@ export class BattleScene {
     this.overlayKey = '';
   }
 
-  /** Changes the quality level: render resolution, ground detail and terrain smoothness. Clears marks on the ground. */
+  /** Changes the quality level: render resolution, ground detail, terrain smoothness and voxel model detail. Clears marks on the ground. */
   setQuality(q: Quality) {
     if (q === this.quality) return;
     this.quality = q;
+    if (QUALITY[q].voxelRes !== this.voxelRes) {
+      this.voxelRes = QUALITY[q].voxelRes;
+      this.rebuildVoxels();
+    }
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, QUALITY[q].pixelRatio));
     this.fireworks.amount = QUALITY[q].fx;
     this.scene.remove(this.terrain.mesh);
@@ -980,7 +1039,7 @@ export class BattleScene {
       const mat = ghost
         ? new THREE.MeshLambertMaterial({ vertexColors: true, transparent: true, depthTest: false, depthWrite: false })
         : new THREE.MeshLambertMaterial({ vertexColors: true });
-      const m = new THREE.Mesh(this.ballista, mat);
+      const m = new THREE.Mesh(this.ballista(), mat);
       m.name = 'model';
       m.renderOrder = ghost ? 10 : 0;
       group.add(m);
@@ -1012,10 +1071,55 @@ export class BattleScene {
   private figureGeo(kind: PlacedKind) {
     let geo = this.newGeo.get(kind);
     if (!geo) {
-      geo = new VoxBatch().add(NEW_MODELS[kind]!(), NEW_VOX[kind]!, new THREE.Vector3()).geometries();
+      geo = new VoxBatch().add(atRes(this.voxelRes, NEW_MODELS[kind]!), NEW_VOX[kind]!, new THREE.Vector3()).geometries();
       this.newGeo.set(kind, geo);
     }
     return geo;
+  }
+
+  /** The crossbow's ballista geometry, built on first use. */
+  private ballista(): THREE.BufferGeometry {
+    this.ballistaGeo ??= new VoxBatch().add(atRes(this.voxelRes, ballistaModel), BALLISTA_VOX, new THREE.Vector3()).geometries().solid!;
+    return this.ballistaGeo;
+  }
+
+  /**
+   * Builds every voxel model again at the current resolution (after High detail is turned on or off):
+   * the instanced meshes keep their instances and take the new geometry, the placed defenders and the
+   * ghosts are given theirs, and the castle is rebuilt and crumbled back to where it was.
+   */
+  private rebuildVoxels() {
+    const res = this.voxelRes;
+    const swaps = new Map<THREE.BufferGeometry, THREE.BufferGeometry>();
+    const old = [...this.newGeo.entries()];
+    this.newGeo.clear();
+    for (const [kind, geo] of old) {
+      const fresh = this.figureGeo(kind);
+      if (geo.solid && fresh.solid) swaps.set(geo.solid, fresh.solid);
+      if (geo.glow && fresh.glow) swaps.set(geo.glow, fresh.glow);
+    }
+    if (this.ballistaGeo) {
+      const was = this.ballistaGeo;
+      this.ballistaGeo = null;
+      swaps.set(was, this.ballista());
+    }
+    swaps.set(this.balls.geometry, ballGeometry(this.game.cfg.balls.radius, res));
+    for (const kind of Object.keys(this.thrown) as (keyof typeof THROWN_HEIGHT)[]) swaps.set(this.thrown[kind].geometry, rockGeometry(kind, THROWN_HEIGHT[kind], res));
+    const swap = (o: THREE.Object3D) => {
+      if (!(o instanceof THREE.Mesh)) return;
+      const geo = swaps.get(o.geometry);
+      if (geo) o.geometry = geo;
+    };
+    this.scene.traverse(swap);
+    this.topScene.traverse(swap);
+    for (const ghost of this.ghosts.values()) ghost.traverse(swap);
+    for (const geo of swaps.keys()) geo.dispose();
+    this.voxelOrcs.setRes(res);
+    this.shieldModel.setRes(res);
+    this.world.setRes(res);
+    this.rebuildCastle();
+    this.stackKey = '';
+    this.game.segmentHp.forEach((hp, i) => this.crumble(this.segments[i], hp / this.game.cfg.wall.segmentHp, true));
   }
 
   /** Pulses the ghost and tints it by whether it fits. */
@@ -1900,12 +2004,13 @@ export class BattleScene {
   /**
    * A grey stone wall of small voxels, one crumbling group per section, with crenellations,
    * a gatehouse in the middle. The wall starts level; the player builds the towers. The stones are laid in courses
-   * with darker mortar, a little moss at the foot.
+   * with darker mortar, a little moss at the foot. On High detail each stone is cut finer (see cutStones).
    */
   private buildCastle() {
     const cfg = this.game.cfg;
     const hw = cfg.field.halfWidth;
     const V = WALL_VOX;
+    const n = this.voxelRes;
     const segW = (hw * 2) / cfg.wall.segments;
     const nx = Math.round(segW / V);
     const nz = Math.round(cfg.wall.depth / V);
@@ -1913,9 +2018,10 @@ export class BattleScene {
     const rise = Math.round(GATE_RISE / V);
     let s = 99;
     const rnd = () => ((s = (s * 16807) % 2147483647) / 2147483647);
-    type Cell = { p: THREE.Vector3; c: THREE.Color };
+    const scales: number[] = [];
 
-    const addGroup = (cells: Cell[]): VoxelGroup => {
+    const addGroup = (stones: Stone[]): VoxelGroup => {
+      const cells = cutStones(stones, n);
       const start = this.voxelPos.length;
       // Crumble from the top down, with noise so the damage looks ragged.
       const order = cells
@@ -1925,24 +2031,26 @@ export class BattleScene {
       for (const cell of cells) {
         this.voxelPos.push(cell.p);
         this.voxelColor.push(cell.c);
+        scales.push(cell.s);
       }
       return { order, visible: cells.length };
     };
     // The stone at a cell: a darker footing, coursed masonry, moss low on the outer face, flagstones on top.
-    const stoneAt = (gx: number, iy: number, iz: number, top: number, salt: number): THREE.Color => {
+    // sx, sy, sz pick a small cell of the stone on High detail, so joints come out a single small cell thick.
+    const stoneAt = (gx: number, iy: number, iz: number, top: number, salt: number, sx = 0, sy = 0, sz = 0): THREE.Color => {
       if (iy === top - 1 && iz > 0 && iz < nz - 1) {
         const c = new THREE.Color(hash3(Math.floor(gx / 3), Math.floor(iz / 3), salt) < 0.5 ? '#b1afa9' : '#a6a49e');
-        return (gx % 3 === 0 || iz % 3 === 0) ? c.multiplyScalar(0.85) : c;
+        return ((gx % 3 === 0 && sx === 0) || (iz % 3 === 0 && sz === 0)) ? c.multiplyScalar(0.85) : c;
       }
       if (iz === 0 && iy < 3 && hash3(gx, iy, 7) < 0.22 - iy * 0.06) return new THREE.Color(hash3(gx, iy, 8) < 0.5 ? '#5f7a3a' : '#6d8a40');
-      const c = masonry(gx + (iz === 0 || iz === nz - 1 ? 0 : iz), iy, salt);
+      const c = masonry(gx + (iz === 0 || iz === nz - 1 ? 0 : iz), iy, salt, sx, sy);
       return iy < 3 ? c.multiplyScalar(0.8) : c;
     };
 
     for (let seg = 0; seg < cfg.wall.segments; seg++) {
       const x0 = -hw + seg * segW;
       const gate = seg === Math.floor(cfg.wall.segments / 2);
-      const cells: Cell[] = [];
+      const stones: Stone[] = [];
       for (let ix = 0; ix < nx; ix++) {
         const gx = seg * nx + ix;
         const cx = x0 + (ix + 0.5) * V;
@@ -1952,32 +2060,45 @@ export class BattleScene {
         for (let iz = 0; iz < nz; iz++) {
           const face = iz === 0 || iz === nz - 1;
           for (let iy = 0; iy < top; iy++) {
-            const y = (iy + 0.5) * V;
-            const door = house && face && gateDoor(cx, y);
             // Arrow slits along the outer face.
             const slit = iz === 0 && iy >= 8 && iy <= 10 && gx % 14 === 7;
-            cells.push({
-              p: new THREE.Vector3(cx, y, (iz + 0.5) * V),
-              c: door ? new THREE.Color(door) : slit ? new THREE.Color('#2a2622') : stoneAt(gx, iy, iz, top, house ? 5 : 1),
+            stones.push({
+              o: new THREE.Vector3(x0 + ix * V, iy * V, iz * V),
+              paint: (sx, sy, sz) => {
+                const door = house && face && gateDoor(x0 + (ix + (sx + 0.5) / n) * V, (iy + (sy + 0.5) / n) * V);
+                if (door) return new THREE.Color(door);
+                // On High detail the outer small cells of the mortar joints and the slits are left out, so they sit back.
+                const outer = n > 1 && ((iz === 0 && sz === 0) || (iz === nz - 1 && sz === n - 1));
+                if (slit) return outer ? null : new THREE.Color('#2a2622');
+                if (outer && iy < top - 1 && mortar(gx, iy, sx, sy)) return null;
+                if (n > 1 && iy === top - 1 && sy === n - 1 && !face && ((gx % 3 === 0 && sx === 0) || (iz % 3 === 0 && sz === 0))) return null;
+                return stoneAt(gx, iy, iz, top, house ? 5 : 1, sx, sy, sz);
+              },
             });
           }
           // Crenellations along the front edge (and both edges of the gatehouse): merlons 3 stones wide, 3 high.
           const edge = iz <= 1 || (house && iz >= nz - 2);
           if (edge && gx % 5 < 3) {
             for (let k = 0; k < 3; k++) {
-              const c = masonry(gx, top + k, 9).multiplyScalar(k === 2 ? 1.1 : 1);
-              cells.push({ p: new THREE.Vector3(cx, (top + k + 0.5) * V, (iz + 0.5) * V), c });
+              stones.push({
+                o: new THREE.Vector3(x0 + ix * V, (top + k) * V, iz * V),
+                paint: (sx, sy) => {
+                  // High detail chamfers the merlon tops' outer corners.
+                  if (n > 1 && k === 2 && sy === n - 1 && ((gx % 5 === 0 && sx === 0) || (gx % 5 === 2 && sx === n - 1))) return null;
+                  return masonry(gx, top + k, 9, sx, sy).multiplyScalar(k === 2 ? 1.1 : 1);
+                },
+              });
             }
           }
         }
       }
-      this.segments.push(addGroup(cells));
+      this.segments.push(addGroup(stones));
     }
 
-    this.voxels = new THREE.InstancedMesh(new THREE.BoxGeometry(V, V, V), new THREE.MeshLambertMaterial(), this.voxelPos.length);
+    this.voxels = new THREE.InstancedMesh(new THREE.BoxGeometry(V / n, V / n, V / n), new THREE.MeshLambertMaterial(), this.voxelPos.length);
     this.voxels.frustumCulled = false;
     for (let i = 0; i < this.voxelPos.length; i++) {
-      this.voxels.setMatrixAt(i, tmpM.makeTranslation(this.voxelPos[i]));
+      this.voxels.setMatrixAt(i, tmpM.makeScale(scales[i], scales[i], scales[i]).setPosition(this.voxelPos[i]));
       this.voxels.setColorAt(i, this.voxelColor[i]);
     }
     this.scene.add(this.voxels);
@@ -1988,8 +2109,9 @@ export class BattleScene {
    * a hollow shell with a floor at the top, merlons round it, and the royal banner on the front.
    * A darker band marks each storey line above the wall.
    */
-  private towerCells(out: { p: THREE.Vector3; c: THREE.Color }[], tx: number, th: number, n: number, salt: number) {
+  private towerCells(out: Stone[], tx: number, th: number, n: number, salt: number) {
     const V = WALL_VOX;
+    const r = this.voxelRes;
     const x0 = tx - TOWER_HALF;
     const z0 = TOWER_Z - TOWER_HALF;
     const storey = Math.round(STOREY_H / V);
@@ -1997,22 +2119,31 @@ export class BattleScene {
     for (let ix = 0; ix < n; ix++) {
       for (let iz = 0; iz < n; iz++) {
         const edge = ix === 0 || iz === 0 || ix === n - 1 || iz === n - 1;
-        const p = (iy: number) => new THREE.Vector3(x0 + (ix + 0.5) * V, (iy + 0.5) * V, z0 + (iz + 0.5) * V);
-        const around = iz === 0 || iz === n - 1 ? ix : iz;
+        const o = (iy: number) => new THREE.Vector3(x0 + ix * V, iy * V, z0 + iz * V);
+        const alongX = iz === 0 || iz === n - 1;
+        const around = alongX ? ix : iz;
         for (let iy = 0; iy < th; iy++) {
           if (!edge && iy < th - 1) continue;
           // A blue-and-gold banner hangs on the front face.
           const banner = iz === 0 && ix >= 3 && ix <= n - 4 && iy >= th - 11 && iy <= th - 3;
           const trim = banner && (iy === th - 11 || ix === 3 || ix === n - 4);
           const crest = banner && !trim && iy >= th - 8 && iy <= th - 6 && Math.abs(ix - (n - 1) / 2) < 1;
-          const c = banner ? new THREE.Color(trim || crest ? '#e8b730' : '#2a4fb0')
-            : !edge ? new THREE.Color('#9a968e')
-            : iy < 3 ? masonry(around + salt * 7, iy, salt).multiplyScalar(0.8)
-            : iy >= base && (iy - base) % storey === 0 ? masonry(around, iy, salt).multiplyScalar(0.75)
-            : masonry(around + salt * 7, iy, salt + 11).multiplyScalar(1.06);
-          out.push({ p: p(iy), c });
+          out.push({
+            o: o(iy),
+            paint: (sx, sy, sz) => {
+              const sa = alongX ? sx : sz;
+              if (banner) return new THREE.Color(trim || crest ? '#e8b730' : '#2a4fb0');
+              if (!edge) return new THREE.Color('#9a968e');
+              // High detail sets the mortar back by a small cell on the outside faces.
+              const outer = r > 1 && ((ix === 0 && sx === 0) || (ix === n - 1 && sx === r - 1) || (iz === 0 && sz === 0) || (iz === n - 1 && sz === r - 1));
+              if (outer && iy < th - 1 && mortar(around, iy, sa, sy)) return null;
+              return iy < 3 ? masonry(around + salt * 7, iy, salt, sa, sy).multiplyScalar(0.8)
+                : iy >= base && (iy - base) % storey === 0 ? masonry(around, iy, salt, sa, sy).multiplyScalar(0.75)
+                : masonry(around + salt * 7, iy, salt + 11, sa, sy).multiplyScalar(1.06);
+            },
+          });
         }
-        if (edge && (ix + iz) % 5 < 3) for (let k = 0; k < 2; k++) out.push({ p: p(th + k), c: masonry(around, th + k, salt).multiplyScalar(1.1) });
+        if (edge && (ix + iz) % 5 < 3) for (let k = 0; k < 2; k++) out.push({ o: o(th + k), paint: (sx, sy, sz) => masonry(around, th + k, salt, alongX ? sx : sz, sy).multiplyScalar(1.1) });
       }
     }
   }
@@ -2032,20 +2163,22 @@ export class BattleScene {
       this.stackMesh = null;
     }
     const V = WALL_VOX;
-    const cells: { p: THREE.Vector3; c: THREE.Color }[] = [];
+    const stones: Stone[] = [];
     const n = Math.round((TOWER_HALF * 2) / V);
-    stacks.forEach((st, i) => this.towerCells(cells, st.x, Math.round(towerTop(st.storeys) / V), n, 40 + i));
-    if (!cells.length) return;
-    const mesh = new THREE.InstancedMesh(new THREE.BoxGeometry(V, V, V), new THREE.MeshLambertMaterial(), cells.length);
+    stacks.forEach((st, i) => this.towerCells(stones, st.x, Math.round(towerTop(st.storeys) / V), n, 40 + i));
+    if (!stones.length) return;
+    const cells = cutStones(stones, this.voxelRes);
+    const f = V / this.voxelRes;
+    const mesh = new THREE.InstancedMesh(new THREE.BoxGeometry(f, f, f), new THREE.MeshLambertMaterial(), cells.length);
     cells.forEach((c, i) => {
-      mesh.setMatrixAt(i, tmpM.makeTranslation(c.p));
+      mesh.setMatrixAt(i, tmpM.makeScale(c.s, c.s, c.s).setPosition(c.p));
       mesh.setColorAt(i, c.c);
     });
     this.stackMesh = mesh;
     this.scene.add(mesh);
   }
 
-  private crumble(group: VoxelGroup, fraction: number) {
+  private crumble(group: VoxelGroup, fraction: number, quiet = false) {
     const target = Math.ceil(group.order.length * Math.max(0, Math.min(1, fraction)));
     if (target >= group.visible) return;
     // Voxels already gone are the first `removed` entries of the crumble order; hide the next ones.
@@ -2054,7 +2187,7 @@ export class BattleScene {
     for (let n = 0; n < toRemove; n++) {
       const idx = group.order[removed + n];
       this.voxels.setMatrixAt(idx, hidden);
-      if (n < 20) {
+      if (n < 20 && !quiet) {
         const p = this.voxelPos[idx];
         this.burst(p.x, p.y, p.z, 1, '#' + this.voxelColor[idx].getHexString(), 6);
       }

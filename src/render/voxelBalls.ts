@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { jitter, seeded, Vox, VoxBatch } from './voxels';
+import { atRes, jitter, seeded, Vox, VoxBatch } from './voxels';
 
 /**
  * Chunky voxel shapes for the balls and thrown rocks. They only change how things look:
@@ -22,6 +22,7 @@ export function ballVoxels(): Vox {
   const v = new Vox();
   const rnd = seeded(41);
   const R = 2.2;
+  if (v.res > 1) return fineBall(v, rnd);
   for (let x = -3; x <= 3; x++) {
     for (let y = -3; y <= 3; y++) {
       for (let z = -3; z <= 3; z++) {
@@ -36,9 +37,46 @@ export function ballVoxels(): Vox {
   return v;
 }
 
-/** The ball's geometry, its outer radius r. */
-export function ballGeometry(r: number): THREE.BufferGeometry {
-  return centred(ballVoxels(), 5, r * 2);
+/**
+ * The finer ball (High detail): a true sphere of small cells, the same 5 voxels across, with a thin seam
+ * round its middle studded with eight rivets, and a soft bright spot up on the top left.
+ */
+function fineBall(v: Vox, rnd: () => number): Vox {
+  const R = 2.5;
+  const h = 1 / v.res;
+  for (let x = -3; x < 3; x += h) {
+    for (let y = -3; y < 3; y += h) {
+      for (let z = -3; z < 3; z += h) {
+        // This small cell's middle, from the ball's middle (the middle of voxel 0).
+        const [px, py, pz] = [x + h / 2 - 0.5, y + h / 2 - 0.5, z + h / 2 - 0.5];
+        const d = Math.hypot(px, py, pz);
+        if (d > R - h / 2) continue;
+        let k = 0.8 + 0.2 * (py / R) + (rnd() - 0.5) * 0.08;
+        if (py < 0 && py > -h) k *= 0.78;
+        const shine = Math.hypot(px + 1, py - 1.5, pz - 1.3);
+        if (shine < 1.4) k += 0.2 * (1 - shine / 1.4);
+        v.dot(x, y, z, new THREE.Color().setScalar(Math.min(1, k)));
+      }
+    }
+  }
+  // Each rivet sits in the first empty cell out from the middle along its direction, on the seam's row.
+  const y = 0.5 - h;
+  for (let i = 0; i < 8; i++) {
+    const a = (i / 8) * Math.PI * 2;
+    for (let d = 1; d < 4; d += h / 2) {
+      const x = Math.floor((Math.cos(a) * d + 0.5) / h) * h;
+      const z = Math.floor((Math.sin(a) * d + 0.5) / h) * h;
+      if (v.hasDot(x, y, z)) continue;
+      v.dot(x, y, z, new THREE.Color().setScalar(0.95));
+      break;
+    }
+  }
+  return v;
+}
+
+/** The ball's geometry, its outer radius r; res 2 builds it from half-size voxels (High detail). */
+export function ballGeometry(r: number, res = 1): THREE.BufferGeometry {
+  return centred(atRes(res, ballVoxels), 5, r * 2);
 }
 
 const ROCK_LOOK: Record<RockKind, { r: [number, number, number]; colors: string[]; seed: number; rough: number }> = {
@@ -53,16 +91,30 @@ export function rockVoxels(kind: RockKind): Vox {
   const rnd = seeded(look.seed);
   const v = new Vox();
   const [rx, ry, rz] = look.r;
-  v.blob(0, 0, 0, rx, ry, rz, (_x, y) => {
-    const c = jitter(look.colors[Math.floor(rnd() * look.colors.length)], 0.08, rnd);
-    return c.multiplyScalar(0.82 + 0.28 * (y / ry + 1) * 0.5);
+  // A finer rock keeps one colour per whole voxel, so it reads as the same stones, only rounder.
+  const picked = new Map<string, THREE.Color>();
+  v.blob(0, 0, 0, rx, ry, rz, (x, y, z) => {
+    const k = `${x},${y},${z}`;
+    let c = v.res > 1 ? picked.get(k) : undefined;
+    if (!c) {
+      c = jitter(look.colors[Math.floor(rnd() * look.colors.length)], 0.08, rnd).multiplyScalar(0.82 + 0.28 * (y / ry + 1) * 0.5);
+      if (v.res > 1) picked.set(k, c);
+    }
+    return c;
   }, rnd, look.rough);
+  if (v.res > 1) {
+    // Finer rock: pale flecks in the stone and a dark crack or two across the top.
+    v.each((x, y, z, c) => {
+      if (rnd() < 0.06) c.c = c.c.clone().multiplyScalar(1.25);
+      else if (y > 0 && Math.abs(x * 0.7 - z + 0.3) < 0.26 && rnd() < 0.7) c.c = c.c.clone().multiplyScalar(0.62);
+    });
+  }
   return v;
 }
 
 /** Rock geometry: `height` is how tall it is drawn in world units. */
-export function rockGeometry(kind: RockKind, height: number): THREE.BufferGeometry {
-  return centred(rockVoxels(kind), 2 * Math.ceil(ROCK_LOOK[kind].r[1]) + 1, height);
+export function rockGeometry(kind: RockKind, height: number, res = 1): THREE.BufferGeometry {
+  return centred(atRes(res, () => rockVoxels(kind)), 2 * Math.ceil(ROCK_LOOK[kind].r[1]) + 1, height);
 }
 
 /** Colours for voxel debris when a rock bursts. */

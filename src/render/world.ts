@@ -16,7 +16,7 @@ import {
   palisadeModel, pieceModel, scatterModel, tentModel, totemModel, treeModel, wellModel,
 } from './models';
 import { type SpriteArt, imageSprite } from './textures';
-import { Vox, VoxBatch, seeded } from './voxels';
+import { Vox, VoxBatch, atRes, seeded } from './voxels';
 
 /**
  * Everything round the battle that isn't fighting: the town behind the wall (the keep,
@@ -156,12 +156,16 @@ export class World {
   /** The town plot as laid out in the town, and how much land is open. */
   private plot: Layout = [];
   private land = 0;
+  /** Small cells per voxel for the keep and the fixtures (2 on High detail). */
+  private res: number;
 
   constructor(
     private game: Game,
     private readonly camera: THREE.Camera,
     private readonly fx: WorldFx,
+    res = 1,
   ) {
+    this.res = res;
     this.hw = game.cfg.field.halfWidth;
     this.adj = NODES.map(() => []);
     for (const [a, b] of LINKS) {
@@ -198,6 +202,14 @@ export class World {
     this.treeMesh.instanceMatrix.needsUpdate = true;
   }
 
+  /** Rebuilds the keep and the fixtures at a resolution (2 on High detail). */
+  setRes(res: number): void {
+    if (res === this.res) return;
+    this.res = res;
+    this.buildTown();
+    this.buildFixtures();
+  }
+
   /** The town's layout changed (or a level starts with it): the pieces are rebuilt where they stand. */
   setPlot(plot: Layout, land: number): void {
     this.plot = plot.map((p) => ({ ...p }));
@@ -228,7 +240,7 @@ export class World {
     const keepX = PLOT_X0 + (KEEP_CELLS[0][0] + 1.5) * PLOT_TILE;
     const keepZ = PLOT_Z0 + 1.5 * PLOT_TILE;
     Object.assign(BUILDINGS.keep, { x: keepX, z: keepZ });
-    const keep = place(keepModel(), keepX, keepZ, 0, KEEP_VOX);
+    const keep = place(atRes(this.res, keepModel), keepX, keepZ, 0, KEEP_VOX);
     this.spots.push({ kind: 'keep', group: keep, box: new THREE.Box3().setFromObject(keep), built: true, glow: 0 });
     // Every placed building is a voxel piece on its tiles; one waiting in the builders' yard isn't drawn.
     const groups = new Map<PieceId, THREE.Group>();
@@ -705,7 +717,7 @@ export class World {
     this.fixtureGroups = [];
     this.drag = null;
     const k = this.game.cfg.contraptions;
-    const one = (v: Vox, size: number) => new VoxBatch().add(v, size, new THREE.Vector3()).build();
+    const one = (make: () => Vox, size: number) => new VoxBatch().add(atRes(this.res, make), size, new THREE.Vector3()).build();
     this.game.contraptions.forEach((c, i) => {
       const g = new THREE.Group();
       g.position.set(c.x, 0, -c.y);
@@ -714,8 +726,8 @@ export class World {
       if (c.kind === 'bumper') {
         const size = 0.3;
         const R = k.bumper.radius / size;
-        const spring = one(bumperSpringModel(R), size);
-        const shield = one(bumperShieldModel(R), size);
+        const spring = one(() => bumperSpringModel(R), size);
+        const shield = one(() => bumperShieldModel(R), size);
         // The shield rides the top of the spring, so squashing the spring's group squashes both.
         shield.position.y = 7 * size;
         spring.add(shield);
@@ -724,10 +736,10 @@ export class World {
       } else if (c.kind === 'bell') {
         // Twice the old bell, hung in a little wooden frame; the counter floats over the frame.
         const size = 0.4;
-        g.add(one(bellPostModel(), size));
+        g.add(one(bellPostModel, size));
         const pivot = new THREE.Group();
         pivot.position.y = 10 * size;
-        pivot.add(one(bellModel(), size));
+        pivot.add(one(bellModel, size));
         g.add(pivot);
         const counter = new THREE.Sprite(new THREE.SpriteMaterial({ transparent: true, depthWrite: false }));
         counter.position.y = 14 * size + 2.6;
@@ -737,7 +749,7 @@ export class World {
         this.fixtureParts[i] = { kind: 'bell', pivot, counter, shown: -1, phase: i * 1.7 };
       } else {
         const size = 0.3;
-        g.add(new VoxBatch().add(rampModel(size, c.hw ?? 2, c.hh ?? 1.5, 90 + i), size, new THREE.Vector3(), c.angle ?? 0).build());
+        g.add(new VoxBatch().add(atRes(this.res, () => rampModel(size, c.hw ?? 2, c.hh ?? 1.5, 90 + i)), size, new THREE.Vector3(), c.angle ?? 0).build());
         this.fixtureParts[i] = { kind: 'ramp', phase: 0 };
       }
     });

@@ -37,4 +37,8 @@ npm run trace    # one run, wave by wave
 npm run build    # single-file build in dist/index.html
 ```
 
+Frame time: with `npm run dev`, open `/?debug` and run `await import('/tools/bench-frame.js'); await benchFrame()` in the console (level 2, wave 10 on High, fixed seed).
+
+High detail also builds the voxel models (balls, rocks, orcs, defenders, shield, contraptions, keep and wall) from voxels half the size: `atRes` in `src/render/voxels.ts`. Model code stays in whole voxels; `dot()` adds the fine details when `v.res > 1`.
+
 All tuning numbers are in `src/sim/config.ts`.

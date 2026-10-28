@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { EnemyKind } from '../sim/waves';
-import { Vox, VoxBatch } from './voxels';
+import { atRes, Vox, VoxBatch } from './voxels';
 
 /**
  * The regular orcs as cartoony voxel models (Jonny, 27 Oct: smaller enemies are voxels,
@@ -107,6 +107,54 @@ function body(v: Vox, o: BodyLook): void {
     v.box(X - 3, Y + 12, Z - 3, X + 3, Y + 12, Z + 2, skin);
     v.box(X - 2, Y + 12, Z + 3, X + 2, Y + 12, Z + 3, dark);
   }
+  if (v.res > 1) fineBody(v, X, Y, Z, o, dark);
+}
+
+/**
+ * The finer orc (High detail), in half voxels: eyes with a pupil turned in and a glint, nostrils, a row of teeth, tusks that taper to a point, a studded belt with a proper buckle, toe caps,
+ * and rivets round the helmet's brim.
+ */
+function fineBody(v: Vox, X: number, Y: number, Z: number, o: BodyLook, dark: string): void {
+  const f = Z + 3.5;
+  for (const s of [-1, 1]) {
+    const x0 = s < 0 ? X - 2 : X + 1;
+    for (let i = 0; i < 4; i++) {
+      const inward = s < 0 ? i >= 2 : i < 2;
+      v.dot(x0 + i / 2, Y + 11, f, inward ? PUPIL : EYE);
+      v.dot(x0 + i / 2, Y + 11.5, f, EYE);
+    }
+    v.dot(s < 0 ? X - 1 : X + 1.5, Y + 11.5, f, '#ffffff');
+  }
+  // A snub nose with two nostrils.
+  v.dot(X, Y + 10, f, '#1c3a0c');
+  v.dot(X + 0.5, Y + 10, f, '#1c3a0c');
+  v.dot(X, Y + 10.5, f + 0.5, dark);
+  v.dot(X + 0.5, Y + 10.5, f + 0.5, dark);
+  // Little teeth along the top of the mouth, and tusks narrowing to a point.
+  for (let i = 0; i < 6; i += 2) v.dot(X - 1 + i / 2, Y + 9.5, f, BONE);
+  for (const tx of [X - 2, X + 2]) {
+    const outer = tx < X ? tx : tx + 0.5;
+    const inner = tx < X ? tx + 0.5 : tx;
+    v.undot(outer, Y + 10.5, Z + 3);
+    v.undot(outer, Y + 10.5, f);
+    v.undot(inner, Y + 10.5, Z + 3);
+    v.dot(inner, Y + 10.5, f, '#fffbe8');
+  }
+  // The belt: iron studs along it and a square buckle with a dark tongue.
+  for (let x = X - 3; x <= X + 3; x += 1.5) if (Math.abs(x - X) > 1) v.dot(x, Y + 3.5, Z + 2, IRON);
+  v.dot(X, Y + 3, Z + 3, BONE);
+  v.dot(X + 0.5, Y + 3, Z + 3, BONE);
+  v.dot(X, Y + 3.5, Z + 3, BONE);
+  v.dot(X + 0.5, Y + 3.5, Z + 3, PUPIL);
+  // Knuckles on the fists, dark soles under the boots.
+  for (const fx of [X - 5, X + 4]) v.dot(fx + 0.5, Y + 3.5, Z + 2, dark);
+  for (const bx of [X - 3, X + 1]) v.box(bx, Y, Z + 2, bx + 1, Y, Z + 2, (_x, _y, _z, at) => (at.y < Y ? '#1e120a' : BOOT));
+  if (o.helm) {
+    // Rivets standing out of the brim, round the front and sides.
+    const rivet = o.helm === IRON || o.trim === IRON ? '#ffffff' : IRON;
+    for (let x = X - 4; x <= X + 4; x += 2) v.dot(x + 0.5, Y + 12.5, Z + 4, rivet);
+    for (const s of [-1, 1]) for (let z = Z - 3; z <= Z + 2; z += 2) v.dot(s < 0 ? X - 4.5 : X + 5, Y + 12.5, z + 0.5, rivet);
+  }
 }
 
 function grunt(): Vox {
@@ -118,6 +166,19 @@ function grunt(): Vox {
   v.box(5, 2, 2, 5, 8, 2, WOOD);
   v.box(6, 6, 2, 8, 11, 2, STEEL);
   v.box(8, 6, 2, 8, 11, 2, '#c4ccd6');
+  if (v.res > 1) {
+    // A bright honed edge down the blade, a clipped corner and a hanging hole, a wrapped grip, pauldron rivets.
+    for (let y = 6; y < 12; y += 0.5) {
+      v.dot(8.5, y, 2, '#ffffff');
+      v.dot(8.5, y, 2.5, '#dfe6ee');
+    }
+    for (const [x, y] of [[8.5, 11.5], [6.5, 10.5]]) {
+      v.undot(x, y, 2);
+      v.undot(x, y, 2.5);
+    }
+    for (let y = 3; y < 6; y++) v.dot(5.5, y + 0.5, 2.5, '#3a2010');
+    for (const [x, z] of [[-5.5, 1.5], [-3.5, 1.5], [-5.5, -2]]) v.dot(x, 9, z, '#ffffff');
+  }
   return v;
 }
 
@@ -145,6 +206,11 @@ function barrel(): Vox {
   v.set(0, 15, -6, '#5a4030');
   v.set(0, 16, -6, '#ff8a1a');
   v.set(0, 17, -6, '#fff2a8');
+  if (v.res > 1) {
+    // Rivets on the hoops, and a spark on the fuse.
+    for (const y of [4, 12]) for (const x of [-2, 0, 2]) v.dot(x + 0.25, y + 0.5, -9.5, '#c8ccd2');
+    v.dot(0.5, 18, -6, '#ffffff', true);
+  }
   return v;
 }
 
@@ -155,6 +221,13 @@ function runner(): Vox {
   v.box(-1, 13, -5, 1, 13, -4, '#ff9a1a');
   v.box(0, 12, -6, 0, 12, -6, '#ffd23a');
   v.box(5, 4, 2, 5, 4, 4, STEEL);
+  if (v.res > 1) {
+    // The knife narrows to a point with a bright edge, behind a little crossguard.
+    for (const [x, y] of [[5, 4.5], [5.5, 4.5], [5.5, 4]]) v.undot(x, y, 4.5);
+    for (let z = 2; z < 4.5; z += 0.5) v.dot(5, 4, z, '#ffffff');
+    v.dot(4.5, 4.5, 2, IRON_DARK);
+    v.dot(6, 4.5, 2, IRON_DARK);
+  }
   return v;
 }
 
@@ -180,6 +253,15 @@ function rider(): Vox {
   v.box(5, 11, -5, 5, 11, 10, WOOD);
   v.box(5, 11, 11, 5, 11, 13, STEEL);
   v.box(5, 12, 10, 5, 13, 10, RED);
+  if (v.res > 1) {
+    // The lance head tapers to a bright point; the boar gets nostrils and a spiky bristle ridge.
+    for (const [x, y] of [[5, 11.5], [5.5, 11.5], [5.5, 11]]) v.undot(x, y, 13.5);
+    v.undot(5.5, 11.5, 13);
+    v.dot(5, 11, 14, '#ffffff');
+    v.dot(-1, 4, 11, '#5a1a1a');
+    v.dot(1.5, 4, 11, '#5a1a1a');
+    for (let z = -6; z < 5; z++) v.dot(0.25, 10, z + 0.5, '#24140c');
+  }
   return v;
 }
 
@@ -284,6 +366,18 @@ function ogre(): Vox {
   v.box(8, 27, -2, 11, 32, 1, '#7a4620');
   v.box(9, 33, -1, 10, 33, 0, '#7a4620');
   for (const [cx, cy, cz] of [[7, 28, 0], [12, 29, -1], [7, 31, -1], [12, 32, 0], [9, 30, 2], [10, 28, -3], [9, 34, 0]]) v.set(cx, cy, cz, STEEL);
+  if (v.res > 1) {
+    // Pupils and glints in the little eyes, nostrils, grain on the club, rivets on the pauldrons and bracers.
+    for (const ex of [-2, 1]) {
+      v.dot(ex < 0 ? ex + 0.5 : ex, 18, 4.5, PUPIL);
+      v.dot(ex < 0 ? ex : ex + 0.5, 18.5, 4.5, '#ffffff');
+    }
+    v.dot(-1, 17, 5.5, '#4a5a10');
+    v.dot(0.5, 17, 5.5, '#4a5a10');
+    for (let y = 27; y < 33; y += 1.5) v.dot(8.5 + ((y * 2) % 3), y, 1.5, '#5a3214');
+    for (const x0 of [-11, 7]) for (let x = x0; x <= x0 + 3; x += 1.5) v.dot(x + 0.25, 16, 2.5, '#ffe0a0');
+    for (const [bx, by] of [[-11, 9.25], [8, 17.25]]) for (let x = bx; x < bx + 3; x++) v.dot(x + 0.25, by, 0.5, '#ffffff');
+  }
   return v;
 }
 
@@ -306,6 +400,13 @@ function shieldOrc(): Vox {
   v.box(-6, 1, 5, -6, 14, 5, IRON_DARK);
   v.box(6, 1, 5, 6, 14, 5, IRON_DARK);
   v.box(-1, 7, 5, 1, 9, 6, GOLD);
+  if (v.res > 1) {
+    // Rivets round the iron rim, and a rounded boss with a shine.
+    for (let y = 1; y <= 14; y += 2.5) for (const x of [-6, 6.5]) v.dot(x, y + 0.5, 6, '#e8eef4');
+    for (let x = -5; x <= 5; x += 2.5) for (const y of [1, 14.5]) v.dot(x, y, 6, '#e8eef4');
+    for (const [x, y] of [[-1, 7], [1.5, 7], [-1, 9.5], [1.5, 9.5]]) v.undot(x, y, 6.5);
+    v.dot(0, 8.5, 7, '#fff2b0');
+  }
   return v;
 }
 
@@ -321,6 +422,15 @@ function drummer(): Vox {
   v.box(5, 10, 4, 5, 13, 4, BONE);
   v.box(0, 15, -1, 0, 19, -1, RED);
   v.box(0, 19, -2, 0, 19, -3, RED);
+  if (v.res > 1) {
+    // Zigzag rope lacing round the drum, and pale tips on the sticks.
+    for (let a = 0; a < 24; a++) {
+      const ang = (a / 24) * Math.PI * 2;
+      v.dot(Math.cos(ang) * 4.6 + 0.25, a % 2 ? 7 : 3.5, 4 + Math.sin(ang) * 4.6 + 0.25, '#f2e6c4');
+    }
+    v.dot(-5, 14, 4, '#ffffff');
+    v.dot(5, 14, 4, '#ffffff');
+  }
   return v;
 }
 
@@ -330,15 +440,20 @@ const SCALE: Record<EnemyKind, number> = { grunt: 0.125, chucker: 0.125, barrel:
 
 /** The model grown by one voxel in the six directions: drawn inside out in dark brown, it is the outline. */
 function hull(v: Vox): Vox {
-  const h = new Vox();
+  const h = new Vox(v.res);
+  const n = v.res;
   v.each((x, y, z) => {
-    h.set(x, y, z, OUTLINE);
-    h.set(x + 1, y, z, OUTLINE);
-    h.set(x - 1, y, z, OUTLINE);
-    h.set(x, y + 1, z, OUTLINE);
-    h.set(x, y - 1, z, OUTLINE);
-    h.set(x, y, z + 1, OUTLINE);
-    h.set(x, y, z - 1, OUTLINE);
+    h.dot(x, y, z, OUTLINE);
+    // A finer model grows by the same whole voxel, a small cell at a time (which rounds the outline's corners).
+    for (let s = 1; s <= n; s++) {
+      const d = s / n;
+      h.dot(x + d, y, z, OUTLINE);
+      h.dot(x - d, y, z, OUTLINE);
+      h.dot(x, y + d, z, OUTLINE);
+      h.dot(x, y - d, z, OUTLINE);
+      h.dot(x, y, z + d, OUTLINE);
+      h.dot(x, y, z - d, OUTLINE);
+    }
   });
   return h;
 }
@@ -351,23 +466,25 @@ export interface OrcPiece {
   color: THREE.Color;
 }
 
-/** Splits a model into 2x2x2 chunks, each the colour most of its voxels have. */
+/** Splits a model into 2x2x2-voxel chunks, each the colour most of its cells have. */
 function pieces(v: Vox, size: number): OrcPiece[] {
+  const half = 0.5 / v.res;
+  const fewest = 3 * v.res ** 3;
   const groups = new Map<string, { x: number; y: number; z: number; n: number; colors: Map<number, number> }>();
   v.each((x, y, z, cell) => {
     const k = `${Math.floor(x / 2)},${Math.floor(y / 2)},${Math.floor(z / 2)}`;
     let g = groups.get(k);
     if (!g) groups.set(k, (g = { x: 0, y: 0, z: 0, n: 0, colors: new Map() }));
-    g.x += x + 0.5;
-    g.y += y + 0.5;
-    g.z += z + 0.5;
+    g.x += x + half;
+    g.y += y + half;
+    g.z += z + half;
     g.n++;
     const hex = cell.c.getHex();
     g.colors.set(hex, (g.colors.get(hex) ?? 0) + 1);
   });
   const out: OrcPiece[] = [];
   for (const g of groups.values()) {
-    if (g.n < 3) continue;
+    if (g.n < fewest) continue;
     const hex = [...g.colors.entries()].sort((a, b) => b[1] - a[1])[0][0];
     out.push({ x: (g.x / g.n) * size, y: (g.y / g.n) * size, z: (g.z / g.n) * size, color: new THREE.Color(hex) });
   }
@@ -383,26 +500,39 @@ export class VoxelOrcs {
   /** World size of one voxel, per kind (a death chunk is two of these across). */
   readonly voxelSize = SCALE;
 
-  constructor(scene: THREE.Scene, max: (kind: EnemyKind) => number) {
+  constructor(scene: THREE.Scene, max: (kind: EnemyKind) => number, res = 1) {
     const mat = new THREE.MeshLambertMaterial({ vertexColors: true });
     const edge = new THREE.MeshBasicMaterial({ color: OUTLINE, side: THREE.BackSide });
     for (const kind of Object.keys(MODELS) as EnemyKind[]) {
-      const model = MODELS[kind]();
-      const geo = new VoxBatch().add(model, SCALE[kind], new THREE.Vector3()).geometries().solid!;
       const n = max(kind);
-      const mesh = new THREE.InstancedMesh(geo, mat, n);
+      const mesh = new THREE.InstancedMesh(new THREE.BufferGeometry(), mat, n);
       mesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(n * 3).fill(1), 3);
       mesh.frustumCulled = false;
       mesh.count = 0;
       scene.add(mesh);
       this.meshes[kind] = mesh;
-      const hullGeo = new VoxBatch().add(hull(model), SCALE[kind], new THREE.Vector3()).geometries().solid!;
-      const outline = new THREE.InstancedMesh(hullGeo, edge, n);
+      const outline = new THREE.InstancedMesh(new THREE.BufferGeometry(), edge, n);
       outline.instanceMatrix = mesh.instanceMatrix;
       outline.frustumCulled = false;
       outline.count = 0;
       scene.add(outline);
       this.outlines[kind] = outline;
+    }
+    this.setRes(res);
+  }
+
+  /** Builds every kind's model, outline and death chunks at a resolution (2 on High detail); the instances stay as they are. */
+  setRes(res: number): void {
+    for (const kind of Object.keys(MODELS) as EnemyKind[]) {
+      const model = atRes(res, MODELS[kind]);
+      const swap = (mesh: THREE.InstancedMesh, v: Vox) => {
+        mesh.geometry.dispose();
+        mesh.geometry = new VoxBatch().add(v, SCALE[kind], new THREE.Vector3()).geometries().solid!;
+      };
+      swap(this.meshes[kind], model);
+      // The outline stays at resolution 1 (a quarter of the triangles): fine cells never stand more than
+      // half a voxel proud of the blocky model, so its hull, a whole voxel out, still wraps them.
+      swap(this.outlines[kind], hull(res > 1 ? MODELS[kind]() : model));
       this.pieces[kind] = pieces(model, SCALE[kind]);
     }
   }
