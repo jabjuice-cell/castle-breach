@@ -133,7 +133,7 @@ const ORC_OUTLINE = 0.045;
 /** The ballista's voxel size: about 3.5 units across its bow. */
 const BALLISTA_VOX = 0.116;
 /** Voxel size of the newer defenders' placeholder models. */
-const NEW_VOX: Partial<Record<PlacedKind, number>> = { mage: 0.1125, ballista: 0.105, oil: 0.12, spiketrap: 0.116, archers: 0.075, soldiers: 0.07, catapult: 0.14 };
+const NEW_VOX: Partial<Record<PlacedKind, number>> = { mage: 0.1125, ballista: 0.105, oil: 0.12, spiketrap: 0.116, archers: 0.075, soldiers: 0.125, catapult: 0.14 };
 const NEW_MODELS: Partial<Record<PlacedKind, () => Vox>> = { mage: mageModel, ballista: bigBallistaModel, oil: oilModel, spiketrap: spikeTrapModel, archers: archerModel, soldiers: soldierModel, catapult: castleCatapultModel };
 const SHIELD_LIFT = 0.25;
 /** The voxel shield is drawn this much taller and this many times thicker (collision stays flat). */

@@ -134,6 +134,8 @@ export interface Soldier {
   /** The spot on the wall's foot it guards and returns to. */
   postX: number;
   postY: number;
+  /** The id of the company (Defender) this soldier belongs to. */
+  company: number;
 }
 
 export type ProjectileKind = 'rock' | 'boulder' | 'enemyBolt' | 'bolt' | 'arrow' | 'stone';
@@ -233,6 +235,8 @@ export type ShieldTrack = (typeof SHIELD_TRACKS)[number];
 
 export type GameEvent =
   | { type: 'kill'; x: number; y: number; kind: EnemyKind }
+  /** A soldier company is on the move (at most once a second per company): time for a "hut hut hut". */
+  | { type: 'soldiersMove'; company: number; x: number; y: number }
   /** An orc joins a bowling chain: count is how many are in it so far (1 is the first victim). */
   | { type: 'bowl'; chain: number; count: number; x: number; y: number }
   /** A tumbling orc smacks into another (armoured: it thudded into a heavy or clanged off a shield). */
@@ -373,6 +377,7 @@ export class Game {
   projectiles: Projectile[] = [];
   balls: Ball[] = [];
   capsules: Capsule[] = [];
+  private chantAt = new Map<number, number>();
   soldiers: Soldier[] = [];
   /** Archers, crossbows and catapults the player has placed. */
   defenders: Defender[] = [];
@@ -463,6 +468,9 @@ export class Game {
     this.wave = this.cleared = this.firstWave - 1;
     this.plan = planWave(this.firstWave, seed, cfg);
     this.relayout(false);
+    // Every run starts with one free company at the foot of the wall's centre.
+    this.addDefender('soldiers', 0, -0.5);
+    this.musterSoldiers();
   }
 
   /** The level's fixed contraption layout when the config pins one (tests do), else none. */
@@ -1475,7 +1483,7 @@ export class Game {
         // Two ranks, so a company reads as a crowd.
         const x = lo + 0.3 + ((i + 0.5) / c.count) * (hi - lo - 0.6);
         const y = c.y + (i % 2) * 0.7 + (row % 2) * 0.35;
-        this.soldiers.push({ x, y, hp, maxHp: hp, postX: x, postY: y });
+        this.soldiers.push({ x, y, hp, maxHp: hp, postX: x, postY: y, company: d.id });
       }
     });
   }
@@ -1865,6 +1873,7 @@ export class Game {
     // Orcs on the wall anywhere: soldiers with nothing to do at their post trudge over to them.
     const stayHome = this.cfg.choices.soldiers === 'repair' || this.cfg.choices.tactic === 'sallyForth';
     const breachers = this.enemies.filter((e) => e.hp > 0 && (e.state === 'climb' || e.state === 'wall'));
+    const moving = new Map<number, Soldier>();
     for (const s of this.soldiers) {
       if (s.hp <= 0) continue;
       let target: Enemy | undefined;
@@ -1906,6 +1915,7 @@ export class Game {
         const stepLen = Math.min(dist - stopAt, (near ? c.speed : c.walk) * rush * dt);
         s.x += (dx / dist) * stepLen;
         s.y += (dy / dist) * stepLen;
+        if (stepLen > 0 && !moving.has(s.company)) moving.set(s.company, s);
       }
       if (target && best < c.reach) {
         const t: Enemy = target;
@@ -1916,6 +1926,11 @@ export class Game {
         const seg = this.segmentAt(s.postX);
         if (this.segmentHp[seg] > 0) this.segmentHp[seg] = Math.min(this.cfg.wall.segmentHp, this.segmentHp[seg] + (this.cfg.town.repair.hps / c.count) * dt);
       }
+    }
+    for (const [company, s] of moving) {
+      if (this.time - (this.chantAt.get(company) ?? -99) < 1) continue;
+      this.chantAt.set(company, this.time);
+      this.events.push({ type: 'soldiersMove', company, x: s.x, y: s.y });
     }
   }
 

@@ -159,7 +159,7 @@ export function applyMeta(full: MetaLevels, level: number, base: Config = makeCo
   const cfg = structuredClone(base);
   const meta = plot ? effectiveMeta(full, plot) : full;
   const lv = (id: string) => meta[id] ?? 0;
-  cfg.unlocks.defenders = ['crossbow', ...(['archers', 'soldiers', 'catapult', 'mage', 'ballista', 'oil', 'spiketrap'] as const).filter((k) => lv(k) > 0)];
+  cfg.unlocks.defenders = ['crossbow', 'soldiers', ...(['archers', 'catapult', 'mage', 'ballista', 'oil', 'spiketrap'] as const).filter((k) => lv(k) > 0)];
   cfg.unlocks.buildings = ['keep', ...(['tavern', 'alchemist', 'blacksmith', 'chapel', 'forge', 'warroom', 'watchtower'] as const).filter((k) => lv(k) > 0), ...(lv('soldiers') >= 1 ? (['barracks'] as const) : [])];
   cfg.bonuses.damage *= 1 + 0.15 * lv('fletching');
   cfg.bonuses.rate *= 1 + 0.12 * lv('drill');

@@ -543,7 +543,7 @@ const DEFENDER_INFO: Record<DefenderKind, { name: string; blurb: string }> = {
   crossbow: { name: 'Giant crossbow', blurb: 'Fires straight up its lane, piercing a column, and hunts catapults first. On a tower it also angles across into the next lanes.' },
   archers: { name: 'Archers', blurb: 'Thirty bowmen. Their cone shoots boulders out of the sky and rains volleys on the crowd. Leave a section without them and it is a blind spot.' },
   catapult: { name: 'Catapult', blurb: 'Lobs extra gold balls far up the field, but can\'t reach anything close to the wall.' },
-  soldiers: { name: 'Soldier company', blurb: 'Forty soldiers hold the foot of the wall in their section and a little either side.' },
+  soldiers: { name: 'Soldier company', blurb: 'Twelve big soldiers hold the foot of the wall in their section and a little either side.' },
   mage: { name: 'Mage tower', blurb: 'Tower tops only. Blasts the thickest crowd in range; taller towers reach further.' },
   ballista: { name: 'Ballista', blurb: 'Slow, huge range. One great bolt skewers everything in its lane.' },
   oil: { name: 'Boiling oil', blurb: 'Wall walk only. Pours on orcs climbing or hacking at the wall below.' },
@@ -1775,6 +1775,9 @@ function frame(now: number) {
         case 'rampLand':
           sounds.boom();
           floater('DROP!', ev.x, ev.y + 1, 'smash', 1);
+          break;
+        case 'soldiersMove':
+          sounds.hut();
           break;
         case 'treeDown':
           sounds.crunch(12);

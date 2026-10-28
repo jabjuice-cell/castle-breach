@@ -103,7 +103,7 @@ const PAIR_DEFS: PairDef[] = [
   bonus('blacksmithSoldiers', 'blacksmith', 'soldiers', 'Soldier companies cost 20% less gold'),
   bonus('fletchingArchers', 'fletching', 'archers', 'Archers +15% damage'),
   bonus('drillSoldiers', 'drill', 'soldiers', 'Soldiers +20% toughness'),
-  bonus('tavernSoldiers', 'tavern', 'soldiers', 'Companies muster 10 more men'),
+  bonus('tavernSoldiers', 'tavern', 'soldiers', 'Companies muster 3 more men'),
   bonus('workshopForge', 'catapult', 'forge', 'Castle catapult reloads 15% faster'),
   bonus('blacksmithBallista', 'blacksmith', 'ballista', 'Ballista bolts hit 15% harder'),
   bonus('masonryKeep', 'masonry', 'keep', 'Repairs cost 15% less'),

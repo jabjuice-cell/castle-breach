@@ -521,6 +521,38 @@ export class Sounds {
     o.stop(now + len + 0.05);
   }
 
+  /** A soldier company on the march: "hut hut hut", three short low barks in rhythm with a slight pitch wobble. */
+  hut() {
+    const ctx = this.ctx;
+    if (!ctx || this.muted) return;
+    const t0 = ctx.currentTime;
+    for (let i = 0; i < 3; i++) {
+      const now = t0 + i * 0.17;
+      const len = 0.1;
+      const pitch = 95 * (0.93 + Math.random() * 0.14) * (i === 2 ? 1.12 : 1);
+      const o = ctx.createOscillator();
+      o.type = 'sawtooth';
+      o.frequency.setValueAtTime(pitch * 1.2, now);
+      o.frequency.exponentialRampToValueAtTime(pitch * 0.75, now + len);
+      const out = ctx.createGain();
+      out.gain.setValueAtTime(0.0001, now);
+      out.gain.exponentialRampToValueAtTime(0.26, now + 0.015);
+      out.gain.exponentialRampToValueAtTime(0.0001, now + len);
+      out.connect(ctx.destination);
+      for (const [freq, level] of [[480, 1], [900, 0.5]] as const) {
+        const band = ctx.createBiquadFilter();
+        band.type = 'bandpass';
+        band.frequency.value = freq;
+        band.Q.value = 5;
+        const g = ctx.createGain();
+        g.gain.value = level;
+        o.connect(band).connect(g).connect(out);
+      }
+      o.start(now);
+      o.stop(now + len + 0.05);
+    }
+  }
+
   /** Wood and stone knocked about: a quick rattle of ticks (taking a barricade or rubble back). */
   rattle() {
     const ctx = this.ctx;

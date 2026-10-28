@@ -1,13 +1,22 @@
 import { describe, expect, it } from 'vitest';
 import { averageBot } from '../src/sim/bot';
 import { makeConfig } from '../src/sim/config';
-import { type Ball, type Enemy, Game, type Projectile } from '../src/sim/game';
+import { type Ball, type Enemy, Game as RealGame, type Projectile } from '../src/sim/game';
 import { applyChoices, defaultChoices, sanitizeChoices } from '../src/sim/town';
 import { META_UPGRADES, applyMeta, buyMeta, metaCost, metaDepth, metaLocked, newProgress } from '../src/sim/meta';
 import { type Contraption, footprint } from '../src/sim/contraptions';
 import { contact } from '../src/sim/obstacles';
 import { type Layout, type Placed, PIECE_IDS, PIECES, activePairs, autoPack, canPlace, effectiveMeta, pieceCells, sanitizePlot, yard } from '../src/sim/plot';
 import { Tutorial } from '../src/sim/tutorial';
+
+/** The game as most tests want it: the free starting company is cleared so the castle starts empty. */
+class Game extends RealGame {
+  constructor(...args: ConstructorParameters<typeof RealGame>) {
+    super(...args);
+    this.defenders.length = 0;
+    this.soldiers = [];
+  }
+}
 import { formation, planSize, planWave, waveBudget } from '../src/sim/waves';
 
 function run(game: Game, seconds: number) {
@@ -745,12 +754,12 @@ describe('run loop', () => {
     expect(first.defenders).toHaveLength(0);
     first.gold = 1000;
     expect(first.place('archers', -4, -1)).toBe(false);
-    expect(first.place('soldiers', -4, -1)).toBe(false);
+    expect(first.place('catapult', -4, -1)).toBe(false);
     expect(first.place('crossbow', -4, -1)).toBe(true);
     const later = new Game(1, applyMeta({ archers: 1 }, 0));
     later.gold = 1000;
     expect(later.place('archers', -4, -1)).toBe(true);
-    expect(later.place('soldiers', 8, -1)).toBe(false);
+    expect(later.place('mage', 8, -1)).toBe(false);
   });
 
   it('town upgrades cost Renown, max out, and carry into every level', () => {
@@ -1952,10 +1961,10 @@ describe('the four new defenders', () => {
   });
 
   it('the town unlocks them in order, and the old four are unchanged', () => {
-    expect(applyMeta({}, 0).unlocks.defenders).toEqual(['crossbow']);
-    expect(applyMeta({ archers: 1, soldiers: 1, catapult: 1 }, 0).unlocks.defenders).toEqual(['crossbow', 'archers', 'soldiers', 'catapult']);
+    expect(applyMeta({}, 0).unlocks.defenders).toEqual(['crossbow', 'soldiers']);
+    expect(applyMeta({ archers: 1, soldiers: 1, catapult: 1 }, 0).unlocks.defenders).toEqual(['crossbow', 'soldiers', 'archers', 'catapult']);
     const all = { mage: 1, ballista: 1, oil: 1, spiketrap: 1 };
-    expect(applyMeta(all, 0).unlocks.defenders).toEqual(['crossbow', 'mage', 'ballista', 'oil', 'spiketrap']);
+    expect(applyMeta(all, 0).unlocks.defenders).toEqual(['crossbow', 'soldiers', 'mage', 'ballista', 'oil', 'spiketrap']);
     const p = newProgress();
     p.renown = 1000;
     for (const id of ['mage', 'ballista', 'oil', 'spiketrap']) {

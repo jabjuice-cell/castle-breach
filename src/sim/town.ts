@@ -55,8 +55,8 @@ export interface Option<T extends string> {
 
 export const TACTIC_INFO: Option<TacticId>[] = [
   { id: 'holdGate', name: 'Hold the Gate', good: 'Wall sections +40% strength, soldiers +50% toughness.', bad: 'Every defender shoots 20% slower; no reward for calling waves early.', needs: [] },
-  { id: 'rainOfArrows', name: 'Rain of Arrows', good: 'Archers and crossbows shoot 35% faster; volleys down twice the boulders; fire burns 5 s.', bad: 'Soldier companies muster 20 men, not 40; repairs cost 50% more.', needs: [['archers', 1]] },
-  { id: 'sallyForth', name: 'Sally Forth', good: 'Soldiers march out to hold a line up the field: +30% damage, +50% speed, their kills pay +50% gold.', bad: 'Nobody guards the foot of the wall; only 20 of each company come back each wave.', needs: [['soldiers', 1]] },
+  { id: 'rainOfArrows', name: 'Rain of Arrows', good: 'Archers and crossbows shoot 35% faster; volleys down twice the boulders; fire burns 5 s.', bad: 'Soldier companies muster 6 men, not 12; repairs cost 50% more.', needs: [['archers', 1]] },
+  { id: 'sallyForth', name: 'Sally Forth', good: 'Soldiers march out to hold a line up the field: +30% damage, +50% speed, their kills pay +50% gold.', bad: 'Nobody guards the foot of the wall; only 6 of each company come back each wave.', needs: [['soldiers', 1]] },
 ];
 
 export const ARCHER_ROLE_INFO: Option<ArcherRole>[] = [

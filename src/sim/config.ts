@@ -275,7 +275,7 @@ export const defaultConfig = {
    * on the wall, the towers or in the courtyard behind (y from minY up to the wall's front face).
    */
   /** Defenders on sale. At first only the crossbow; the town's upgrades unlock the rest (see meta.ts). */
-  unlocks: { defenders: ['crossbow'] as string[], buildings: ['keep'] as string[] },
+  unlocks: { defenders: ['crossbow', 'soldiers'] as string[], buildings: ['keep'] as string[] },
   castle: {
     minY: -7,
     maxY: 0,
@@ -360,7 +360,7 @@ export const defaultConfig = {
    * and rush any orc that gets close to it. With nothing to do at their post they walk, slowly,
    * to orcs on the wall elsewhere (so where they start matters). The fallen return each wave.
    */
-  soldiers: { cost: 60, count: 40, footprint: 1.5, hp: 30, dps: 6, reach: 1.1, y: 2.6, guard: 4.5, heavyGuard: 2.5, speed: 4, walk: 1.2 },
+  soldiers: { cost: 60, count: 12, footprint: 1.5, hp: 100, dps: 20, reach: 1.1, y: 2.6, guard: 4.5, heavyGuard: 2.5, speed: 7, walk: 2 },
   /** Mage tower (tower tops only): blasts the densest crowd in range; damage falls to edgeShare at the rim of the blast. */
   mage: { cost: 120, interval: 5, damage: 45, radius: 4, radiusPerLevel: 0.25, edgeShare: 0.5, knockback: 4, range: 40, footprint: 1.4 },
   /** Ballista: one huge bolt that pierces the whole lane. formationMult hits drummed formations and shields; plankHits is what it does to a siege tower. */
@@ -531,12 +531,12 @@ export const defaultConfig = {
     /** Wall strength and soldier toughness multipliers; every defender's rate multiplier. Early calls pay nothing. */
     holdGate: { wallHp: 1.4, soldierHp: 1.5, rate: 0.8 },
     /** Archer and crossbow rate multiplier, the volley's boulder shoot-down chance, burn seconds; men per company, repair cost multiplier. */
-    rainOfArrows: { rate: 1.35, shootDown: 0.6, burnSeconds: 5, soldiers: 20, repairCost: 1.5 },
+    rainOfArrows: { rate: 1.35, shootDown: 0.6, burnSeconds: 5, soldiers: 6, repairCost: 1.5 },
     /**
      * Soldiers hold a line y units up the field and chase orcs within guard of it; damage, speed and kill-gold
      * multipliers. They never go back to the wall, and only returnPerWave of each company's fallen come back.
      */
-    sallyForth: { y: 10, guard: 6, dps: 1.3, speed: 1.5, killGold: 1.5, returnPerWave: 20 },
+    sallyForth: { y: 10, guard: 6, dps: 1.3, speed: 1.5, killGold: 1.5, returnPerWave: 6 },
     /** Archers on Pin: damage multiplier; an orc hit walks at slow x speed for seconds; a block that is hit halts for halt seconds. */
     pin: { damage: 0.4, slow: 0.5, seconds: 2, halt: 1 },
     /** Soldiers on Repair: each company mends its nearest wall section at hps while no orc is within guard; fights at dps x. */
@@ -578,7 +578,7 @@ export const defaultConfig = {
       blacksmithSoldiers: { soldierCost: 0.8 },
       fletchingArchers: { archerDamage: 1.15 },
       drillSoldiers: { soldierHp: 1.2 },
-      tavernSoldiers: { soldierCount: 10 },
+      tavernSoldiers: { soldierCount: 3 },
       workshopForge: { catapultInterval: 0.85 },
       blacksmithBallista: { ballistaDamage: 1.15 },
       masonryKeep: { repairCost: 0.85 },
