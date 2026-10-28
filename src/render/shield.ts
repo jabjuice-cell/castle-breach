@@ -8,7 +8,7 @@ import { jitter, seeded, Vox, VoxBatch } from './voxels';
  * the flat line the sim uses, and the drawn size is set by the scene.
  *
  * Built one unit wide (x from -0.5 to 0.5), standing on y = 0, its back toward +z.
- * Taking hits knocks blocks off it (setWear); the heave recharge lights it up from bottom to top (shade).
+ * It never shows damage; the heave recharge lights it up from bottom to top (shade).
  */
 
 const NX = 24;
@@ -16,9 +16,6 @@ const NY = 15;
 const S = 1 / NX;
 /** Height for a width of one. */
 export const SHIELD_SHAPE_H = NY * S;
-/** Blocks are knocked off in clusters this many cells across. */
-const CLUSTER = 3;
-
 const STEEL = '#c9d0d6';
 const STEEL_BRIGHT = '#eef2f5';
 const BLUE = '#2f56b3';
@@ -63,46 +60,13 @@ function inShape(x: number, y: number): boolean {
 
 const isRim = (x: number, y: number) => inShape(x, y) && !(inShape(x - 1, y) && inShape(x + 1, y) && inShape(x, y - 1) && inShape(x, y + 1));
 
-const clusterOf = (x: number, y: number) => Math.floor(x / CLUSTER) + Math.floor(y / CLUSTER) * 100;
-
-/** Clusters that can be knocked off, in the order they go (the crest's clusters never do). */
-const REMOVABLE: number[] = (() => {
-  const all = new Set<number>();
-  const crest = new Set<number>();
-  for (let x = 0; x < NX; x++) {
-    for (let y = 0; y < NY; y++) {
-      if (!inShape(x, y)) continue;
-      all.add(clusterOf(x, y));
-      if (crestAt(x, y)) crest.add(clusterOf(x, y));
-    }
-  }
-  const ids = [...all].filter((c) => !crest.has(c)).sort((a, b) => a - b);
-  const rnd = seeded(77);
-  for (let i = ids.length - 1; i > 0; i--) {
-    const j = Math.floor(rnd() * (i + 1));
-    [ids[i], ids[j]] = [ids[j], ids[i]];
-  }
-  return ids;
-})();
-
-/** The most blocks that can be lost: the shield always stays recognisable. */
-export const SHIELD_MAX_LOST = Math.floor(REMOVABLE.length * 0.7);
-
-export interface ShieldCell {
-  x: number;
-  y: number;
-  z: number;
-  color: THREE.Color;
-}
-
-/** The shield with its first `lost` clusters knocked off. Cells run x 0..23, y 0..14, z -1 (front lip) to 2 (back lip). */
-export function buildShieldVox(lost = 0): Vox {
-  const gone = new Set(REMOVABLE.slice(0, Math.min(lost, SHIELD_MAX_LOST)));
+/** The shield's cells. Cells run x 0..23, y 0..14, z -1 (front lip) to 2 (back lip). */
+export function buildShieldVox(): Vox {
   const rnd = seeded(23);
   const v = new Vox();
   for (let x = 0; x < NX; x++) {
     for (let y = 0; y < NY; y++) {
-      if (!inShape(x, y) || gone.has(clusterOf(x, y))) continue;
+      if (!inShape(x, y)) continue;
       const rim = isRim(x, y);
       const crest = crestAt(x, y);
       let c: THREE.Color;
@@ -125,22 +89,11 @@ export function buildShieldVox(lost = 0): Vox {
   return v;
 }
 
-/** The shield's cells in a cluster, for flinging as debris. */
-function clusterCells(lost: number): ShieldCell[] {
-  const id = REMOVABLE[lost];
-  const out: ShieldCell[] = [];
-  buildShieldVox(lost).each((x, y, z, cell) => {
-    if (clusterOf(x, y) === id) out.push({ x, y, z, color: cell.c });
-  });
-  return out;
-}
-
 export class ShieldModel {
   readonly group = new THREE.Group();
   private mesh: THREE.Mesh;
   private mat: THREE.MeshLambertMaterial;
   private charge = { value: 1 };
-  private lost = -1;
 
   constructor() {
     this.mat = new THREE.MeshLambertMaterial({ vertexColors: true });
@@ -165,27 +118,9 @@ if (uCharge < 0.999) {
     };
     this.mesh = new THREE.Mesh(new THREE.BufferGeometry(), this.mat);
     this.group.add(this.mesh);
-    this.setWear(0);
-  }
-
-  /**
-   * Knocks off `lost` clusters of blocks in all (it never grows back until called with a smaller number).
-   * Returns the blocks just lost, in the shield's own units, so the scene can fling them as debris.
-   */
-  setWear(lost: number): ShieldCell[] {
-    lost = Math.max(0, Math.min(SHIELD_MAX_LOST, Math.floor(lost)));
-    if (lost === this.lost) return [];
-    const was = this.lost;
-    this.lost = lost;
     const batch = new VoxBatch();
-    buildShieldVox(lost).meshInto(batch, S, new THREE.Vector3(-0.5, 0, 0));
-    this.mesh.geometry.dispose();
+    buildShieldVox().meshInto(batch, S, new THREE.Vector3(-0.5, 0, 0));
     this.mesh.geometry = batch.geometries().solid ?? new THREE.BufferGeometry();
-    const out: ShieldCell[] = [];
-    for (let i = Math.max(0, was); i < lost; i++) {
-      for (const c of clusterCells(i)) out.push({ x: (c.x + 0.5) * S - 0.5, y: (c.y + 0.5) * S, z: (c.z + 0.5) * S, color: c.color });
-    }
-    return out;
   }
 
   /** A hit glint (0 to 1) and how bright it is (1 normally), and how far the heave has recharged (0 to 1). */

@@ -136,9 +136,10 @@ export const defaultConfig = {
   // ---- the Breakout core --------------------------------------------------------
   /** A giant metal shield that follows the mouse along the battlements: the paddle. */
   shield: {
-    y: 4,
-    /** About 2.8 tiles wide. */
-    halfWidth: 2.3,
+    /** Right up against the wall: the voxel shield's back edge sits just in front of the wall front (y = 0). */
+    y: 2,
+    /** About 3.1 tiles wide. */
+    halfWidth: 2.6,
     /** 60 tiles/s, so it can't teleport. */
     speed: 100,
     /**
@@ -183,8 +184,6 @@ export const defaultConfig = {
     slamKillMass: 1.5,
     slamDamage: 25,
     slamKnock: 40,
-    /** Render only: shield hits that knock one cluster of blocks off the voxel shield (cleared each wave). */
-    hitsPerChunk: 2,
     /** Speed multiplier on plain returns (not Perfect Returns or heaves). */
     returnMult: 1,
   },

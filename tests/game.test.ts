@@ -197,7 +197,7 @@ describe('the shield and the balls', () => {
     const m = battle();
     m.setShield(-6);
     run(m, 0.2);
-    const mb = ball(m, { x: -6, y: 5.2, vx: 6, vy: -18 });
+    const mb = ball(m, { x: -6, y: 3.2, vx: 6, vy: -18 });
     run(m, 0.05);
     expect(mb.vy).toBeGreaterThan(0);
     expect(mb.vx / mb.vy).toBeCloseTo(6 / 18, 1);
@@ -206,7 +206,7 @@ describe('the shield and the balls', () => {
     const g = battle();
     g.setShield(-6);
     run(g, 0.2);
-    const b = ball(g, { x: -6 + g.shieldHalfWidth() * 0.97, y: 4.9 });
+    const b = ball(g, { x: -6 + g.shieldHalfWidth() * 0.97, y: 2.9 });
     run(g, 0.05);
     expect(b.vy).toBeGreaterThan(0);
     expect(Math.abs(b.vx)).toBeGreaterThan(Math.abs(b.vy) * 2);
@@ -287,7 +287,7 @@ describe('the shield and the balls', () => {
     const game = battle();
     game.shield.x = -8;
     game.setShield(8);
-    const b = ball(game, { x: -7, y: 4.9, vx: 0, vy: -20 });
+    const b = ball(game, { x: -7, y: 2.9, vx: 0, vy: -20 });
     run(game, 0.02);
     expect(b.spin).not.toBe(0);
   });
@@ -334,7 +334,7 @@ describe('the shield and the balls', () => {
     const back = enemy({ x: 0.5, y: 25, hp: 20, maxHp: 20, state: 'stand' });
     game.enemies.push(back);
     game.blocks.push(block);
-    const b = ball(game, { x: 0, y: 4.9, vy: -20 });
+    const b = ball(game, { x: 0, y: 2.9, vy: -20 });
     game.heave();
     run(game, 0.05);
     expect(b.heaved).toBe(true);
@@ -355,7 +355,7 @@ describe('the shield and the balls', () => {
     expect(game.heave()).toBe(true);
     expect(game.canHeave).toBe(false);
     run(game, 0.5);
-    const b = ball(game, { x: 0, y: 4.9, vy: -20 });
+    const b = ball(game, { x: 0, y: 2.9, vy: -20 });
     run(game, 0.05);
     expect(b.heaved).toBe(false);
     run(game, 0.6);
@@ -369,7 +369,7 @@ describe('the shield and the balls', () => {
     game.events = [];
     expect(game.heave()).toBe(true);
     run(game, 0.05);
-    const b = ball(game, { x: 0, y: 4.9, vy: -20 });
+    const b = ball(game, { x: 0, y: 2.9, vy: -20 });
     run(game, 0.05);
     expect(b.perfect).toBe(true);
     expect(b.heaved).toBe(true);
@@ -381,12 +381,12 @@ describe('the shield and the balls', () => {
     const early = battle();
     early.heave();
     run(early, 0.5);
-    const e = ball(early, { x: 0, y: 4.9, vy: -20 });
+    const e = ball(early, { x: 0, y: 2.9, vy: -20 });
     run(early, 0.05);
     expect(e.perfect).toBe(false);
     expect(early.perfects).toBe(0);
     const late = battle();
-    const l = ball(late, { x: 0, y: 4.9, vy: -20 });
+    const l = ball(late, { x: 0, y: 2.9, vy: -20 });
     run(late, 0.05);
     late.events = [];
     expect(late.heave()).toBe(true);
@@ -400,8 +400,8 @@ describe('the shield and the balls', () => {
     const game = battle();
     game.heave();
     run(game, 0.05);
-    ball(game, { id: 1, x: -2, y: 4.9, vy: -20 });
-    ball(game, { id: 2, x: 2, y: 4.9, vy: -20 });
+    ball(game, { id: 1, x: -2, y: 2.9, vy: -20 });
+    ball(game, { id: 2, x: 2, y: 2.9, vy: -20 });
     run(game, 0.1);
     expect(game.perfects).toBe(1);
     expect(game.balls.filter((b) => b.perfect)).toHaveLength(1);
@@ -415,7 +415,7 @@ describe('the shield and the balls', () => {
       const orc = enemy({ x: 0, y: 20, hp: 100, maxHp: 100, state: 'stand' });
       game.enemies.push(orc);
       if (press) game.heave();
-      const b = ball(game, { x: 0, y: 4.9, vy: -20 });
+      const b = ball(game, { x: 0, y: 2.9, vy: -20 });
       run(game, 0.05);
       expect(b.perfect).toBe(press);
       for (let i = 0; i < 90 && orc.hp === 100; i++) game.step();
@@ -429,13 +429,13 @@ describe('the shield and the balls', () => {
   it('a perfect ball that returns to the shield unpressed is no longer perfect', () => {
     const game = battle();
     game.heave();
-    const b = ball(game, { x: 0, y: 4.9, vy: -20 });
+    const b = ball(game, { x: 0, y: 2.9, vy: -20 });
     run(game, 0.05);
     expect(b.perfect).toBe(true);
     // Back down onto the shield with no press in the window.
     game.shield.heaveAt = -99;
     b.x = 0;
-    b.y = 4.9;
+    b.y = 2.9;
     b.vx = 0;
     b.vy = -20;
     run(game, 0.05);
@@ -461,7 +461,7 @@ describe('the shield and the balls', () => {
     game.heave();
     run(game, 0.4);
     game.heave();
-    const b = ball(game, { x: 0, y: 4.9, vy: -20 });
+    const b = ball(game, { x: 0, y: 2.9, vy: -20 });
     run(game, 0.05);
     expect(b.perfect).toBe(false);
     expect(game.perfects).toBe(0);
@@ -475,7 +475,7 @@ describe('the shield and the balls', () => {
       run(game, 0.7);
       expect(game.canHeave).toBe(false);
       if (press) game.heave();
-      const b = ball(game, { x: 0, y: 4.9, vy });
+      const b = ball(game, { x: 0, y: 2.9, vy });
       run(game, 0.05);
       expect(b.perfect).toBe(press);
       return Math.hypot(b.vx, b.vy);
@@ -491,7 +491,7 @@ describe('the shield and the balls', () => {
     run(game, 0.7);
     expect(game.canHeave).toBe(false);
     expect(game.heave()).toBe(true);
-    const b = ball(game, { x: 0, y: 4.9, vy: -20 });
+    const b = ball(game, { x: 0, y: 2.9, vy: -20 });
     run(game, 0.05);
     expect(b.perfect).toBe(true);
     expect(b.heaved).toBe(false);
@@ -526,7 +526,7 @@ describe('the shield and the balls', () => {
     const game = battle();
     game.heave();
     run(game, 0.05);
-    ball(game, { id: 7, x: 0, y: 4.9, vy: -20 });
+    ball(game, { id: 7, x: 0, y: 2.9, vy: -20 });
     game.events = [];
     let ev: { type: string; ball?: number; at?: number } | undefined;
     for (let i = 0; i < 10 && !ev; i++) {
@@ -620,11 +620,11 @@ describe('the shield and the balls', () => {
   it('caught capsules: grog splits every ball into three, the banner widens the shield', () => {
     const game = battle();
     ball(game, { x: 10, y: 30, vy: 20 });
-    game.capsules.push({ kind: 'grog', x: 0, y: 5 });
+    game.capsules.push({ kind: 'grog', x: 0, y: 3 });
     run(game, 0.3);
     expect(game.balls).toHaveLength(3);
     const w = game.shieldHalfWidth();
-    game.capsules.push({ kind: 'banner', x: 0, y: 5 });
+    game.capsules.push({ kind: 'banner', x: 0, y: 3 });
     run(game, 0.3);
     expect(game.shieldHalfWidth()).toBeCloseTo(w * 1.5);
     // A missed capsule just falls away.

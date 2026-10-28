@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ballGeometry, ballVoxels, rockGeometry, rockVoxels } from '../src/render/voxelBalls';
-import { buildShieldVox, SHIELD_MAX_LOST, SHIELD_SHAPE_H } from '../src/render/shield';
+import { buildShieldVox, SHIELD_SHAPE_H } from '../src/render/shield';
 
 describe('voxel shield', () => {
   it('keeps the old proportions (a bit over half as tall as wide)', () => {
@@ -8,31 +8,16 @@ describe('voxel shield', () => {
     expect(SHIELD_SHAPE_H).toBeLessThan(0.65);
   });
 
-  it('loses blocks as it wears, never all of them', () => {
-    const whole = buildShieldVox(0).size;
-    const worn = buildShieldVox(5).size;
-    const ruined = buildShieldVox(SHIELD_MAX_LOST).size;
-    expect(worn).toBeLessThan(whole);
-    expect(ruined).toBeLessThan(worn);
-    expect(ruined).toBeGreaterThan(whole * 0.25);
-    // Past the limit the shield stops losing blocks.
-    expect(buildShieldVox(SHIELD_MAX_LOST + 20).size).toBe(ruined);
-  });
-
-  it('keeps its crest however worn', () => {
-    const gold = (lost: number) => {
-      let n = 0;
-      buildShieldVox(lost).each((_x, _y, _z, c) => {
-        if (c.c.r > 0.5 && c.c.g > 0.25 && c.c.b < 0.2) n++;
-      });
-      return n;
-    };
-    expect(gold(0)).toBeGreaterThan(20);
-    expect(gold(SHIELD_MAX_LOST)).toBe(gold(0));
+  it('has its gold crest', () => {
+    let n = 0;
+    buildShieldVox().each((_x, _y, _z, c) => {
+      if (c.c.r > 0.5 && c.c.g > 0.25 && c.c.b < 0.2) n++;
+    });
+    expect(n).toBeGreaterThan(20);
   });
 
   it('is the same every time it is built', () => {
-    expect(buildShieldVox(3).size).toBe(buildShieldVox(3).size);
+    expect(buildShieldVox().size).toBe(buildShieldVox().size);
   });
 });
 

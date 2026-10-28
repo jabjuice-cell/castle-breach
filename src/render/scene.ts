@@ -143,6 +143,10 @@ const BALLISTA_VOX = 0.116;
 const NEW_VOX: Partial<Record<PlacedKind, number>> = { mage: 0.1125, ballista: 0.105, oil: 0.12, spiketrap: 0.116, archers: 0.075, soldiers: 0.07, catapult: 0.14 };
 const NEW_MODELS: Partial<Record<PlacedKind, () => Vox>> = { mage: mageModel, ballista: bigBallistaModel, oil: oilModel, spiketrap: spikeTrapModel, archers: archerModel, soldiers: soldierModel, catapult: castleCatapultModel };
 const SHIELD_LIFT = 0.25;
+/** The voxel shield is drawn this much taller and this many times thicker (collision stays flat). */
+const SHIELD_TALL = 1.4;
+const SHIELD_THICKNESS = 2;
+const SHIELD_DEPTH_WIDTH_CAP = 5.8;
 /** It is a touch wider than its bounce line, so balls never seem to miss its rim. */
 const SHIELD_OVERHANG = 1.06;
 /** The camera: height, distance back, and the point on the field it looks at. */
@@ -373,7 +377,6 @@ export class BattleScene {
   private smoke: { sprite: THREE.Sprite; vel: THREE.Vector3; life: number; max: number; size: number }[] = [];
   private balls: THREE.InstancedMesh;
   /** Hits the shield has taken this wave: every few knock a cluster of blocks off it. */
-  private shieldHits = 0;
   private halos: THREE.InstancedMesh;
   private barrels: THREE.InstancedMesh;
   private capsuleTex = {} as Record<CapsuleKind, THREE.Texture>;
@@ -1139,7 +1142,6 @@ export class BattleScene {
           this.sparks(ev.x, BALL_Y + 0.4, -sy - 0.3, ev.parry ? 18 : 8);
           this.shieldJolt = ev.parry ? 1 : 0.7;
           this.shieldFlashT = 0;
-          this.shieldHits++;
           this.shake = Math.max(this.shake, ev.parry ? 0.5 : 0.25);
           if (ev.parry) this.flash(0.18, '#fff6c8');
           break;
@@ -1259,10 +1261,6 @@ export class BattleScene {
           break;
         case 'bank':
           fw.burst(ev.x, 0.9, -ev.y, { count: 30, colors: ['#ffffff', '#5ad8ff', '#ffd34a'], speed: 9, life: 0.45, size: 0.35, up: 0.3, gravity: 6 });
-          break;
-        case 'waveStart':
-          // The bearers patch the shield up between waves.
-          this.shieldHits = 0;
           break;
         case 'shotDown':
           // Archers shoot a boulder out of the sky: it bursts into rubble mid-air.
@@ -1515,8 +1513,11 @@ export class BattleScene {
     const shove = this.heaveT < HEAVE_SECONDS * 2 ? Math.sin((this.heaveT / (HEAVE_SECONDS * 2)) * Math.PI) : 0;
     this.shieldJolt = Math.max(0, this.shieldJolt - dt * 6);
     const m = this.shieldModel.group;
-    m.scale.setScalar(w);
-    m.position.set(g.shield.x, SHIELD_LIFT + shove * 0.4 + this.shieldJolt * 0.15, -g.cfg.shield.y - shove * 1.6 + this.shieldJolt * 0.2);
+    // Taller and thicker than the flat collision line; the thickness stops growing with the width so the back never reaches the wall.
+    const depth = SHIELD_THICKNESS * Math.min(w, SHIELD_DEPTH_WIDTH_CAP);
+    m.scale.set(w, w * SHIELD_TALL, depth);
+    // The front face sits on the collision line and the thickness grows back toward the wall.
+    m.position.set(g.shield.x, SHIELD_LIFT + shove * 0.4 + this.shieldJolt * 0.15, -g.cfg.shield.y + depth / 24 - shove * 1.6 + this.shieldJolt * 0.2);
     m.rotation.set(SHIELD_LEAN - shove * 0.3 + this.shieldJolt * 0.04, 0, this.shieldJolt * 0.03 * Math.sin(this.time * 60));
     for (const cue of this.bounceCues) {
       const k = 1 - (this.time - cue.born) / 0.35;
@@ -1533,24 +1534,6 @@ export class BattleScene {
         if (b.stuck || b.vy >= 0) continue;
         const eta = (b.y - g.cfg.shield.y) / -b.vy;
         if (eta > 0 && eta <= win * 3) cue = Math.max(cue, eta <= win ? 0.9 : 0.35);
-      }
-    }
-    // Hits knock blocks off it, which fly off as debris.
-    const lostNow = this.shieldModel.setWear(Math.floor(this.shieldHits / g.cfg.shield.hitsPerChunk));
-    if (lostNow.length) {
-      m.updateMatrixWorld(true);
-      for (const c of lostNow) {
-        const at = m.localToWorld(new THREE.Vector3(c.x, c.y, c.z));
-        if (this.debris.length >= QUALITY[this.quality].debris) break;
-        this.debris.push({
-          pos: at,
-          vel: new THREE.Vector3((Math.random() - 0.5) * 7, 2 + Math.random() * 5, -2 - Math.random() * 5),
-          spin: new THREE.Vector3(Math.random() * 8, Math.random() * 8, Math.random() * 8),
-          rot: new THREE.Euler(),
-          life: 1 + Math.random() * 0.6,
-          color: c.color,
-          size: w * 0.075 / VOXEL,
-        });
       }
     }
     // Dimmed while it recovers from a heave.
