@@ -8,6 +8,8 @@
     "build": "tsc --noEmit && vite build",
     "test": "vitest run",
     "sim": "tsx tools/sim.ts",
+    "sim:quick": "tsx tools/sim.ts --quick",
+    "sim:baseline": "tsx tools/sim.ts --quick > tools/sim-baseline.txt",
     "trace": "tsx tools/trace.ts"
   },
   "dependencies": {

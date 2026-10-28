@@ -1,7 +1,9 @@
 /**
  * Headless balance runner: plays seeded campaigns with the paddle bots and reports
  * how they get on.
- * Usage: npm run sim -- [campaigns] ['{"group": {"key": value}}' config overrides]
+ * Usage: npm run sim -- [--quick] [campaigns] ['{"group": {"key": value}}' config overrides]
+ * --quick (npm run sim:quick): the fresh runs only, 5 of them, in well under a minute.
+ * Compare with tools/sim-baseline.txt; refresh it with npm run sim:baseline after a deliberate balance change.
  *
  * Fresh: level 1 with no town upgrades at all (it should be lost).
  * Campaign: runs of levels 1 to 3 in order. After each level the bot banks its Renown
@@ -14,8 +16,11 @@ import { Game } from '../src/sim/game';
 import { autoPack } from '../src/sim/plot';
 import { META_UPGRADES, type Progress, applyMeta, buyMeta, metaCost, metaLocked, newProgress } from '../src/sim/meta';
 
-const runs = Number(process.argv[2] ?? 10);
-const overrides = process.argv[3] ? JSON.parse(process.argv[3]) : {};
+const args = process.argv.slice(2);
+const quick = args[0] === '--quick';
+if (quick) args.shift();
+const runs = Number(args[0] ?? (quick ? 5 : 10));
+const overrides = args[1] ? JSON.parse(args[1]) : {};
 const MAX_RUNS = 25;
 const LEVELS = makeConfig().levels.names.length;
 
@@ -87,6 +92,8 @@ for (const [name, bot] of BOTS) {
   const renown = games.reduce((s, g) => s + g.renownEarned, 0) / runs;
   console.log(`${name.padEnd(8)} waves held: median ${median(waves)}, max ${Math.max(...waves)} | won ${wins}/${runs} | ${renown.toFixed(0)} Renown`);
 }
+
+if (quick) process.exit(0);
 
 console.log(`-- campaign: the run on which each level was first beaten (median), up to ${MAX_RUNS} runs --`);
 for (const [name, bot] of BOTS) {

@@ -30,7 +30,9 @@ Warlords lead waves 10, 20 and 25. Renown is banked at the end of a run (spendin
 npm install
 npm run dev      # play locally
 npm test         # sim tests
-npm run sim      # balance report for the three bots (optional: runs, JSON config overrides)
+npm run sim      # full balance report for the bots (slow, 10+ min; optional: runs, JSON config overrides)
+npm run sim:quick    # fresh level-1 runs only (~20 s): compare with tools/sim-baseline.txt
+npm run sim:baseline # refresh tools/sim-baseline.txt after a deliberate balance change
 npm run trace    # one run, wave by wave
 npm run build    # single-file build in dist/index.html
 ```
