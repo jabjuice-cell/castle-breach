@@ -1729,7 +1729,12 @@ function frame(now: number) {
         case 'bank':
           floater('BANK!', ev.x, ev.y + 1, 'bank', 0.8);
           break;
+        case 'kill':
+          // A heaved ball felling an orc stops the action for a beat: longer for an ogre or boss.
+          if (ev.heaved) hitStop = Math.max(hitStop, ev.kind === 'ogre' || ev.kind === 'warlord' ? 0.08 : 0.04);
+          break;
         case 'hit':
+          if (ev.combo !== undefined) sounds.hitNote(ev.combo);
           // The running combo pops off each hit; the milestones get their own big banner.
           if (ev.combo !== undefined && ev.combo >= 3 && !game.cfg.balls.comboMilestones.includes(ev.combo)) {
             floater(`${ev.combo} COMBO`, ev.x, ev.y, ev.combo >= 10 ? 'chain hot' : 'chain', 0.7);

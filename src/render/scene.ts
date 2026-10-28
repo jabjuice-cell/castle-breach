@@ -90,6 +90,10 @@ const MAX_BARRELS = 300;
 const GOLD = ['#fff6c8', '#ffd34a', '#ffb43a'];
 const STEEL = ['#ffffff', '#d8f4ff', '#9cc8ff'];
 const ORANGE = ['#ffd08a', '#ff9a2a', '#ff7a1a'];
+/** Ball trail colours by speed: slow, medium, fast. */
+const TRAIL_WHITE = ['#ffffff', '#f2f2f2'];
+const TRAIL_ORANGE = ['#ffb04a', '#ff8a1a', '#ffd08a'];
+const TRAIL_BLUE = ['#d8ecff', '#9fd0ff', '#ffffff'];
 const FIRE = ['#fff2a8', '#ffb43a', '#ff6a2a', '#e2331f'];
 const ARCANE = ['#ffffff', '#e2baff', '#b06aff', '#6a3ad8'];
 const OIL = ['#fff2a8', '#ffb43a', '#ff7a2a', '#3a2a1a'];
@@ -1142,6 +1146,8 @@ export class BattleScene {
       switch (ev.type) {
         case 'kill': {
           const big = SIZE[ev.kind];
+          // A heaved ball's kill lands with a small shake (bigger for an ogre or boss).
+          if (ev.heaved) this.shake = Math.max(this.shake, big >= 2 ? 0.45 : 0.15);
           if (ev.kind === 'warlord') {
             // Out of the last of his armour steps a scrawny orc on stilts, and legs it.
             for (let i = 0; i < 5; i++) this.chunk(this.chunkArt.plates[(Math.random() * this.chunkArt.plates.length) | 0], ev.x, 3, -ev.y + 0.5, 1.3, 14);
@@ -1656,12 +1662,12 @@ export class BattleScene {
       const glow = (b.perfect ? 6.5 : b.heaved && b.lines > 0 ? 6 : b.combo >= 10 ? 5 : 3.5) * r * size;
       this.halos.setMatrixAt(h, tmpM.compose(tmpV, camQ, tmpS.set(glow, glow, 1)));
       this.halos.setColorAt(h++, tmpC.set(color).multiplyScalar(b.kind === 'pebble' ? 0.4 : 0.8));
-      // A comet trail, longer and hotter with the combo.
+      // A comet trail that grows longer with speed and shifts white, then orange, then blue-white.
       if (!b.stuck) {
-        const hot = b.perfect || b.combo >= 10 || (b.heaved && b.lines > 0);
-        // A Perfect Return burns an orange trail until it lands its hit.
+        const t = Math.min(1, Math.hypot(b.vx, b.vy) / g.cfg.balls.maxSpeed);
+        const trail = b.perfect ? ORANGE : t < 0.5 ? (t < 0.25 ? TRAIL_WHITE : TRAIL_ORANGE) : TRAIL_BLUE;
         this.fireworks.burst(b.x, BALL_Y, -b.y, {
-          count: hot ? 3 : 1.2, colors: b.perfect ? ORANGE : [color, '#ffffff'], speed: 0.8, life: hot ? 0.45 : 0.3, size: r * size * (hot ? 1.8 : 1.3), gravity: 0, drag: 4,
+          count: 1 + t * 5, colors: trail, speed: 0.8, life: 0.15 + t * 0.65, size: r * size * (1.2 + t), gravity: 0, drag: 4,
         });
       }
     }

@@ -234,7 +234,7 @@ export const SHIELD_TRACKS = ['width', 'window', 'power', 'recovery', 'plating']
 export type ShieldTrack = (typeof SHIELD_TRACKS)[number];
 
 export type GameEvent =
-  | { type: 'kill'; x: number; y: number; kind: EnemyKind }
+  | { type: 'kill'; x: number; y: number; kind: EnemyKind; /** The felling ball was a heaved one. */ heaved?: boolean }
   /** A soldier company is on the move (at most once a second per company): time for a "hut hut hut". */
   | { type: 'soldiersMove'; company: number; x: number; y: number }
   /** An orc joins a bowling chain: count is how many are in it so far (1 is the first victim). */
@@ -3356,7 +3356,7 @@ export class Game {
       if (e.kind === 'barrel' && e.state === 'wall') continue;
       this.addGold(this.cfg[e.kind].gold * growth * e.goldMult);
       this.kills++;
-      this.events.push({ type: 'kill', x: e.x, y: e.y, kind: e.kind });
+      this.events.push({ type: 'kill', x: e.x, y: e.y, kind: e.kind, heaved: this.balls.find((x) => x.id === e.lastBall)?.heaved === true });
       this.dropCapsule(e.x, e.y);
       if (e.kind === 'barrel') {
         this.blasts.push({ x: e.x, y: e.y, at: this.time + (e.blasted ? this.cfg.barrel.chainDelay : 0), mult: e.goldMult, ball: e.lastBall });

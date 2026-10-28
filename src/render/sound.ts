@@ -209,6 +209,19 @@ export class Sounds {
     o.stop(start + length + 0.05);
   }
 
+  /** A short note for an orc hit by a ball: climbs a major pentatonic scale with the ball's combo (1 is the first hit, reset at the shield). */
+  hitNote(combo: number) {
+    const ctx = this.ctx;
+    if (!ctx || this.muted) return;
+    const step = Math.min(Math.max(1, combo) - 1, 14);
+    const degrees = [0, 2, 4, 7, 9];
+    const semis = degrees[step % 5] + 12 * Math.floor(step / 5);
+    const f = 392 * 2 ** (semis / 12);
+    const now = ctx.currentTime;
+    this.tone(f, now, 0.14, 0.09, 'triangle');
+    this.tone(f * 2, now, 0.08, 0.03, 'sine');
+  }
+
   /** A rising chime for a combo milestone or a caught capsule: more notes for bigger combos. */
   chime(level: number) {
     const ctx = this.ctx;
