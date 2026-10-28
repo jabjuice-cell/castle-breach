@@ -1795,6 +1795,7 @@ function frame(now: number) {
           sounds.rattle();
           break;
         case 'contraptionMoved':
+        case 'contraptionsSwapped':
           sounds.thunk();
           break;
         case 'obstacle':

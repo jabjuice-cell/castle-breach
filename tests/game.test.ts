@@ -5,7 +5,7 @@ import { type Ball, type Enemy, Game, type Projectile } from '../src/sim/game';
 import { applyChoices, defaultChoices, sanitizeChoices } from '../src/sim/town';
 import { META_UPGRADES, applyMeta, buyMeta, metaCost, metaDepth, metaLocked, newProgress } from '../src/sim/meta';
 import { type Contraption, footprint } from '../src/sim/contraptions';
-import { LEVEL_OBSTACLES, contact } from '../src/sim/obstacles';
+import { contact } from '../src/sim/obstacles';
 import { type Layout, type Placed, PIECE_IDS, PIECES, activePairs, autoPack, canPlace, effectiveMeta, pieceCells, sanitizePlot, yard } from '../src/sim/plot';
 import { Tutorial } from '../src/sim/tutorial';
 import { formation, planSize, planWave, waveBudget } from '../src/sim/waves';
@@ -1476,33 +1476,73 @@ describe('pinball contraptions', () => {
     expect(game.events.some((e) => e.type === 'rebound')).toBe(true);
   });
 
-  it('lays out cleanly: no overlaps, inside the field, off the road', () => {
+  const bound = (o: { r?: number; hw?: number; hh?: number }) => o.r ?? Math.hypot(o.hw ?? 1, o.hh ?? 1);
+
+  /** Checks a game's current layout against the rules: mirrored, at the back, apart, in bounds, off the routes and the structures. */
+  function checkLayout(game: Game) {
+    const k = game.cfg.contraptions;
+    const L = k.layout;
+    const hw = game.cfg.field.halfWidth;
+    const cs = game.contraptions;
+    const routes = game.plannedRoutes();
+    const centre = cs.filter((c) => c.x === 0);
+    // One centre piece per kind at most; everything else has its mirror twin.
+    expect(new Set(centre.map((c) => c.kind)).size).toBe(centre.length);
+    for (const c of cs) {
+      if (c.x === 0) continue;
+      expect(cs.some((o) => o.kind === c.kind && Math.abs(o.x + c.x) < 1e-9 && Math.abs(o.y - c.y) < 1e-9)).toBe(true);
+    }
+    cs.forEach((c, i) => {
+      const a = footprint(c, k);
+      expect(Math.abs(a.x) + bound(a)).toBeLessThanOrEqual(hw);
+      if (c.kind === 'ramp') {
+        expect(c.angle).toBe(0);
+        expect(c.y).toBeGreaterThanOrEqual(L.rampMinY);
+        expect(c.y).toBeLessThanOrEqual(L.rampMaxY);
+      } else {
+        expect(c.y).toBeGreaterThanOrEqual(L.minY);
+        expect(c.y).toBeLessThanOrEqual(L.maxY);
+        // Never on or next to an orc route.
+        for (const pts of routes) for (const p of pts) if (Math.abs(p.y - c.y) < 4) expect(Math.hypot(p.x - c.x, p.y - c.y)).toBeGreaterThanOrEqual(bound(a) + L.routeClear);
+      }
+      cs.slice(i + 1).forEach((o) => expect(Math.hypot(c.x - o.x, c.y - o.y)).toBeGreaterThanOrEqual(L.apart));
+      for (const o of game.obstacles) if (!o.removed) expect(Math.hypot(a.x - o.x, a.y - o.y)).toBeGreaterThan(bound(a) + bound(o));
+    });
+  }
+
+  it('50 seeds give mirrored layouts at the back of the field, clear of the routes', () => {
     for (const level of [0, 1, 2]) {
-      const game = new Game(3, applyMeta({}, level), level);
-      const k = game.cfg.contraptions;
-      const hw = game.cfg.field.halfWidth;
-      const bound = (o: { r?: number; hw?: number; hh?: number }) => o.r ?? Math.hypot(o.hw ?? 1, o.hh ?? 1);
-      const shapes = k.levels[level].map((c) => footprint(c, k));
-      const solid = LEVEL_OBSTACLES[level];
-      expect(game.contraptions.length).toBe(shapes.length);
-      shapes.forEach((a, i) => {
-        expect(Math.abs(a.x) + bound(a)).toBeLessThanOrEqual(hw);
-        expect(a.y).toBeGreaterThanOrEqual(15);
-        expect(a.y).toBeLessThanOrEqual(55);
-        expect(a.y).toBeLessThan(game.cfg.field.topY);
-        expect(Math.abs(a.x)).toBeGreaterThanOrEqual(6);
-        if (level > 0) expect(Math.abs(a.x) - bound(a)).toBeGreaterThan(0);
-        shapes.slice(i + 1).forEach((o) => expect(Math.hypot(a.x - o.x, a.y - o.y)).toBeGreaterThan(bound(a) + bound(o)));
-        solid.forEach((o) => expect(Math.hypot(a.x - o.x, a.y - o.y)).toBeGreaterThan(bound(a) + bound(o)));
-      });
-      // Trees keep clear of every fixture.
-      for (const seed of [1, 2, 3, 4, 5]) {
-        const g = new Game(seed, applyMeta({}, level), level);
-        for (const t of g.obstacles.filter((o) => o.look === 'tree')) {
-          for (const a of shapes) expect(Math.hypot(a.x - t.x, a.y - t.y)).toBeGreaterThan(bound(a) + (t.r ?? 0));
-        }
+      for (let seed = 1; seed <= 50; seed++) {
+        const game = new Game(seed, applyMeta({}, level), level);
+        checkLayout(game);
+        const n = (kind: string) => game.contraptions.filter((c) => c.kind === kind).length;
+        const want = game.cfg.contraptions.layout.counts[level];
+        // Pairs always fit; only an odd piece can miss out, when the middle is an orc route.
+        expect(n('bell')).toBe(want.bell);
+        expect(n('ramp')).toBe(want.ramp);
+        expect(n('bumper')).toBeGreaterThanOrEqual(want.bumper - (want.bumper % 2));
       }
     }
+  });
+
+  it('the layout changes in the wave break, from the seed, and stays the same within a wave', () => {
+    const game = new Game(4, applyMeta({}, 0), 0);
+    const first = JSON.stringify(game.contraptions);
+    expect(JSON.stringify(new Game(4, applyMeta({}, 0), 0).contraptions)).toBe(first);
+    game.endSetup();
+    game.skipPreview();
+    expect(game.phase).toBe('battle');
+    game.events = [];
+    for (let i = 0; i < 60 * 240 && game.phase === 'battle'; i++) {
+      for (const e of game.enemies) e.hp = 0;
+      game.step();
+      if (game.phase === 'battle') expect(JSON.stringify(game.contraptions)).toBe(first);
+    }
+    expect(game.phase).toBe('preview');
+    expect(game.events.some((e) => e.type === 'contraptionsSwapped')).toBe(true);
+    expect(JSON.stringify(game.contraptions)).not.toBe(first);
+    expect(game.bellRung.every((t) => t < 0)).toBe(true);
+    checkLayout(game);
   });
 
   it('every level has two or three kinds of contraption', () => {

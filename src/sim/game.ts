@@ -3,7 +3,7 @@ import {
   type Defender, type DefenderKind, type Levels, type PlacedKind, type Track,
   type Stack, emptyLevels, groundAt, onWall, stackAt, trackMult, upgradeCost,
 } from './defenders';
-import { type Contraption, footprint } from './contraptions';
+import { type Contraption, footprint, generateLayout, layoutRng } from './contraptions';
 import { type Obstacle, contact, needsHeave, nearestOn, plantTrees } from './obstacles';
 import { Rng } from './rng';
 import { type Choices, applyChoices } from './town';
@@ -319,6 +319,8 @@ export type GameEvent =
   | { type: 'terrainPlaced'; kind: TerrainKind; x: number; y: number; index: number }
   | { type: 'terrainRemoved'; index: number }
   | { type: 'contraptionMoved'; index: number; x: number; y: number }
+  /** In the wave break the contraptions were laid out afresh for the coming wave. */
+  | { type: 'contraptionsSwapped'; wave: number }
   /** Placed terrain that fell in the wave stands again. */
   | { type: 'terrainRebuilt' }
   /** The setup is over and the first wave's preview begins. */
@@ -429,17 +431,17 @@ export class Game {
   private earlyBonus = new Map<number, number>();
   /** The structures standing on this level's field. */
   readonly obstacles: Obstacle[];
-  /** The pinball fixtures on this level's field, and each one's outline (same index). */
-  readonly contraptions: Contraption[];
-  private readonly shapes: Obstacle[];
+  /** The pinball fixtures on the field for this wave, and each one's outline (same index). Replaced in place each wave break. */
+  readonly contraptions: Contraption[] = [];
+  private readonly shapes: Obstacle[] = [];
   /** Bumped on any terrain or contraption change (or rebuild) so the render can redraw. */
   shapeVersion = 0;
   private routeCache: { key: string; routes: RoutePreview[] } | null = null;
   /** When each bell was rung (-1: not ringing), by contraption index, and when each ringing set resets (by group). */
-  readonly bellRung: number[];
+  readonly bellRung: number[] = [];
   private bellReset = new Map<number, number>();
   /** When each bumper was last hit, by contraption index, so the render can squash it. */
-  readonly bumperHit: number[];
+  readonly bumperHit: number[] = [];
   private rng: Rng;
   private grid = new Map<number, Enemy[]>();
 
@@ -456,14 +458,56 @@ export class Game {
     this.shieldLevels = { ...cfg.bonuses.shield };
     // Copies: trees come down during the level, and the next level starts with its own.
     const fixed = (cfg.obstacles.levels[Math.min(level, cfg.obstacles.levels.length - 1)] ?? []).map((o) => ({ ...o }));
-    const k = cfg.contraptions;
-    this.contraptions = k.enabled ? (k.levels[Math.min(level, k.levels.length - 1)] ?? []).map((c) => ({ ...c })) : [];
-    this.shapes = this.contraptions.map((c) => footprint(c, k));
-    this.bellRung = this.contraptions.map(() => -1);
-    this.bumperHit = this.contraptions.map(() => -99);
-    this.obstacles = [...fixed, ...plantTrees(cfg.fieldTrees, level, cfg.field.halfWidth, seed, [...fixed, ...this.shapes])];
+    const pinned = this.fixedLayout().map((c) => footprint(c, cfg.contraptions));
+    this.obstacles = [...fixed, ...plantTrees(cfg.fieldTrees, level, cfg.field.halfWidth, seed, [...fixed, ...pinned])];
     this.wave = this.cleared = this.firstWave - 1;
     this.plan = planWave(this.firstWave, seed, cfg);
+    this.relayout(false);
+  }
+
+  /** The level's fixed contraption layout when the config pins one (tests do), else none. */
+  private fixedLayout(): Contraption[] {
+    const k = this.cfg.contraptions;
+    return k.enabled && k.levels ? (k.levels[Math.min(this.level, k.levels.length - 1)] ?? []) : [];
+  }
+
+  /**
+   * Lays the contraptions out for the coming wave from its own seeded rng: mirrored about x = 0, bumpers and bells
+   * at the back of the field and off the wave's routes. announce: a swap in the wave break (the render sinks the
+   * old ones and raises the new). A pinned layout from the config is set once and stays.
+   */
+  private relayout(announce: boolean): void {
+    const k = this.cfg.contraptions;
+    let next: Contraption[];
+    if (!k.enabled) next = [];
+    else if (k.levels) {
+      if (announce) return;
+      next = this.fixedLayout().map((c) => ({ ...c }));
+    } else {
+      const L = k.layout;
+      const traps: Obstacle[] = this.defenders
+        .filter((d) => d.kind === 'spiketrap')
+        .map((d) => ({ look: 'stone', x: d.x, y: d.y, r: this.cfg.spiketrap.footprint }));
+      next = generateLayout(layoutRng(this.seed, this.plan.number), L.counts[Math.min(this.level, L.counts.length - 1)], L, {
+        halfWidth: this.cfg.field.halfWidth,
+        routes: this.plannedRoutes(),
+        solid: [...this.obstacles.filter((o) => !o.removed), ...traps],
+        radius: k,
+      });
+    }
+    this.contraptions.splice(0, this.contraptions.length, ...next);
+    this.shapes.splice(0, this.shapes.length, ...next.map((c) => footprint(c, k)));
+    this.bellRung.splice(0, this.bellRung.length, ...next.map(() => -1));
+    this.bumperHit.splice(0, this.bumperHit.length, ...next.map(() => -99));
+    this.bellReset.clear();
+    this.shapeVersion++;
+    this.routeCache = null;
+    if (announce) this.events.push({ type: 'contraptionsSwapped', wave: this.plan.number });
+  }
+
+  /** Every orc route of the coming wave, traced round the field's structures but not the contraptions. */
+  plannedRoutes(): { x: number; y: number }[][] {
+    return this.plan.groups.map((g) => this.tracePath(g.x, Math.max(...g.members.map((m) => this.cfg[m.kind].radius)), false));
   }
 
   get choices(): Choices {
@@ -869,7 +913,6 @@ export class Game {
     if (this.routeCache?.key === key) return this.routeCache.routes;
     const routes: RoutePreview[] = [];
     const seen = new Set<string>();
-    const hw = this.cfg.field.halfWidth;
     for (const g of this.plan.groups) {
       const ks = g.members.map((m) => m.kind);
       const kind = ks.includes('ogre') || ks.includes('warlord') ? 'heavy' : ks.includes('rider') ? 'rider' : ks.includes('runner') ? 'runner' : 'foot';
@@ -877,20 +920,30 @@ export class Game {
       if (seen.has(id)) continue;
       seen.add(id);
       const radius = Math.max(...ks.map((k) => this.cfg[k].radius));
-      const pts: RoutePreview['pts'] = [];
-      let x = g.x;
-      let y = this.cfg.field.spawnY;
-      // Fine steps (a barricade is thinner than a coarse one), a point every 1.5 units.
-      for (let n = 0; n < 2000; n++, y -= 0.3) {
-        for (const o of this.obstacles) {
-          if (o.down) continue;
-          const hit = contact(o, x, y, radius);
-          if (!hit) continue;
-          x += hit.nx * hit.depth;
-          y += hit.ny * hit.depth;
-          // Pinned against a broad face: slide round it.
-          if (hit.ny > 0.5) x += (x >= o.x ? 1 : -1) * 0.16;
-        }
+      const pts = this.tracePath(g.x, radius, true).map((p) => ({ ...p, cover: this.defenders.filter((d) => this.covers(d, p.x, p.y)).map((d) => d.id) }));
+      routes.push({ kind, lane: g.lane, pts });
+    }
+    this.routeCache = { key, routes };
+    return routes;
+  }
+
+  /** A march down the field from x with the orcs' push-out, a point every 1.5 units (withShapes: round the contraptions too). */
+  private tracePath(x: number, radius: number, withShapes: boolean): { x: number; y: number }[] {
+    const hw = this.cfg.field.halfWidth;
+    const pts: { x: number; y: number }[] = [];
+    let y = this.cfg.field.spawnY;
+    // Fine steps (a barricade is thinner than a coarse one).
+    for (let n = 0; n < 2000; n++, y -= 0.3) {
+      for (const o of this.obstacles) {
+        if (o.down) continue;
+        const hit = contact(o, x, y, radius);
+        if (!hit) continue;
+        x += hit.nx * hit.depth;
+        y += hit.ny * hit.depth;
+        // Pinned against a broad face: slide round it.
+        if (hit.ny > 0.5) x += (x >= o.x ? 1 : -1) * 0.16;
+      }
+      if (withShapes) {
         this.shapes.forEach((o, i) => {
           if (this.contraptions[i].kind === 'ramp') return;
           const hit = contact(o, x, y, radius);
@@ -898,15 +951,13 @@ export class Game {
           x += hit.nx * hit.depth;
           y += hit.ny * hit.depth;
         });
-        x = Math.max(-hw + 0.3, Math.min(hw - 0.3, x));
-        const py = Math.max(0, y);
-        if (n % 5 === 0 || py <= 0) pts.push({ x, y: py, cover: this.defenders.filter((d) => this.covers(d, x, py)).map((d) => d.id) });
-        if (y <= 0) break;
       }
-      routes.push({ kind, lane: g.lane, pts });
+      x = Math.max(-hw + 0.3, Math.min(hw - 0.3, x));
+      const py = Math.max(0, y);
+      if (n % 5 === 0 || py <= 0) pts.push({ x, y: py });
+      if (y <= 0) break;
     }
-    this.routeCache = { key, routes };
-    return routes;
+    return pts;
   }
 
   /** Gold back for selling a defender: all of it in the setup, half once the level is under way. */
@@ -1358,6 +1409,8 @@ export class Game {
       }
       this.plan = planWave(this.wave + 1, this.seed, this.cfg);
       this.rebuildTerrain();
+      // The break: the pinball field changes for the coming wave (not on an early call, which has no break).
+      this.relayout(true);
       this.phase = 'preview';
       this.phaseTimer = this.cfg.waves.previewSeconds;
     }

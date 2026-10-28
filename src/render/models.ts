@@ -721,13 +721,23 @@ export function bumperShieldModel(r: number): Vox {
   return v;
 }
 
-/** Two wooden posts and a crossbeam (the beam at y = 10, the bell hangs from the middle). */
+/** A small wooden bell frame: two braced posts on sills, a crossbeam at y = 10 with a little roof, the bell hangs from the middle. */
 export function bellPostModel(): Vox {
   const v = new Vox();
-  v.box(-4, 0, -1, -3, 10, 0, PAL.wood);
-  v.box(3, 0, -1, 4, 10, 0, PAL.wood);
-  v.box(-4, 10, -1, 4, 11, 0, PAL.woodDark);
-  v.box(-5, 0, -2, 5, 0, 1, PAL.stoneDark);
+  // Sills along z, so the frame stands square.
+  v.box(-6, 0, -2, -4, 0, 1, PAL.woodDark);
+  v.box(4, 0, -2, 6, 0, 1, PAL.woodDark);
+  v.box(-5, 1, -1, -4, 10, 0, PAL.wood);
+  v.box(4, 1, -1, 5, 10, 0, PAL.wood);
+  // Corner braces from the posts up to the beam.
+  for (let i = 0; i < 3; i++) {
+    v.set(-3 + i, 7 + i, -1, PAL.woodDark);
+    v.set(3 - i, 7 + i, -1, PAL.woodDark);
+  }
+  v.box(-6, 10, -1, 6, 11, 0, PAL.woodDark);
+  // A peaked plank roof over the beam.
+  v.box(-7, 12, -2, 7, 12, 1, PAL.wood);
+  v.box(-5, 13, -1, 5, 13, 0, '#8a5a2e');
   return v;
 }
 

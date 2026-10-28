@@ -1181,6 +1181,9 @@ export class BattleScene {
         case 'contraptionMoved':
           this.world.moveFixture(ev.index, ev.x, ev.y);
           break;
+        case 'contraptionsSwapped':
+          this.world.swapFixtures();
+          break;
         case 'treeDown':
           this.world.fellTree(ev.index);
           this.shake = Math.max(this.shake, 0.25);

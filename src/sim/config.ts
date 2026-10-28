@@ -7,7 +7,7 @@
  * The wall's front face is at y = 0; enemies spawn near y = field.spawnY.
  * One design "tile" is about 2.2 units, so a grunt's 1 tile/s is speed 2.2.
  */
-import { type Contraption, LEVEL_CONTRAPTIONS } from './contraptions';
+import type { Contraption, LayoutRules } from './contraptions';
 import { LEVEL_OBSTACLES, type Obstacle } from './obstacles';
 
 export const defaultConfig = {
@@ -18,17 +18,28 @@ export const defaultConfig = {
   field: { halfWidth: 20, topY: 68, spawnY: 70 },
   /** Real structures on each level's field (see obstacles.ts): balls bank off them, orcs go round. */
   obstacles: { levels: LEVEL_OBSTACLES as Obstacle[][] },
-  /** Pinball fixtures on each level's field (layouts in contraptions.ts): bumpers, bell trios and ramps. */
+  /** Pinball fixtures on each level's field: bumpers, sets of four bells and ramps, laid out afresh each wave (contraptions.ts). */
   contraptions: {
     enabled: true,
-    levels: LEVEL_CONTRAPTIONS as Contraption[][],
+    /** A fixed layout per level instead of the per-wave ones (tests set it). */
+    levels: undefined as Contraption[][] | undefined,
+    /**
+     * Each wave's layout: counts per level; bumpers and bells between minY and maxY, apart from each other,
+     * routeClear beyond their radius off any orc route. Ramps go between rampMinY and rampMaxY.
+     */
+    layout: {
+      counts: [{ bumper: 2, bell: 4, ramp: 0 }, { bumper: 2, bell: 4, ramp: 1 }, { bumper: 3, bell: 4, ramp: 1 }],
+      minY: 40, maxY: 62, apart: 4, routeClear: 1.5, edge: 0.5, rampMinY: 18, rampMaxY: 28, ramp: { hw: 2.2, hh: 1.6 }, tries: 400,
+    } as LayoutRules,
+    /** The sink-and-rise when the layout changes in the wave break (seconds each way; visual only). */
+    swapSeconds: 0.4,
     /** A ball is reflected off the spring shield and sped up by kick (never above balls.maxSpeed). */
     bumper: { radius: 1, kick: 1.12, combo: 3, squashSeconds: 0.35 },
     /**
      * Ring count bells of a group and the castle looses a free volley of arrows at the thickest
      * crowd, from the wall below the group; the bells reset after resetSeconds.
      */
-    bell: { radius: 0.55, count: 3, resetSeconds: 6, combo: 1, arrows: 30, damage: 10, spread: 2.6, flightTime: 1.7 },
+    bell: { radius: 1.1, count: 4, resetSeconds: 6, combo: 1, arrows: 30, damage: 10, spread: 2.6, flightTime: 1.7 },
     /** A ball entering a ramp flies distance up the field, then drops, hurting orcs within splashRadius. */
     ramp: { distance: 14, splashRadius: 3.5, damage: 30, knockback: 12, combo: 1 },
   },

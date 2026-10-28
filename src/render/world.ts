@@ -137,7 +137,11 @@ export class World {
   private drag: { index: number; ok: boolean } | null = null;
   /** Placed pieces a ball just hit: seconds of shake left, by obstacle index. */
   private shaking = new Map<number, number>();
-  private fixtureParts: { kind: 'bumper' | 'bell' | 'ramp'; spring?: THREE.Object3D; pivot?: THREE.Object3D; phase: number }[] = [];
+  private fixtureParts: { kind: 'bumper' | 'bell' | 'ramp'; spring?: THREE.Object3D; pivot?: THREE.Object3D; counter?: THREE.Sprite; shown?: number; phase: number }[] = [];
+  /** The sink-and-rise when the layout changes in a wave break: seconds since it began, and whether the new set is up. */
+  private swap: { t: number; rebuilt: boolean } | null = null;
+  /** The bell counters' textures, by "rung/total". */
+  private counterTex = new Map<string, THREE.CanvasTexture>();
   private treeMesh!: THREE.InstancedMesh;
   private treeVoxels: LeafVoxel[] = [];
   /** Leaf voxel ids by side and 2-unit slice of z, for finding the ones a ball hits. */
@@ -175,6 +179,8 @@ export class World {
   /** A new level: the town shows what has been built, the field gets its structures, the trees grow back. */
   setGame(game: Game): void {
     this.game = game;
+    this.swap = null;
+    this.fixtures.position.y = 0;
     this.buildTown();
     this.buildProps();
     if (game.cfg.field.halfWidth !== this.hw) {
@@ -602,12 +608,94 @@ export class World {
     });
   }
 
-  /** The bumpers, bells and ramps of this level (rebuilt with the props). */
+  /** The layout changed in the wave break: the old pieces sink into the ground and the new ones rise. */
+  swapFixtures(): void {
+    this.swap = { t: 0, rebuilt: false };
+    this.dragFixture(null);
+    for (const g of this.fixtureGroups) if (g) this.fx.puff(g.position.x, 0.4, g.position.z, 2.4, '#c8b898', 0.9);
+  }
+
+  private animateSwap(dt: number): void {
+    if (!this.swap) return;
+    const d = this.game.cfg.contraptions.swapSeconds;
+    const s = this.swap;
+    s.t += dt;
+    if (s.t >= d && !s.rebuilt) {
+      s.rebuilt = true;
+      this.buildFixtures();
+      for (const g of this.fixtureGroups) if (g) this.fx.puff(g.position.x, 0.4, g.position.z, 2.4, '#c8b898', 0.9);
+    }
+    // Down with a quick ease-in, up with an ease-out and a little overshoot.
+    const depth = 5;
+    if (s.t < d) this.fixtures.position.y = -depth * (s.t / d) ** 2;
+    else if (s.t < 2 * d) {
+      const u = (s.t - d) / d;
+      this.fixtures.position.y = -depth * (1 - u) ** 2 + Math.sin(u * Math.PI) * 0.25;
+    } else {
+      this.fixtures.position.y = 0;
+      this.swap = null;
+    }
+  }
+
+  /** A glowing "rung/total" with a little volley of arrows above it, drawn once per count. */
+  private counterTexture(rung: number, total: number): THREE.CanvasTexture {
+    const key = `${rung}/${total}`;
+    let tex = this.counterTex.get(key);
+    if (tex) return tex;
+    const c = document.createElement('canvas');
+    c.width = 256;
+    c.height = 256;
+    const x = c.getContext('2d')!;
+    const full = rung >= total;
+    const glow = full ? '#ffe680' : '#ffcf4a';
+    x.shadowColor = glow;
+    x.shadowBlur = 24;
+    // The volley: three arrows arcing down to the right.
+    x.strokeStyle = glow;
+    x.fillStyle = glow;
+    x.lineWidth = 7;
+    x.lineCap = 'round';
+    for (let i = 0; i < 3; i++) {
+      const ox = 70 + i * 34;
+      const oy = 30 + i * 10;
+      x.beginPath();
+      x.moveTo(ox, oy + 70);
+      x.lineTo(ox + 40, oy);
+      x.stroke();
+      x.beginPath();
+      x.moveTo(ox + 48, oy - 12);
+      x.lineTo(ox + 26, oy + 2);
+      x.lineTo(ox + 44, oy + 14);
+      x.closePath();
+      x.fill();
+      x.beginPath();
+      x.moveTo(ox - 2, oy + 74);
+      x.lineTo(ox - 12, oy + 70);
+      x.moveTo(ox - 2, oy + 74);
+      x.lineTo(ox + 2, oy + 84);
+      x.stroke();
+    }
+    x.font = 'bold 84px sans-serif';
+    x.textAlign = 'center';
+    x.textBaseline = 'middle';
+    x.lineWidth = 10;
+    x.strokeStyle = '#3a2408';
+    x.strokeText(key, 128, 190);
+    x.fillStyle = full ? '#fff6c8' : '#ffd860';
+    x.fillText(key, 128, 190);
+    tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    this.counterTex.set(key, tex);
+    return tex;
+  }
+
+  /** The bumpers, bells and ramps of this level (rebuilt with the props and on each layout swap). */
   private buildFixtures(): void {
     for (const c of [...this.fixtures.children]) {
       this.fixtures.remove(c);
       c.traverse((o) => {
-        if (o instanceof THREE.Mesh) {
+        if (o instanceof THREE.Sprite) o.material.dispose();
+        else if (o instanceof THREE.Mesh) {
           o.geometry.dispose();
           (o.material as THREE.Material).dispose();
         }
@@ -618,7 +706,6 @@ export class World {
     this.drag = null;
     const k = this.game.cfg.contraptions;
     const one = (v: Vox, size: number) => new VoxBatch().add(v, size, new THREE.Vector3()).build();
-    const bells = this.game.contraptions.flatMap((c, i) => (c.kind === 'bell' ? [i] : []));
     this.game.contraptions.forEach((c, i) => {
       const g = new THREE.Group();
       g.position.set(c.x, 0, -c.y);
@@ -635,33 +722,41 @@ export class World {
         g.add(spring);
         this.fixtureParts[i] = { kind: 'bumper', spring, phase: 0 };
       } else if (c.kind === 'bell') {
-        const size = 0.2;
+        // Twice the old bell, hung in a little wooden frame; the counter floats over the frame.
+        const size = 0.4;
         g.add(one(bellPostModel(), size));
         const pivot = new THREE.Group();
         pivot.position.y = 10 * size;
         pivot.add(one(bellModel(), size));
         g.add(pivot);
-        this.fixtureParts[i] = { kind: 'bell', pivot, phase: i * 1.7 };
+        const counter = new THREE.Sprite(new THREE.SpriteMaterial({ transparent: true, depthWrite: false }));
+        counter.position.y = 14 * size + 2.6;
+        counter.scale.set(4.5, 4.5, 1);
+        counter.visible = false;
+        g.add(counter);
+        this.fixtureParts[i] = { kind: 'bell', pivot, counter, shown: -1, phase: i * 1.7 };
       } else {
         const size = 0.3;
         g.add(new VoxBatch().add(rampModel(size, c.hw ?? 2, c.hh ?? 1.5, 90 + i), size, new THREE.Vector3(), c.angle ?? 0).build());
         this.fixtureParts[i] = { kind: 'ramp', phase: 0 };
       }
     });
-    // The trio is strung together with a rope along the crossbeams.
-    for (let j = 1; j < bells.length; j++) {
-      const a = this.game.contraptions[bells[j - 1]];
-      const b = this.game.contraptions[bells[j]];
-      const rope = new THREE.Mesh(new THREE.BoxGeometry(Math.hypot(b.x - a.x, b.y - a.y), 0.08, 0.08), new THREE.MeshLambertMaterial({ color: '#c8a868' }));
-      rope.position.set((a.x + b.x) / 2, 10 * 0.2 + 0.1, -(a.y + b.y) / 2);
-      rope.rotation.y = Math.atan2(b.y - a.y, b.x - a.x);
-      this.fixtures.add(rope);
-    }
   }
 
   /** Squashes struck bumpers (from the sim's hit time) and swings rung bells until their set resets. */
   private animateFixtures(): void {
     const g = this.game;
+    // Mid-swap the sim already holds the new layout while the old models are still sinking.
+    if (this.swap && !this.swap.rebuilt) return;
+    const bk = g.cfg.contraptions.bell;
+    const sets = new Map<number, { rung: number; total: number }>();
+    g.contraptions.forEach((c, i) => {
+      if (c.kind !== 'bell') return;
+      const s = sets.get(c.group ?? 0) ?? { rung: 0, total: 0 };
+      s.total++;
+      if (g.bellRung[i] >= 0) s.rung++;
+      sets.set(c.group ?? 0, s);
+    });
     const sq = g.cfg.contraptions.bumper.squashSeconds;
     this.fixtureParts.forEach((p, i) => {
       if (p.kind === 'bumper' && p.spring) {
@@ -675,6 +770,23 @@ export class World {
         const at = g.bellRung[i];
         const amp = at < 0 ? 0 : 0.25 + 0.5 * Math.exp(-(g.time - at) * 1.2);
         p.pivot.rotation.z = amp * Math.sin(g.time * 9 + p.phase);
+        // A rung bell glows gold until its set resets.
+        const lit = at < 0 ? 0 : 0.45 + 0.15 * Math.sin(g.time * 6 + p.phase);
+        p.pivot.traverse((o) => {
+          if (o instanceof THREE.Mesh && o.material instanceof THREE.MeshLambertMaterial) o.material.emissive.setRGB(lit, lit * 0.75, lit * 0.2);
+        });
+        const set = sets.get(g.contraptions[i]?.group ?? 0);
+        if (p.counter && set) {
+          const total = Math.min(bk.count, set.total);
+          const rung = Math.min(set.rung, total);
+          p.counter.visible = rung > 0;
+          if (rung > 0 && p.shown !== rung) {
+            p.counter.material.map = this.counterTexture(rung, total);
+            p.counter.material.needsUpdate = true;
+            p.shown = rung;
+          }
+          if (rung > 0) p.counter.position.y = 14 * 0.4 + 2.6 + 0.15 * Math.sin(g.time * 3 + p.phase);
+        }
       }
     });
     if (this.drag) {
@@ -761,6 +873,7 @@ export class World {
   }
 
   update(dt: number, time: number): void {
+    this.animateSwap(dt);
     this.animateFixtures();
     this.animateShakes(dt);
     // Smoke from the chimneys and campfires.
