@@ -430,7 +430,8 @@ window.addEventListener('keydown', (e) => {
   if (e.code === 'KeyR' && shaping === 'barricade' && !e.repeat) rotateShape(e.shiftKey ? -1 : 1);
   if (e.code === 'Enter' && running) {
     e.preventDefault();
-    if (game.phase === 'setup') startBattle();
+    if (intro) endIntro();
+    else if (game.phase === 'setup') startBattle();
     else game.callEarly();
   }
 });
@@ -445,23 +446,39 @@ $('play').addEventListener('click', () => {
     startTour();
   } else showTown();
 });
-$('startNow').addEventListener('click', () => (game.phase === 'setup' ? startBattle() : game.callEarly()));
+$('startNow').addEventListener('click', () => {
+  if (intro) endIntro();
+  else if (game.phase === 'setup') startBattle();
+  else game.callEarly();
+});
 $('callEarly').addEventListener('click', () => game.callEarly());
 $('again').addEventListener('click', () => showTown());
 
 // ---- looking up the field at the coming horde -------------------------------
 
 /**
- * At the start of a level the camera glides up the field to the waiting horde, holds,
- * and comes back. Any click or key cuts it short. In the setup and between waves the
- * mouse wheel looks up the field and back.
+ * A level opens on the waiting horde; the first Enter (or click) pans the camera down
+ * to the play view. In the setup and between waves the mouse wheel looks up the field and back.
  */
 let tour = -1;
 const TOUR = { up: 0.4, back: 3.4 };
+/** Seconds the opening pan from the enemy view down to the play view takes. */
+const INTRO_PAN = 1.2;
+let intro = false;
+let panLeft = 0;
 function startTour() {
-  tour = calm ? -1 : 0;
+  tour = -1;
+  panLeft = 0;
+  intro = !calm;
+  if (intro) view.snapLook(1);
+}
+function endIntro() {
+  intro = false;
+  panLeft = INTRO_PAN;
 }
 function updateLook(dt: number) {
+  if (!running) intro = false;
+  if (panLeft > 0) panLeft -= dt;
   if (!running || !game.shopOpen) {
     tour = -1;
     peek = false;
@@ -473,8 +490,9 @@ function updateLook(dt: number) {
     if (tour > TOUR.back + 1.5) tour = -1;
   }
   const touring = tour >= TOUR.up && tour < TOUR.back;
-  view.lookAhead = touring || peek || ready ? 1 : 0;
+  view.lookAhead = intro || touring || peek || ready ? 1 : 0;
   view.lookRate = ready ? game.cfg.setupFx.sweepRate : 2.2;
+  view.lookSeconds = panLeft > 0 ? INTRO_PAN : 0;
 }
 let peek = false;
 window.addEventListener('wheel', (e) => {
@@ -489,6 +507,7 @@ window.addEventListener('wheel', (e) => {
   if (!peek) ready = false;
 }, { passive: true });
 window.addEventListener('pointerdown', () => {
+  if (intro) endIntro();
   if (tour >= 0) tour = -1;
   ready = false;
 }, { capture: true });

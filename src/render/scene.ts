@@ -145,7 +145,7 @@ const SHIELD_OVERHANG = 1.06;
 /** The camera: height, distance back, and the point on the field it looks at. */
 const CAM_Y = 64;
 const CAM_Z = 40;
-const CAM_LOOK = -18;
+const CAM_LOOK = -38;
 /** A wide lens, so the town behind the wall fits under the field. */
 const CAM_FOV = 52;
 /** How far up the field the camera glides to show the coming horde. */
@@ -312,6 +312,11 @@ export class BattleScene {
   /** Looking up the field at the horde: 0 is the battle view, 1 is the far end. lookAhead is where it is heading. */
   lookAhead = 0;
   private lookNow = 0;
+  /** Jump the camera straight to a look (0 battle view, 1 far end) with no glide. */
+  snapLook(v: number) {
+    this.lookAhead = v;
+    this.lookNow = v;
+  }
   private aimMesh: THREE.Mesh | null = null;
   private aimKey = '';
   private stackKey = '';
@@ -410,6 +415,8 @@ export class BattleScene {
   private terrainGhosts = new Map<TerrainKind, THREE.Group>();
   /** How fast the camera glides up the field and back (exponential rate per second). */
   lookRate = 2.2;
+  /** When above 0 the look glides over exactly this many seconds (eased) instead of at lookRate. */
+  lookSeconds = 0;
   private planning = { show: false, preview: null as PlanPreview | null, lanes: false };
   readonly fireworks = new Fireworks(9000);
   private rockets: Rocket[] = [];
@@ -1437,7 +1444,10 @@ export class BattleScene {
     this.shake = Math.max(0, this.shake - dt * 2.5);
     const k = this.shake * this.shake * this.shakeScale;
     // Looking ahead glides the camera up the field and down closer to the horde (eased), and back.
-    this.lookNow += (this.lookAhead - this.lookNow) * Math.min(1, dt * this.lookRate);
+    if (this.lookSeconds > 0) {
+      const step = dt / this.lookSeconds;
+      this.lookNow += Math.max(-step, Math.min(step, this.lookAhead - this.lookNow));
+    } else this.lookNow += (this.lookAhead - this.lookNow) * Math.min(1, dt * this.lookRate);
     const ahead = this.lookNow * this.lookNow * (3 - 2 * this.lookNow) * LOOK_AHEAD;
     this.camera.position.set(
       this.camBase.x + (Math.random() - 0.5) * k * 1.2,

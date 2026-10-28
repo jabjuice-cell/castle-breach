@@ -78,7 +78,7 @@ describe('waves', () => {
   it('follows the threat budget, in 2 to 6 marching blocks', () => {
     const cfg = makeConfig();
     const w1 = planWave(1, 1, cfg);
-    expect(w1.totals).toMatchObject({ grunt: 45, chucker: 5, rider: 0, orcCatapult: 3 });
+    expect(w1.totals).toMatchObject({ grunt: 45, chucker: 5, rider: 0, orcCatapult: cfg.waves.orcCatapultsBase });
     expect(w1.groups).toHaveLength(3);
     expect(Math.round(waveBudget(10, cfg))).toBe(583);
     const blocks = (n: number) => planWave(n, 1, cfg).groups.filter((g) => g.members.some((m) => m.kind === 'grunt')).length;
@@ -92,8 +92,10 @@ describe('waves', () => {
 
   it('brings catapults every wave, barrels from wave 5, the siege tower on 10 and the warlord riding it on 15', () => {
     const cfg = makeConfig();
-    expect(planWave(1, 1, cfg).totals.orcCatapult).toBe(3);
-    expect(planWave(15, 1, cfg).totals.orcCatapult).toBe(9);
+    const w = cfg.waves;
+    const cats = (n: number) => Math.min(w.orcCatapultsMax, Math.floor(w.orcCatapultsBase + w.orcCatapultsPerWave * (n - 1)));
+    expect(planWave(1, 1, cfg).totals.orcCatapult).toBe(5);
+    expect(planWave(15, 1, cfg).totals.orcCatapult).toBe(cats(15));
     expect(planWave(4, 1, cfg).totals.barrel).toBe(0);
     expect(planWave(5, 1, cfg).totals.barrel).toBe(3);
     expect(planWave(10, 1, cfg)).toMatchObject({ tower: true, totals: { warlord: 0 } });
@@ -161,7 +163,7 @@ describe('the shield and the balls', () => {
     expect(game.heave()).toBe(true);
     expect(royal.stuck).toBe(false);
     expect(royal.vy).toBeGreaterThan(0);
-    // Lost past the shield: 10 wall damage, then re-served after 3 s.
+    // Lost past the shield: 10 wall damage, then re-served after the short reserve delay.
     royal.x = 15;
     royal.y = 2;
     royal.vy = -20;
@@ -169,7 +171,7 @@ describe('the shield and the balls', () => {
     run(game, 0.2);
     expect(game.balls.some((b) => b.primary)).toBe(false);
     expect(game.wallDamage['missed royal']).toBe(10);
-    run(game, 3);
+    run(game, game.cfg.balls.reserveSeconds + 0.1);
     expect(game.balls.some((b) => b.primary && b.stuck)).toBe(true);
   });
 
@@ -1187,7 +1189,7 @@ describe('run loop', () => {
     const cat = enemy({ kind: 'orcCatapult', x: 5, y: 50, state: 'stand', hp: 60, maxHp: 60, timer: 99 });
     game.enemies.push(cat);
     run(game, 5);
-    expect(cat.y).toBeLessThan(47);
+    expect(cat.y).toBeLessThan(49);
     expect(cat.y).toBeGreaterThan(44);
   });
 

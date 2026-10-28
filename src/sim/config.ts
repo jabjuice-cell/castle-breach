@@ -209,9 +209,9 @@ export const defaultConfig = {
     missDamage: 10,
     /** A claimed pebble is a half-strength ball. */
     pebbleShare: 0.5,
-    reserveSeconds: 3,
+    reserveSeconds: 0.4,
     /** The served Royal Ball launches by itself after this long, so nobody gets stuck. */
-    autoServeSeconds: 3,
+    autoServeSeconds: 0.5,
     /** Balls never travel flatter than 75 degrees: this share of their speed up or down the field. */
     minVertical: 0.259,
     /** Combo milestones: a bell, "Glorious!", and the ball turns gold. */
@@ -429,9 +429,9 @@ export const defaultConfig = {
     ridersFromWave: 6,
     riderShare: 0.15,
     /** Orc catapults come every wave on top of the budget: base + perWave * (n - 1). */
-    orcCatapultsBase: 3,
-    orcCatapultsPerWave: 0.45,
-    orcCatapultsMax: 14,
+    orcCatapultsBase: 5,
+    orcCatapultsPerWave: 0.7,
+    orcCatapultsMax: 20,
     ogresFromWave: 8,
     ogreShare: 0.12,
     /** Bosses: the siege tower ends level 2, and the warlord rides it at the end of level 3. */
