@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { type Defender, type PlacedKind, groundAt } from '../sim/defenders';
-import { type Ball, type Capsule, type CapsuleKind, type Enemy, type Game, type GameEvent, type RoutePreview, type TerrainKind } from '../sim/game';
+import { type Ball, type Capsule, type CapsuleKind, type Enemy, type Game, type GameEvent, type TerrainKind } from '../sim/game';
 import { ENEMY_KINDS, type EnemyKind, formation } from '../sim/waves';
 import aspects from '../assets/aspects.json';
 import arrowUrl from '../assets/fx/arrow.webp';
@@ -119,14 +119,7 @@ const TOWER_PLANK_Y = 6.8;
 /** The planning overlay: one cell per half unit over the field in front of the wall. */
 const OVERLAY_CELL = 0.5;
 const OVERLAY_MIN_Y = -2;
-/**
- * The marching-route preview: a texture over the field, ROUTE_PPU pixels per unit. Chevron spacing is in
- * route points (1.5 units apart) by detail level, dust puffs per drop likewise (cheaper on Low).
- */
-const ROUTE_PPU = 16;
-const ROUTE_COLORS: Record<RoutePreview['kind'], string> = { foot: '255,96,80', rider: '255,120,200', runner: '90,210,255', heavy: '190,130,255' };
-const ROUTE_GOLD = '255,205,70';
-const ROUTE_STEP: Record<Quality, number> = { low: 3, medium: 2, high: 1 };
+/** Dust puffs per drop by detail level (cheaper on Low). */
 const DUST: Record<Quality, number> = { low: 2, medium: 4, high: 6 };
 const COVER_COLORS: Record<PlacedKind, [number, number, number]> = {
   crossbow: [255, 120, 60], archers: [110, 255, 90], catapult: [190, 130, 255], soldiers: [80, 170, 255],
@@ -408,13 +401,6 @@ export class BattleScene {
   private overlayCtx!: CanvasRenderingContext2D;
   private overlayTex!: THREE.CanvasTexture;
   private overlayKey = '';
-  /** The marching routes, drawn as chevrons on a ground texture; a defender in focus lights only its own overlap. */
-  private routeMesh!: THREE.Mesh;
-  private routeCtx!: CanvasRenderingContext2D;
-  private routeTex!: THREE.CanvasTexture;
-  private routeDrawn: { routes: RoutePreview[] | null; focus: number | null; quality: Quality | '' } = { routes: null, focus: null, quality: '' };
-  private routeFocus: number | null = null;
-  private routeFade = 0;
   /** The coverage shape's pulse: where, and seconds since (a big number is finished). */
   private pulseAt = { x: 0, y: 0, t: 99 };
   /** When each defender was set down (scene seconds), for the drop-in bounce; and dust waiting for the landing. */
@@ -685,7 +671,7 @@ export class BattleScene {
 
   }
 
-  /** The planning overlay: who covers which bit of the field, blind spots in red, the coming lanes. */
+  /** The planning overlay: who covers which bit of the field, the coming lanes. */
   private buildOverlay() {
     const g = this.game;
     const hw = g.cfg.field.halfWidth;
@@ -704,23 +690,6 @@ export class BattleScene {
     this.overlay.position.set(0, 0.12, -(OVERLAY_MIN_Y + (rows * OVERLAY_CELL) / 2));
     this.overlay.renderOrder = 2;
     this.scene.add(this.overlay);
-    // The route preview: the whole field from the wall to the spawn line.
-    const top = g.cfg.field.spawnY + 2;
-    const rc = document.createElement('canvas');
-    rc.width = Math.round(hw * 2 * ROUTE_PPU);
-    rc.height = Math.round(top * ROUTE_PPU);
-    this.routeCtx = rc.getContext('2d')!;
-    this.routeTex = new THREE.CanvasTexture(rc);
-    this.routeTex.colorSpace = THREE.SRGBColorSpace;
-    this.routeMesh = new THREE.Mesh(
-      new THREE.PlaneGeometry(hw * 2, top).rotateX(-Math.PI / 2),
-      new THREE.MeshBasicMaterial({ map: this.routeTex, transparent: true, depthWrite: false, opacity: 0 }),
-    );
-    this.routeMesh.position.set(0, 0.14, -top / 2);
-    this.routeMesh.renderOrder = 2;
-    this.routeMesh.visible = false;
-    this.scene.add(this.routeMesh);
-    this.routeDrawn.routes = null;
   }
 
   /** The town plot to draw (from the meta progress). */
@@ -745,10 +714,6 @@ export class BattleScene {
       this.overlay.geometry.dispose();
       (this.overlay.material as THREE.Material).dispose();
       this.overlayTex.dispose();
-      this.scene.remove(this.routeMesh);
-      this.routeMesh.geometry.dispose();
-      (this.routeMesh.material as THREE.Material).dispose();
-      this.routeTex.dispose();
       this.buildOverlay();
     } else {
       this.ground.reset();
@@ -757,7 +722,6 @@ export class BattleScene {
     this.lastWave = -1;
     this.drops.clear();
     this.landings = [];
-    this.routeDrawn.routes = null;
     for (const gh of this.terrainGhosts.values()) {
       this.scene.remove(gh);
       gh.traverse((o) => {
@@ -829,7 +793,7 @@ export class BattleScene {
   }
 
   /**
-   * Planning view: spot rings, everyone's coverage on the ground with blind spots in red,
+   * Planning view: spot rings, everyone's coverage on the ground,
    * and (lanes) the lanes the next wave will march down. preview: a defender about to be placed.
    */
   setPlanning(show: boolean, preview: PlanPreview | null = null, lanes = false) {
@@ -881,11 +845,6 @@ export class BattleScene {
   hideGhost() {
     for (const gh of this.ghosts.values()) gh.visible = false;
     this.ghostShown = null;
-  }
-
-  /** The defender whose overlap with the marching routes glows extra bright (null: every covered point glows alike). */
-  setRouteFocus(id: number | null) {
-    this.routeFocus = id;
   }
 
   /** The coverage shapes pulse (a unit was placed, moved or aimed at x, y). */
@@ -1166,16 +1125,6 @@ export class BattleScene {
           fw.burst(ev.x, 1.4, -ev.y, { count: 10, colors: ['#fff6c8', '#ffd34a', '#ffffff'], speed: 6, life: 0.35, size: 0.35, up: 0.6, gravity: 6 });
           if (!ev.armoured) fw.burst(ev.x, 1.8, -ev.y, { count: 3, colors: ['#8a8f99', '#5a5f6a', '#b0b5bd'], speed: 7, life: 0.8, size: 0.5, up: 1.4, gravity: 16 });
           break;
-        case 'power': {
-          this.world.glow(ev.kind, 1);
-          this.world.cheer();
-          // Gold and blue bursts off every tower top, and a warm flash.
-          this.flash(0.25, '#ffe9a0');
-          for (const st of this.game.stacks) {
-            fw.burst(st.x, this.standHeight(st.x, TOWER_Z) + 0.5, -TOWER_Z, { count: 30, colors: ['#ffd34a', '#2a4fb0', '#ffffff'], speed: 7, life: 0.9, size: 0.45, up: 1, gravity: 8 });
-          }
-          break;
-        }
         case 'edge':
           this.world.chipTree(ev.side, -ev.y);
           break;
@@ -1477,7 +1426,6 @@ export class BattleScene {
     this.updateCapsules(time);
     this.updateTower(dt);
     this.updatePlanning();
-    this.updateRoutes(time);
     this.updateSetupFx(dt);
     this.updateRockets(dt);
     this.world.update(dt, time);
@@ -1820,91 +1768,6 @@ export class BattleScene {
     }
   }
 
-  /** The horde's marching routes as chevrons on the ground, redrawn only when the routes, the focus or the detail change. */
-  private updateRoutes(time: number) {
-    const g = this.game;
-    const mat = this.routeMesh.material as THREE.MeshBasicMaterial;
-    const show = this.planning.show && (g.phase === 'setup' || g.phase === 'preview');
-    this.routeFade = Math.max(0, Math.min(1, this.routeFade + (show ? 0.08 : -0.08)));
-    this.routeMesh.visible = this.routeFade > 0;
-    // On Low the arrows hold still; otherwise they breathe a little.
-    mat.opacity = this.routeFade * (this.quality === 'low' ? 1 : 0.9 + 0.1 * Math.sin(time * 2.5));
-    if (!show) return;
-    const routes = g.routePreview();
-    const d = this.routeDrawn;
-    if (d.routes === routes && d.focus === this.routeFocus && d.quality === this.quality) return;
-    this.routeDrawn = { routes, focus: this.routeFocus, quality: this.quality };
-    this.drawRoutes(routes);
-  }
-
-  private drawRoutes(routes: RoutePreview[]) {
-    const g = this.game;
-    const ctx = this.routeCtx;
-    const { width, height } = ctx.canvas;
-    const hw = g.cfg.field.halfWidth;
-    const top = g.cfg.field.spawnY + 2;
-    const focus = this.routeFocus;
-    const step = ROUTE_STEP[this.quality];
-    const px = (x: number) => (x + hw) * ROUTE_PPU;
-    const py = (y: number) => (top - y) * ROUTE_PPU;
-    ctx.clearRect(0, 0, width, height);
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-    // How lit a stretch is: 0 plain, otherwise the gold's strength (more defenders, stronger; over 1 is the focused defender's own).
-    const lit = (cover: number[]) => {
-      if (!cover.length) return 0;
-      if (focus === null) return Math.min(0.95, 0.45 + 0.15 * cover.length);
-      return cover.includes(focus) ? 1.4 : 0.3;
-    };
-    for (const r of routes) {
-      const pts = r.pts;
-      const base = ROUTE_COLORS[r.kind];
-      if (this.quality !== 'low') {
-        for (let i = 1; i < pts.length; i++) {
-          const k = lit(pts[i].cover);
-          ctx.strokeStyle = k > 0 ? 'rgba(' + ROUTE_GOLD + ',' + Math.min(1, k * 0.6) + ')' : 'rgba(' + base + ',0.25)';
-          ctx.lineWidth = (k > 1 ? 0.35 : 0.18) * ROUTE_PPU;
-          ctx.beginPath();
-          ctx.moveTo(px(pts[i - 1].x), py(pts[i - 1].y));
-          ctx.lineTo(px(pts[i].x), py(pts[i].y));
-          ctx.stroke();
-        }
-      }
-      for (let i = 0; i + 1 < pts.length; i += step) {
-        const a = pts[i];
-        const b = pts[i + 1];
-        // The strongest cover anywhere in this chevron's stretch.
-        let k = 0;
-        for (let j = i; j < Math.min(pts.length, i + step); j++) k = Math.max(k, lit(pts[j].cover));
-        let dx = b.x - a.x;
-        let dy = -(b.y - a.y);
-        const len = Math.hypot(dx, dy) || 1;
-        dx /= len;
-        dy /= len;
-        const size = (k > 1 ? 1.5 : 1.25) * ROUTE_PPU;
-        const cx = px(a.x);
-        const cy = py(a.y);
-        const path = () => {
-          ctx.beginPath();
-          ctx.moveTo(cx - dx * size * 0.6 - dy * size, cy - dy * size * 0.6 + dx * size);
-          ctx.lineTo(cx + dx * size * 0.6, cy + dy * size * 0.6);
-          ctx.lineTo(cx - dx * size * 0.6 + dy * size, cy - dy * size * 0.6 - dx * size);
-        };
-        const w = (k > 1 ? 0.55 : k > 0 ? 0.45 : 0.36) * ROUTE_PPU;
-        // A faint dark outline so it reads on brown road and green grass alike, then the chevron.
-        ctx.strokeStyle = 'rgba(30,20,10,0.5)';
-        ctx.lineWidth = w + 0.22 * ROUTE_PPU;
-        path();
-        ctx.stroke();
-        ctx.strokeStyle = k > 1 ? 'rgba(255,225,90,1)' : k > 0 ? 'rgba(' + ROUTE_GOLD + ',' + Math.min(1, 0.7 + 0.3 * k) + ')' : 'rgba(255,248,225,0.55)';
-        ctx.lineWidth = w;
-        path();
-        ctx.stroke();
-      }
-    }
-    this.routeTex.needsUpdate = true;
-  }
-
   private updatePlanning() {
     const g = this.game;
     const { show, preview } = this.planning;
@@ -1914,13 +1777,13 @@ export class BattleScene {
     if (!show) return;
     // The preview is rounded to the overlay's cells, so moving the mouse within one doesn't repaint.
     const cell = (v: number) => Math.round(v / OVERLAY_CELL);
-    const key = `${g.defenders.map((d) => `${d.kind}${d.x},${d.y},${d.heading?.toFixed(2) ?? ''}`).join(';')}|${preview ? `${preview.kind}${cell(preview.x)},${cell(preview.y)}` : ''}|${this.planning.lanes ? g.plan.number : ''}|${g.unlocked('archers')}`;
+    const key = `${g.defenders.map((d) => `${d.kind}${d.x},${d.y},${d.heading?.toFixed(2) ?? ''}`).join(';')}|${preview ? `${preview.kind}${cell(preview.x)},${cell(preview.y)}` : ''}|${this.planning.lanes ? g.plan.number : ''}`;
     if (key === this.overlayKey) return;
     this.overlayKey = key;
     this.drawOverlay();
   }
 
-  /** Paints who covers what: a tint per defender kind, red hatching on wall sections nothing guards, the coming lanes. */
+  /** Paints who covers what: a tint per defender kind, the coming lanes. */
   private drawOverlay() {
     const g = this.game;
     const ctx = this.overlayCtx;
@@ -1934,15 +1797,6 @@ export class BattleScene {
       const { kind, x, y } = preview;
       defs.push({ id: -1, kind, ground: groundAt(g.cfg, x, y, g.stacks), x, y, paid: 0, heading: null, timer: 0, aimX: x, aimY: 30, firedAt: -99 });
     }
-    // A wall section is a blind spot if no archer cone reaches out in front of it and no crossbow lane runs up it.
-    const seg = g.segmentWidth();
-    const blind = Array.from({ length: g.cfg.wall.segments }, (_, i) => {
-      const lo = -hw + i * seg;
-      return !defs.some(
-        (d) => (d.kind === 'archers' && g.covers(d, lo + seg / 2, g.cfg.coverage.sectionCheckY))
-          || (d.kind === 'crossbow' && [0.1, 0.3, 0.5, 0.7, 0.9].some((f) => g.covers(d, lo + seg * f, 40))),
-      );
-    });
     const laneSet = new Set(lanes ? g.plan.groups.map((gr) => gr.lane) : []);
     for (let row = 0; row < rows; row++) {
       const y = g.cfg.field.topY - (row + 0.5) * OVERLAY_CELL;
@@ -1965,7 +1819,6 @@ export class BattleScene {
         const s = g.segmentAt(x);
         // The lanes the next wave marches down, fading toward the wall.
         if (lanes && laneSet.has(s) && y > 30) add([255, 70, 50], 0.5, Math.min(1, (y - 30) / 20) * 0.2);
-        if (blind[s] && y >= 0 && y <= g.cfg.coverage.sectionCheckY && (col + row) % 6 < 3) add([255, 40, 30], 3, 0.5);
         if (w <= 0) continue;
         const k = (row * cols + col) * 4;
         data[k] = r / w;

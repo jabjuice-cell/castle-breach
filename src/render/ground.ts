@@ -165,7 +165,7 @@ export function paintGround(ctx: CanvasRenderingContext2D, w: number, h: number,
     ctx.fillStyle = light ? 'rgba(160,205,90,0.6)' : 'rgba(60,105,35,0.55)';
     ctx.fillRect(x, y, 1, 2 + rnd() * 3);
   }
-  const flowers = ['#ffffff', '#ffe14a', '#ff8ab0', '#8ab4ff'];
+  const flowers = ['#ffffff', '#8ab4ff'];
   for (let i = 0; i < 2600; i++) {
     const x = rnd() * w;
     const y = rnd() * pz(baseZ);

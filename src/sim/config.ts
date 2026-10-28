@@ -285,8 +285,6 @@ export const defaultConfig = {
     /** The y of the tower tops, where a defender mans a turret. */
     start: { x: -4, y: -1 },
   },
-  /** The call to arms from the keep: defenders fire this much faster and soldiers move this much quicker, for a while. */
-  callToArms: { seconds: 6, cooldown: 45, rate: 2, run: 2.5 },
   /** Permanent boons of the town's buildings, once built (the alchemist's has no number: every ball burns). */
   buildings: {
     tavern: { dps: 1.3, run: 1.5 },
@@ -578,7 +576,6 @@ export const defaultConfig = {
       alchemistOil: { oilBurnSeconds: 2 },
       alchemistMage: { mageRadius: 1.15 },
       watchtowerArchers: { archerReach: 1.1 },
-      watchtowerWarroom: { callCooldown: 5 },
       marketTreasury: { warChest: 40 },
       marketGuild: { killGold: 1.1 },
       tavernMarket: { earlyGold: 1.25 },

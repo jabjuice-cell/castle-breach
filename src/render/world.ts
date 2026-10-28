@@ -40,7 +40,7 @@ const FIELD_TREE_VOX = 0.42;
  * buildTown moves x, z and top to wherever the building stands on the town plot.
  */
 export const BUILDINGS: Record<BuildingKind, { x: number; z: number; top: number; name: string; power: string }> = {
-  keep: { x: 0, z: 11, top: 14.5, name: 'The keep', power: 'Call to arms' },
+  keep: { x: 0, z: 11, top: 14.5, name: 'The keep', power: '' },
   tavern: { x: 0, z: 0, top: 0, name: 'The Rusty Tankard', power: 'Stand a round' },
   alchemist: { x: 0, z: 0, top: 0, name: 'The alchemist', power: 'Every ball burns' },
   blacksmith: { x: 0, z: 0, top: 0, name: 'The Blacksmith', power: 'Shield & ball' },
@@ -307,11 +307,6 @@ export class World {
     if (s) s.glow = Math.max(s.glow, amount);
   }
 
-  /** The townsfolk cheer (a little hop) when a power goes off. */
-  cheer(): void {
-    for (const w of this.walkers) w.hop = 0.6 + Math.random() * 0.4;
-  }
-
   // ---- tree lines -----------------------------------------------------------
 
   private buildField(): void {
@@ -489,7 +484,7 @@ export class World {
     const batch = new VoxBatch();
     const hw = this.hw;
     const minZ = -(this.game.cfg.field.spawnY + 50);
-    for (let i = 0; i < 1100; i++) {
+    for (let i = 0; i < 350; i++) {
       const x = (r() * 2 - 1) * (hw + 2);
       const z = minZ + r() * (-1.5 - minZ);
       const road = roadAt(z);

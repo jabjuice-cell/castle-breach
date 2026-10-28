@@ -229,7 +229,7 @@ export class Sounds {
     this.tone(f * 0.5, now, 0.7, 0.08, 'triangle');
   }
 
-  /** The call to arms: a brassy two-note horn over a drum roll. */
+  /** The battle-ready horn: a brassy two-note horn over a drum roll. */
   horn() {
     const ctx = this.ctx;
     if (!ctx || this.muted) return;

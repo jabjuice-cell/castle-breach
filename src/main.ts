@@ -19,7 +19,7 @@ import { Sounds } from './render/sound';
 import { defenderPortraits } from './render/portraits';
 import { BUILDINGS } from './render/world';
 import { DEFENDER_KINDS, type DefenderKind, type Ground, type PlacedKind, SPECIAL_NAMES, type Track, USEFUL_TRACKS, groundAt, stackAt } from './sim/defenders';
-import { BUILDING_KINDS, type BuildingKind, type PowerKind, type TerrainKind, Game, STEP } from './sim/game';
+import { BUILDING_KINDS, type BuildingKind, type TerrainKind, Game, STEP } from './sim/game';
 import {
   ARCHER_ROLE_INFO, BALL_KIT_INFO, SHIELD_KIT_INFO, SOLDIER_ROLE_INFO, TACTIC_INFO,
   type ChoiceBuilding, type Choices, type Option, hasChoiceBuilding, optionNeeds, optionOpen, sanitizeChoices,
@@ -280,25 +280,19 @@ window.addEventListener('pointermove', (e) => {
   canvas.style.cursor = hovered ? 'pointer' : '';
 });
 
-// ---- the keep: click it (or press Q) for the call to arms ----------
+// ---- the town buildings you can click -------------------------------
 
-const POWER_KEYS: Record<string, PowerKind> = { KeyQ: 'keep' };
-const POWER_KEY: Record<PowerKind, string> = { keep: 'Q' };
-/** The keep under the mouse, lit up while it's there. */
+/** The building under the mouse, lit up while it's there. */
 let hovered: BuildingKind | null = null;
 
 const CHOICE_BUILDINGS: ChoiceBuilding[] = ['warroom', 'barracks', 'blacksmith', 'watchtower'];
-/** The keep, or (outside the battle itself, so clicks there still heave) a building you make choices in. */
+/** A building you make choices in (outside the battle itself, so clicks there still heave). */
 function buildingAt(e: PointerEvent | MouseEvent): BuildingKind | null {
   const r = canvas.getBoundingClientRect();
   const b = view.pickBuilding(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
-  if (b === 'keep') return b;
   return b && (CHOICE_BUILDINGS as string[]).includes(b) && game.phase !== 'battle' ? b : null;
 }
 
-function usePower(kind: PowerKind) {
-  if (!game.usePower(kind)) toast(`${BUILDINGS[kind].name}: ${game.whyNotPower(kind)}`);
-}
 canvas.addEventListener('pointerdown', (e) => {
   pointerToSim(e);
   sounds.unlock();
@@ -367,11 +361,9 @@ canvas.addEventListener('pointerdown', (e) => {
     }
   }
   selected = null;
-  // A click on the keep sounds the call to arms instead of heaving.
   const b = buildingAt(e);
   if (b && running) {
-    if (b === 'keep') usePower(b);
-    else clickTownBuilding(b as ChoiceBuilding);
+    clickTownBuilding(b as ChoiceBuilding);
     return;
   }
   if (running) game.heave();
@@ -436,8 +428,6 @@ window.addEventListener('keydown', (e) => {
     trayKey = '';
   }
   if (e.code === 'KeyR' && shaping === 'barricade' && !e.repeat) rotateShape(e.shiftKey ? -1 : 1);
-  const power = POWER_KEYS[e.code];
-  if (power && running) usePower(power);
   if (e.code === 'Enter' && running) {
     e.preventDefault();
     if (game.phase === 'setup') startBattle();
@@ -826,8 +816,9 @@ function updateHud(dt: number) {
     const setup = game.phase === 'setup';
     const wave = `${game.plan.boss ? 'Boss wave! ' : ''}Wave ${game.levelWave}`;
     hud.previewTitle.textContent = setup ? `Level ${game.level + 1}: ${c.levels.names[game.level]}` : `${wave} marches in ${Math.ceil(game.phaseTimer)}`;
-    const tricks = trickText();
-    hud.previewText.textContent = `${setup ? `${wave} brings ` : ''}${planText()}, down ${laneText()}. ${tricks}${setup || game.levelWave === 1 ? ' Scroll up to look at them.' : ''}`;
+    // At the level's start the panel is just the title and the button.
+    hud.previewText.hidden = setup;
+    if (!setup) hud.previewText.textContent = `${planText()}, down ${laneText()}. ${trickText()}${game.levelWave === 1 ? ' Scroll up to look at them.' : ''}`;
     hud.queenText.textContent = queenAdvice(game);
     const face = queenCross(game) ? queenAngryUrl : queenUrl;
     const portrait = hud.queen.querySelector('img')!;
@@ -836,45 +827,22 @@ function updateHud(dt: number) {
     if (startHtml !== lastStartHtml) hud.startNow.innerHTML = lastStartHtml = startHtml;
   }
 
-  // Over each building: its power, its key, and a bar that refills while it rests.
+  // Over each town building: its name and perk, once built.
   BUILDING_KINDS.forEach((kind, i) => {
     const el = hud.buildTags.children[i] as HTMLElement;
     const b = BUILDINGS[kind];
     const p = view.project(b.x, -b.z, b.top);
     el.style.left = `${p.x}px`;
     el.style.top = `${p.y}px`;
-    el.hidden = !running || view.lookAhead > 0 || (kind !== 'keep' && !game.hasBuilding(kind));
+    el.hidden = !running || view.lookAhead > 0 || kind === 'keep' || !game.hasBuilding(kind);
     if (el.hidden) return;
     const built = game.hasBuilding(kind);
     const span = el.firstElementChild as HTMLElement;
     const bar = el.lastElementChild!.firstElementChild as HTMLElement;
-    if (kind !== 'keep') {
-      // Passive buildings: just the name and the perk, once built.
-      const html = built ? `<b>${b.name}</b> ${b.power}` : `${b.name}: build it in the town`;
-      if (span.innerHTML !== html) span.innerHTML = html;
-      el.className = `btag${built ? ' ready' : ' locked'}`;
-      bar.style.transform = 'scaleX(0)';
-      return;
-    }
-    const pw = game.powers[kind];
-    const t = game.powerTiming(kind);
-    const live = game.powerActive(kind);
-    const rest = Math.max(0, pw.readyAt - game.time);
-    const ready = game.canUse(kind);
-    const html = !built
-      ? `${b.name}: build it in the town`
-      : live
-        ? `<b>${b.power}!</b> ${Math.ceil(pw.until - game.time)}s`
-        : game.phase !== 'battle'
-          ? `<b>${b.power}</b> <kbd>${POWER_KEY[kind]}</kbd>`
-          : rest > 0
-            ? `${b.power}: rests ${Math.ceil(rest)}s`
-            : ready
-              ? `<b>${b.power}</b> <kbd>${POWER_KEY[kind]}</kbd>`
-              : `${b.power}: ${game.whyNotPower(kind)}`;
+    const html = built ? `<b>${b.name}</b> ${b.power}` : `${b.name}: build it in the town`;
     if (span.innerHTML !== html) span.innerHTML = html;
-    el.className = `btag${!built ? ' locked' : live ? ' live' : ready ? ' ready' : ''}${hovered === kind ? ' hover' : ''}`;
-    bar.style.transform = `scaleX(${!built ? 0 : live ? (pw.until - game.time) / t.seconds : 1 - rest / t.cooldown})`;
+    el.className = `btag${built ? ' ready' : ' locked'}`;
+    bar.style.transform = 'scaleX(0)';
   });
   if (hovered) view.hoverBuilding(hovered);
 
@@ -947,7 +915,7 @@ function trayHtml(): string {
   const gold = Math.floor(game.gold);
   const setup = game.phase === 'setup';
   const buy = DEFENDER_KINDS.map((k) => {
-    if (!game.unlocked(k)) return `<button type="button" class="locked" disabled title="${DEFENDER_INFO[k].blurb}">${portrait(k)}<b>${DEFENDER_INFO[k].name}</b><small>🔒 Unlock in the town</small></button>`;
+    if (!game.unlocked(k)) return '';
     const cost = game.defenderCost(k);
     return `<button type="button" data-action="place:${k}" class="${placing === k ? 'on' : ''}" title="${DEFENDER_INFO[k].blurb}" ${cost > gold ? 'disabled' : ''}>${portrait(k)}<b>${DEFENDER_INFO[k].name}</b><small>${cost} gold${game.count(k) ? ` · ${game.count(k)} placed` : ''}</small>${cardStats(k) ? `<small>${cardStats(k)}</small>` : ''}</button>`;
   }).join('');
@@ -975,7 +943,7 @@ function trayHtml(): string {
     <header><h3>${setup ? 'Load-out' : 'Between waves'}</h3><span class="purse">${icon('gold')}${gold} gold</span></header>
     <div class="buy">${buy}${tower}${shape}</div>${again}
     <p class="tip">${shaping ? `Click the field to place ${shaping === 'barricade' ? 'a barricade (R or the mouse wheel turns it)' : 'rubble'}. Right click or Esc to cancel.` : tip}</p>
-    <p class="tip">Faint arrows: where the horde marches; gold: covered by your defenders.${game.cfg.shaping.enabled ? ' Drag bumpers and ramps to move them. Click a placed barricade or rubble pile to take it back.' : ''}</p>${choices}
+    <p class="tip">Gold: covered by your defenders.${game.cfg.shaping.enabled ? ' Drag bumpers and ramps to move them. Click a placed barricade or rubble pile to take it back.' : ''}</p>${choices}
     ${setup ? '<button type="button" class="go" data-action="go">To battle! <kbd>Enter</kbd></button>' : ''}`;
 }
 
@@ -1197,8 +1165,7 @@ function startBattle() {
 
 hud.buildTags.addEventListener('click', (e) => {
   const tag = (e.target as HTMLElement).closest<HTMLElement>('[data-building]');
-  if (tag?.dataset.building === 'keep') usePower('keep');
-  else if (tag && (CHOICE_BUILDINGS as string[]).includes(tag.dataset.building ?? '')) clickTownBuilding(tag.dataset.building as ChoiceBuilding);
+  if (tag && (CHOICE_BUILDINGS as string[]).includes(tag.dataset.building ?? '')) clickTownBuilding(tag.dataset.building as ChoiceBuilding);
 });
 
 for (const el of [hud.tray, hud.defPop, hud.wallBars]) {
@@ -1651,9 +1618,6 @@ function updateGhost() {
   }
   view.setTerrainGhost(terrainGhost);
   view.dragFixture(fixGhost);
-  // The marching routes glow brighter only where the defender in focus (picked, aimed, dragged or hovered) reaches.
-  const over = running && game.shopOpen && !placing && !shaping && !building ? game.defenderAt(input.x, input.y) : undefined;
-  view.setRouteFocus(aiming?.id ?? dragging ?? selected ?? over?.id ?? null);
   view.setPlanning(planning, preview, game.shopOpen);
   // The gold aim shape: while aiming, and for the defender whose card is open.
   const shown = aiming?.id ?? selected;
@@ -1867,10 +1831,6 @@ function frame(now: number) {
           break;
         case 'spikeHit':
           sounds.spike();
-          break;
-        case 'power':
-          sounds.horn();
-          toast('To arms!');
           break;
         case 'calledEarly':
           toast(`Early call! +${ev.gold} gold`);

@@ -112,7 +112,6 @@ const PAIR_DEFS: PairDef[] = [
   bonus('alchemistOil', 'alchemist', 'oil', 'Boiling oil burns 2 s longer'),
   bonus('alchemistMage', 'alchemist', 'mage', 'Mage blasts 15% wider'),
   bonus('watchtowerArchers', 'watchtower', 'archers', 'Archers +10% range'),
-  bonus('watchtowerWarroom', 'watchtower', 'warroom', 'Call to arms rests 5 s less'),
   bonus('marketTreasury', 'market', 'treasury', "+40 gold in each level's war chest"),
   bonus('marketGuild', 'market', 'guild', 'Kills pay +10% gold'),
   bonus('tavernMarket', 'tavern', 'market', 'Calling a wave early pays +25% gold'),

@@ -55,7 +55,6 @@ export const META_UPGRADES: MetaUpgrade[] = [
   { id: 'market', group: 'town', name: 'Market', blurb: '+15% gold from kills, per level.', costs: [40, 90, 200] },
   { id: 'land', group: 'town', name: 'Land grant', blurb: 'The town plot grows: 9×5, then 11×5, 13×6, 15×6.', costs: [30, 80, 180] },
   // Capstones: the far ends of the tree.
-  { id: 'doctrine', group: 'defence', name: 'Volley doctrine', blurb: 'The horn lasts longer: call to arms fires 0.5 faster and rests 10 s less.', costs: [300] },
   { id: 'bastion', group: 'wall', name: 'Bastion', blurb: '+50% wall strength and climbing orcs take 3 more damage a second.', costs: [260] },
   { id: 'guild', group: 'town', name: 'Merchants\' guild', blurb: '+25% gold from kills and +100 gold in the war chest.', costs: [350] },
 ];
@@ -72,7 +71,6 @@ const PREREQS: Record<string, [id: string, level: number][]> = {
   oil: [['masonry', 1]],
   spiketrap: [['soldiers', 1]],
   drill: [['fletching', 1]],
-  doctrine: [['fletching', 3], ['drill', 2]],
   spikes: [['masonry', 1]],
   mortar: [['masonry', 1]],
   bastion: [['masonry', 3], ['spikes', 2]],
@@ -170,8 +168,6 @@ export function applyMeta(full: MetaLevels, level: number, base: Config = makeCo
   cfg.economy.repairGoldPerHp *= 1 - 0.25 * lv('mortar');
   cfg.bonuses.killGold *= (1 + 0.15 * lv('market')) * (1 + 0.25 * lv('guild'));
   cfg.economy.warChest = cfg.levels.warChest[Math.min(level, cfg.levels.warChest.length - 1)] + 60 * lv('treasury') + 100 * lv('guild');
-  cfg.callToArms.rate += 0.5 * lv('doctrine');
-  cfg.callToArms.cooldown -= 10 * lv('doctrine');
   // Each level's own field: the first is narrow, later ones wider behind a longer wall.
   const at = <T>(list: T[]) => list[Math.min(level, list.length - 1)];
   cfg.field.halfWidth = at(cfg.levels.halfWidth);
@@ -198,7 +194,6 @@ function applyPairs(cfg: Config, plot: Layout) {
   if (on.has('alchemistOil')) cfg.oil.burnSeconds += b.alchemistOil.oilBurnSeconds;
   if (on.has('alchemistMage')) { cfg.mage.radius *= b.alchemistMage.mageRadius; cfg.mage.radiusPerLevel *= b.alchemistMage.mageRadius; }
   if (on.has('watchtowerArchers')) cfg.coverage.archerReach *= b.watchtowerArchers.archerReach;
-  if (on.has('watchtowerWarroom')) cfg.callToArms.cooldown -= b.watchtowerWarroom.callCooldown;
   if (on.has('marketTreasury')) cfg.economy.warChest += b.marketTreasury.warChest;
   if (on.has('marketGuild')) cfg.bonuses.killGold *= b.marketGuild.killGold;
   if (on.has('tavernMarket')) cfg.economy.earlyGoldMult *= b.tavernMarket.earlyGold;

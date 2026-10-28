@@ -227,8 +227,6 @@ export interface Capsule {
 /** The town's buildings behind the wall: the keep has a power, the rest are passive boons. */
 export const BUILDING_KINDS = ['keep', 'tavern', 'alchemist', 'blacksmith', 'chapel', 'forge', 'warroom', 'barracks', 'watchtower'] as const;
 export type BuildingKind = (typeof BUILDING_KINDS)[number];
-/** Buildings with a click power. */
-export type PowerKind = 'keep';
 
 export const SHIELD_TRACKS = ['width', 'window', 'power', 'recovery', 'plating'] as const;
 export type ShieldTrack = (typeof SHIELD_TRACKS)[number];
@@ -261,8 +259,6 @@ export type GameEvent =
   | { type: 'heave'; x: number }
   /** A heave pressed just before contact: the ball is empowered (a Perfect Return). */
   | { type: 'perfect'; x: number; y: number; at: number; ball: number }
-  /** The keep's call to arms. */
-  | { type: 'power'; kind: PowerKind }
   /** A ball bounced off a tree line (side: -1 left, 1 right), or off one of the field's structures. */
   | { type: 'edge'; x: number; y: number; side: number }
   | { type: 'obstacle'; x: number; y: number; index: number }
@@ -658,68 +654,9 @@ export class Game {
     this.events.push({ type: 'slam', x: s.x, hits });
   }
 
-  /** The buildings' powers: when each can be used again, and until when it lasts. */
-  powers: Record<PowerKind, { readyAt: number; until: number }> = {
-    keep: { readyAt: 0, until: 0 },
-  };
-
-  /** The keep's call to arms. */
-  get arms(): { readyAt: number; until: number } {
-    return this.powers.keep;
-  }
-
-  get armsActive(): boolean {
-    return this.powerActive('keep');
-  }
-
-  get canCallToArms(): boolean {
-    return this.canUse('keep');
-  }
-
   /** The town has built this one. */
   hasBuilding(kind: BuildingKind): boolean {
     return this.cfg.unlocks.buildings.includes(kind);
-  }
-
-  powerActive(kind: PowerKind): boolean {
-    return this.time < this.powers[kind].until;
-  }
-
-  /** The power's length and rest, in seconds. */
-  powerTiming(_kind: PowerKind): { seconds: number; cooldown: number } {
-    return this.cfg.callToArms;
-  }
-
-  /** Why the power can't be used right now, or '' if it can. */
-  whyNotPower(kind: PowerKind): string {
-    if (!this.hasBuilding(kind)) return 'build it in the town';
-    if (this.phase !== 'battle') return 'ready when the battle starts';
-    if (this.time < this.powers[kind].readyAt) return `resting, ${Math.ceil(this.powers[kind].readyAt - this.time)} s`;
-    return '';
-  }
-
-  canUse(kind: PowerKind): boolean {
-    return this.whyNotPower(kind) === '';
-  }
-
-  /**
-   * Sounds the keep's horn: for a few seconds every defender shoots twice
-   * as fast and the soldiers run. Then the keep needs a long rest.
-   */
-  usePower(kind: PowerKind): boolean {
-    if (!this.canUse(kind)) return false;
-    const t = this.powerTiming(kind);
-    this.powers[kind] = { readyAt: this.time + t.cooldown, until: this.time + t.seconds };
-    if (kind === 'keep') {
-      // Everyone fires at once as the horn sounds.
-      for (const d of this.defenders) d.timer = Math.min(d.timer, 0.1);
-    }
-    this.events.push({ type: 'power', kind });
-    return true;
-  }
-
-  callToArms(): boolean {
-    return this.usePower('keep');
   }
 
   /** True when the next wave can be called now for a bonus. */
@@ -1279,14 +1216,13 @@ export class Game {
   /** A defender stat's multiplier: its upgrade track, times the town's bonus for damage and rate of fire. */
   mult(kind: DefenderKind, track: Track): number {
     const b = this.cfg.bonuses;
-    const arms = track === 'rate' && this.armsActive ? this.cfg.callToArms.rate : 1;
     const bc = this.cfg.buildings;
     let town = 1;
     if (track === 'damage') {
       if ((kind === 'crossbow' || kind === 'archers') && this.hasBuilding('blacksmith')) town = bc.blacksmith.arrowDamage;
       else if (kind === 'catapult' && this.hasBuilding('forge')) town = bc.forge.catapultDamage;
     }
-    return trackMult(this.levels[kind][track], this.cfg) * (track === 'damage' ? b.damage * town : track === 'rate' ? b.rate * arms : 1);
+    return trackMult(this.levels[kind][track], this.cfg) * (track === 'damage' ? b.damage * town : track === 'rate' ? b.rate : 1);
   }
 
   /** The chapel mends damaged (not destroyed) wall segments during battle. */
@@ -1913,7 +1849,7 @@ export class Game {
       // They rush what is close to their post, but trudge along the wall to anything further.
       const near = Math.hypot(gx - s.postX, gy - s.postY) <= c.guard * (target && heavies.includes(target) ? c.heavyGuard : 1);
       if (dist > stopAt) {
-        const rush = Math.max(this.armsActive ? this.cfg.callToArms.run : 1, tavern ? this.cfg.buildings.tavern.run : 1);
+        const rush = tavern ? this.cfg.buildings.tavern.run : 1;
         const stepLen = Math.min(dist - stopAt, (near ? c.speed : c.walk) * rush * dt);
         s.x += (dx / dist) * stepLen;
         s.y += (dy / dist) * stepLen;

@@ -784,16 +784,6 @@ describe('run loop', () => {
     expect(buyMeta(p, 'archers') && buyMeta(p, 'fletching')).toBe(true);
     expect(metaLocked(p.meta, 'fletching')).toBe('');
     expect(metaDepth('archers')).toBe(0);
-    expect(metaDepth('doctrine')).toBeGreaterThan(metaDepth('drill'));
-    // A capstone needs every branch leading to it.
-    for (let i = 0; i < 2; i++) buyMeta(p, 'fletching');
-    expect(buyMeta(p, 'doctrine')).toBe(false);
-    for (let i = 0; i < 2; i++) buyMeta(p, 'drill');
-    expect(buyMeta(p, 'doctrine')).toBe(true);
-    const plain = applyMeta({}, 0);
-    const cfg = applyMeta(p.meta, 0);
-    expect(cfg.callToArms.rate).toBe(plain.callToArms.rate + 0.5);
-    expect(cfg.callToArms.cooldown).toBe(plain.callToArms.cooldown - 10);
     // Every prerequisite names a real upgrade, and the tree has no cycles.
     for (const u of META_UPGRADES) expect(metaDepth(u.id)).toBeLessThan(META_UPGRADES.length);
   });
@@ -1201,18 +1191,6 @@ describe('run loop', () => {
     expect(cat.y).toBeGreaterThan(44);
   });
 
-  it('the call to arms doubles every defender\'s rate of fire for a while, then rests', () => {
-    const game = battle();
-    expect(game.mult('crossbow', 'rate')).toBe(1);
-    expect(game.callToArms()).toBe(true);
-    expect(game.mult('crossbow', 'rate')).toBe(2);
-    expect(game.callToArms()).toBe(false);
-    run(game, game.cfg.callToArms.seconds + 0.1);
-    expect(game.mult('crossbow', 'rate')).toBe(1);
-    expect(game.canCallToArms).toBe(false);
-    run(game, game.cfg.callToArms.cooldown);
-    expect(game.canCallToArms).toBe(true);
-  });
 
   const town = (...kinds: string[]) => {
     const cfg = veteran(quiet());

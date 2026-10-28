@@ -45,7 +45,7 @@
       .nobars .seg .bar { display: none; }
       @keyframes warn { 50% { border-color: #ff3a2a; box-shadow: 0 0 12px #ff3a2a; } }
       #heaveBar { background: linear-gradient(#ffe38a, #e8a920); }
-      /* Over each of the town's buildings: the keep's call to arms (key and a bar that refills while it rests), the others' perk. */
+      /* Over each of the town's buildings: each building's perk. */
       .btag { position: absolute; transform: translate(-50%, -100%); pointer-events: auto; cursor: pointer; background: rgba(28, 22, 16, 0.82); color: #f4ecd8; border: 2px solid #14100c; border-radius: 5px; padding: 3px 8px 4px; font-size: 12px; white-space: nowrap; text-align: center; box-shadow: 0 2px 0 rgba(0, 0, 0, 0.35); }
       .btag .bar { height: 5px; margin-top: 3px; }
       .btag .bar > i { background: linear-gradient(#9ad0ff, #3a78d8); }
@@ -287,8 +287,7 @@
           <li><kbd>Left click</kbd> or <kbd>Space</kbd> right as a ball lands to <b>heave</b>: a power shot that smashes through a whole orc line.</li>
           <li>Chain hits without touching the shield for a <b>combo</b> gold multiplier. Hits behind the lines pay double, the towers make bank shots and barrel orcs blow up their friends. Catch falling capsules, but not the red ones.</li>
           <li>Every ball or boulder you miss hits the wall. If any one stretch of wall falls, the castle is breached.</li>
-          <li>Before each level, spend your war chest on defenders and put them anywhere on the castle. Each one covers only part of the field, and the red hatching shows your blind spots. Click a defender to aim or upgrade it, stack towers on the wall for reach, and scroll up to look at the horde. Between waves, click a wall&rsquo;s Repair tag to patch it.</li>
-          <li>In a tight spot, click the <b>keep</b> (or press <kbd>Q</kbd>) to sound the call to arms: every defender shoots twice as fast for a few seconds.</li>
+          <li>Before each level, spend your war chest on defenders and put them anywhere on the castle. Each one covers only part of the field. Click a defender to aim or upgrade it, stack towers on the wall for reach, and scroll up to look at the horde. Between waves, click a wall&rsquo;s Repair tag to patch it.</li>
           <li>Three levels of five waves. Lose one and you are back in the town, where Renown buys upgrades that last for ever. Then the next run starts again from level 1.</li>
         </ul>
         <button id="play" type="button">Hold the wall!</button>
