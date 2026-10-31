@@ -1664,7 +1664,7 @@ export class BattleScene {
       this.halos.setColorAt(h++, tmpC.set(color).multiplyScalar(b.kind === 'pebble' ? 0.4 : 0.8));
       // A comet trail that grows longer with speed and shifts white, then orange, then blue-white.
       if (!b.stuck) {
-        const t = Math.min(1, Math.hypot(b.vx, b.vy) / g.cfg.balls.maxSpeed);
+        const t = Math.min(1, Math.hypot(b.vx, b.vy) / (b.kind === 'royal' ? g.cfg.balls.royalMaxSpeed : g.cfg.balls.maxSpeed));
         const trail = b.perfect ? ORANGE : t < 0.5 ? (t < 0.25 ? TRAIL_WHITE : TRAIL_ORANGE) : TRAIL_BLUE;
         this.fireworks.burst(b.x, BALL_Y, -b.y, {
           count: 1 + t * 5, colors: trail, speed: 0.8, life: 0.15 + t * 0.65, size: r * size * (1.2 + t), gravity: 0, drag: 4,

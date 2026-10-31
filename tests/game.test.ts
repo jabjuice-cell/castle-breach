@@ -2355,3 +2355,23 @@ describe('town plot packing', () => {
     expect(activePairs(layout).filter((p) => p.kind === 'clash')).toEqual([]);
   });
 });
+
+describe('royal ball speed (31 Oct)', () => {
+  it('the Royal Ball comes off the shield twice as fast as before, past the common cap', () => {
+    const game = battle();
+    const b = ball(game, { kind: 'royal', x: 0, y: 6, vy: -30 });
+    run(game, 0.15);
+    const sp = Math.hypot(b.vx, b.vy);
+    expect(b.vy).toBeGreaterThan(0);
+    expect(sp).toBeGreaterThanOrEqual(game.cfg.balls.royalSpeed - 1e-6);
+    expect(sp).toBeGreaterThan(game.cfg.balls.maxSpeed);
+    expect(sp).toBeLessThanOrEqual(game.cfg.balls.royalMaxSpeed + 1e-6);
+  });
+
+  it('other balls keep the common top speed', () => {
+    const game = battle();
+    const b = ball(game, { x: 0, y: 6, vy: -50 });
+    run(game, 0.15);
+    expect(Math.hypot(b.vx, b.vy)).toBeLessThanOrEqual(game.cfg.balls.maxSpeed + 1e-6);
+  });
+});

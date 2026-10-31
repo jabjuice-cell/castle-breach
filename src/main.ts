@@ -1652,6 +1652,17 @@ function updateGhost() {
 let last = performance.now();
 let acc = 0;
 let hitStop = 0;
+/**
+ * A slight impact pause (seconds the action freezes) on the spectacular moments, so they land.
+ * Bowling pauses grow with each orc that joins the chain; combo pauses with the milestone.
+ */
+const IMPACT_PAUSE = {
+  bowl: [0, 0, 0.05, 0.07, 0.09],
+  combo: { 10: 0.06, 25: 0.08, 40: 0.1 } as Record<number, number>,
+  bellVolley: 0.08,
+  rampLand: 0.06,
+  bossKilled: 0.2,
+};
 function frame(now: number) {
   const dt = Math.min(0.1, (now - last) / 1000);
   last = now;
@@ -1692,6 +1703,7 @@ function frame(now: number) {
           break;
         case 'bowl':
           if (ev.count < 2) break;
+          hitStop = Math.max(hitStop, IMPACT_PAUSE.bowl[Math.min(ev.count, IMPACT_PAUSE.bowl.length - 1)]);
           {
             const text = BOWL_WORDS[Math.min(ev.count, BOWL_WORDS.length - 1)];
             const pop = bowlPopups.get(ev.chain);
@@ -1773,6 +1785,7 @@ function frame(now: number) {
           floater('DING!', ev.x, ev.y + 1.5, 'trick', 0.8);
           break;
         case 'bellVolley':
+          hitStop = Math.max(hitStop, IMPACT_PAUSE.bellVolley);
           sounds.chime(2);
           floater('VOLLEY!', ev.x, ev.y + 4, 'smash', 1.2);
           break;
@@ -1780,6 +1793,7 @@ function frame(now: number) {
           sounds.thunk();
           break;
         case 'rampLand':
+          hitStop = Math.max(hitStop, IMPACT_PAUSE.rampLand);
           sounds.boom();
           floater('DROP!', ev.x, ev.y + 1, 'smash', 1);
           break;
@@ -1822,6 +1836,7 @@ function frame(now: number) {
           floater('SMASH!', (ev.x0 + ev.x1) / 2, ev.y, 'smash', 0.9);
           break;
         case 'combo':
+          hitStop = Math.max(hitStop, IMPACT_PAUSE.combo[ev.combo] ?? 0);
           floater(`×${ev.combo} COMBO!`, ev.x, ev.y, `c${ev.combo}`, 1.4);
           sounds.chime(ev.combo >= 40 ? 3 : ev.combo >= 25 ? 2 : 1);
           break;
@@ -1866,6 +1881,7 @@ function frame(now: number) {
           toast(`Early call! +${ev.gold} gold`);
           break;
         case 'bossKilled':
+          hitStop = Math.max(hitStop, IMPACT_PAUSE.bossKilled);
           toast(`${game.plan.tower ? 'The siege tower falls!' : 'The Warlord falls!'} +${game.cfg.renown.bossKill} Renown`);
           break;
         default:

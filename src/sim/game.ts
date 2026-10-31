@@ -550,6 +550,11 @@ export class Game {
     return b.kind === 'royal' ? this.cfg.town.balls[this.cfg.choices.ball] : null;
   }
 
+  /** A ball's top speed: the Royal Ball has its own (or its kit's), every other ball the common one. */
+  private speedCap(b: Ball): number {
+    return b.kind === 'royal' ? this.kit(b)?.maxSpeed ?? this.cfg.balls.royalMaxSpeed : this.cfg.balls.maxSpeed;
+  }
+
   get firstWave(): number {
     return this.level * this.cfg.levels.waves + 1;
   }
@@ -2406,7 +2411,7 @@ export class Game {
 
   private powerUp(b: Ball): void {
     const sp = Math.hypot(b.vx, b.vy);
-    const target = Math.min(this.cfg.balls.maxSpeed * this.cfg.shield.heaveSpeed, sp * this.cfg.shield.heaveSpeed);
+    const target = Math.min(this.speedCap(b) * this.cfg.shield.heaveSpeed, sp * this.cfg.shield.heaveSpeed);
     b.vx *= target / sp;
     b.vy *= target / sp;
     b.lines = this.heaveLines();
@@ -2422,7 +2427,7 @@ export class Game {
     const offset = (b.x - s.x) / half;
     const base = b.kind === 'royal' ? c.royalSpeed : c.speed;
     const k = this.kit(b);
-    const speed = Math.min(k?.maxSpeed ?? c.maxSpeed, Math.max(base * (k?.speed ?? 1), Math.hypot(b.vx, b.vy) * (k?.speedUp ?? c.speedUp)));
+    const speed = Math.min(this.speedCap(b), Math.max(base * (k?.speed ?? 1), Math.hypot(b.vx, b.vy) * (k?.speedUp ?? c.speedUp)));
     // Hybrid bounce: mirror off the flat middle, kick off the edges, plus English and curve from the shield's movement.
     const move = s.vx / this.cfg.shield.speed;
     this.launch(b, this.bounceAngle(offset, Math.atan2(b.vx, -b.vy)) + move * this.cfg.shield.english, speed);
@@ -2451,7 +2456,7 @@ export class Game {
     if (perfect) {
       // A Perfect Return: a fresh press just before contact. The first ball to land spends it, and a
       // ball that was already perfect is only refreshed (the flag is set again, nothing multiplies twice).
-      const cap = c.maxSpeed * this.cfg.shield.heaveSpeed;
+      const cap = this.speedCap(b) * this.cfg.shield.heaveSpeed;
       const sp = Math.hypot(b.vx, b.vy) || 1;
       const out = Math.min(cap, sp * this.cfg.shield.perfectSpeed);
       b.vx *= out / sp;
@@ -2687,7 +2692,7 @@ export class Game {
       b.y += hit.ny * (hit.depth + 0.01);
       if (c.kind === 'bumper') {
         const sp = Math.hypot(b.vx, b.vy) || 1;
-        const kicked = Math.max(sp, Math.min(this.cfg.balls.maxSpeed, sp * k.bumper.kick));
+        const kicked = Math.max(sp, Math.min(this.speedCap(b), sp * k.bumper.kick));
         b.vx *= kicked / sp;
         b.vy *= kicked / sp;
         b.banked = true;

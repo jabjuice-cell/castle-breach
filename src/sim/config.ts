@@ -202,9 +202,11 @@ export const defaultConfig = {
     radius: 0.45,
     /** 12 tiles/s off the shield, +2% a bounce, up to 20 tiles/s. */
     speed: 20,
-    /** The Royal Ball is quicker: about 18 tiles/s. */
-    royalSpeed: 30,
+    /** The Royal Ball is twice as quick as it was (Jonny, 31 Oct): about 36 tiles/s, up to royalMaxSpeed. */
+    royalSpeed: 60,
     maxSpeed: 33,
+    /** The Royal Ball's own top speed (a ball kit's maxSpeed replaces it). Heaves and Perfect Returns cap at this times heaveSpeed. */
+    royalMaxSpeed: 66,
     speedUp: 1.02,
     damage: 10,
     /** Orcs this close to a hit orc are knocked back and take splashDamage. */
@@ -556,7 +558,7 @@ export const defaultConfig = {
     balls: {
       royal: { damage: 1, splash: 1, knockback: 1, speed: 1, speedUp: null, maxSpeed: null, comboStep: null },
       iron: { damage: 2, splash: 1.5, knockback: 1.55, speed: 0.73, speedUp: 1, maxSpeed: null, comboStep: null },
-      jester: { damage: 0.7, splash: 1, knockback: 1, speed: 1, speedUp: 1.05, maxSpeed: 38, comboStep: 0.15 },
+      jester: { damage: 0.7, splash: 1, knockback: 1, speed: 1, speedUp: 1.05, maxSpeed: 76, comboStep: 0.15 },
       powder: { damage: 1, splash: 1, knockback: 1, speed: 1, speedUp: null, maxSpeed: null, comboStep: null },
     } as Record<import('./town').BallKit, { damage: number; splash: number; knockback: number; speed: number; speedUp: number | null; maxSpeed: number | null; comboStep: number | null }>,
     powder: { every: 4, radius: 2.5, damage: 25, missDamage: 25 },
