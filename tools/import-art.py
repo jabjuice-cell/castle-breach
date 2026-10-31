@@ -186,6 +186,13 @@ for i, box in enumerate(blobs):
     save(plates.crop(box), f'fx/plate-{i}.webp', 160)
 print('warlord plates:', len(blobs))
 save(Image.open(ART / 'maps/courtyard-ground.png').convert('RGB'), 'maps/courtyard.jpg', 1024)
+# The warlord's armour plates as the game draws them (3 x 2 sheet; the top row is one plate whole, cracked and nearly broken).
+for i, im in enumerate(cells('sprites/boss/warlord-plate-states.png', 3, 2)[:3]):
+    save(im, f'fx/lord-plate-{i}.webp', 192)
+# The 3-orc shield team: only the shield itself (with the carriers' hands over its rim) is cut out, since the
+# game draws the carriers as orcs of their own. Every stage shares the canvas, so one box fits them all.
+for stage in ['', '-cracked', '-broken-soon']:
+    save(Image.open(ART / f'sprites/enemy-shield-team-3{stage}.png').convert('RGBA'), f'sprites/team-shield{stage}.webp', 768, (195, 400, 1345, 830))
 
 import_town()
 if ONLY is not None:

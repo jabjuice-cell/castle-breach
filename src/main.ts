@@ -12,6 +12,7 @@ import ogrePortrait from './assets/sprites/enemy-ogre.webp';
 import warlordPortrait from './assets/sprites/enemy-warlord.webp';
 import barrelPortrait from './assets/sprites/powder-barrel.webp';
 import queenUrl from './assets/characters/queen.webp';
+import logoUrl from './assets/ui/logo.webp';
 import queenAngryUrl from './assets/characters/queen-angry.webp';
 import { queenAdvice, queenCross, queenVerdict } from './queen';
 import { BattleScene, CAPSULE_LOOK, type PlanPreview, QUALITIES, type Quality } from './render/scene';
@@ -37,6 +38,7 @@ const icon = (name: string) => `<img class="ico" src="${ICONS[name]}" alt="" />`
 document.querySelectorAll<HTMLImageElement>('img[data-icon]').forEach((img) => (img.src = ICONS[img.dataset.icon!]));
 document.documentElement.style.setProperty('--wall-states', `url(${wallStatesUrl})`);
 document.querySelectorAll<HTMLImageElement>('img[data-queen]').forEach((img) => (img.src = queenUrl));
+document.querySelectorAll<HTMLImageElement>('img[data-logo]').forEach((img) => (img.src = logoUrl));
 
 /** Per-viewer settings kept in the browser; the game works the same without them. */
 function loadSetting(key: string): string | null {
@@ -561,8 +563,8 @@ const ENEMY_TRICKS: Partial<Record<EnemyKind, string>> = {
   rider: 'boar riders zig-zag down the edges',
   orcCatapult: 'catapults lob boulders: block them to get balls',
   ogre: 'ogres take a beating and stun their row when they fall',
-  warlord: 'the Warlord bats balls back and hurries his orcs',
-  shieldOrc: 'Shields stop balls head-on. Bank a shot around the side or behind.',
+  warlord: 'the Warlord wears 14 armour plates: break a column to reach his core, and watch his club',
+  shieldOrc: 'Big shields stop balls head-on but crack: 5 hits or 2 heaves smash one. Or bank a shot round the side.',
   drummer: 'Kill the drummer and the formation breaks: shields drop and the block scatters.',
 };
 
@@ -1650,6 +1652,21 @@ function updateGhost() {
 let last = performance.now();
 let acc = 0;
 let hitStop = 0;
+/**
+ * A slight impact pause (seconds the action freezes) on the spectacular moments, so they land.
+ * Bowling pauses grow with each orc that joins the chain; combo pauses with the milestone.
+ */
+const IMPACT_PAUSE = {
+  bowl: [0, 0, 0.05, 0.07, 0.09],
+  combo: { 10: 0.06, 25: 0.08, 40: 0.1 } as Record<number, number>,
+  bellVolley: 0.08,
+  rampLand: 0.06,
+  bossKilled: 0.2,
+  /** A shield team's shield splinters; a row of the warlord's armour comes off (the brief's 0.3 s set piece). */
+  shieldBreak: 0.06,
+  lordStage: 0.3,
+  roar: 0.12,
+};
 function frame(now: number) {
   const dt = Math.min(0.1, (now - last) / 1000);
   last = now;
@@ -1690,6 +1707,7 @@ function frame(now: number) {
           break;
         case 'bowl':
           if (ev.count < 2) break;
+          hitStop = Math.max(hitStop, IMPACT_PAUSE.bowl[Math.min(ev.count, IMPACT_PAUSE.bowl.length - 1)]);
           {
             const text = BOWL_WORDS[Math.min(ev.count, BOWL_WORDS.length - 1)];
             const pop = bowlPopups.get(ev.chain);
@@ -1756,7 +1774,43 @@ function frame(now: number) {
           }
           break;
         case 'clang':
+          if (ev.team === undefined) sounds.clang(false);
+          else {
+            sounds.woodThunk(false);
+            floater('THUNK!', ev.x, ev.y + 1.2, 'bank', 0.6);
+          }
+          break;
+        case 'shieldBreak':
+          hitStop = Math.max(hitStop, IMPACT_PAUSE.shieldBreak);
+          sounds.woodThunk(true);
+          floater('SHIELD SMASHED!', ev.x, ev.y + 1.5, 'smash', 1);
+          break;
+        case 'plateHit':
+          sounds.clink();
+          break;
+        case 'plateBroken':
           sounds.clang(false);
+          break;
+        case 'lordStage':
+          hitStop = Math.max(hitStop, IMPACT_PAUSE.lordStage);
+          sounds.crunch(40);
+          floater(ev.row === 0 ? 'HIS BELT SNAPPED!' : 'ARMOUR CRACKED OPEN!', ev.x, ev.y + 3, 'smash', 1.6);
+          break;
+        case 'coreHit':
+          floater(`-${Math.round(ev.damage)}`, ev.x, ev.y + 1.5, 'chain hot', 0.7);
+          break;
+        case 'club':
+          sounds.thunk();
+          floater('CLUB!', ev.x, ev.y + 3, 'trick', 0.8);
+          break;
+        case 'roar':
+          hitStop = Math.max(hitStop, IMPACT_PAUSE.roar);
+          sounds.roar();
+          floater('ROAAAR!', ev.x, ev.y + 3.5, 'smash', 1.6);
+          break;
+        case 'debrisHit':
+          sounds.clink();
+          floater('CLANK!', ev.x, ev.y + 1.2, 'bank', 0.6);
           break;
         case 'formationBreak':
           sounds.thunk();
@@ -1771,6 +1825,7 @@ function frame(now: number) {
           floater('DING!', ev.x, ev.y + 1.5, 'trick', 0.8);
           break;
         case 'bellVolley':
+          hitStop = Math.max(hitStop, IMPACT_PAUSE.bellVolley);
           sounds.chime(2);
           floater('VOLLEY!', ev.x, ev.y + 4, 'smash', 1.2);
           break;
@@ -1778,6 +1833,7 @@ function frame(now: number) {
           sounds.thunk();
           break;
         case 'rampLand':
+          hitStop = Math.max(hitStop, IMPACT_PAUSE.rampLand);
           sounds.boom();
           floater('DROP!', ev.x, ev.y + 1, 'smash', 1);
           break;
@@ -1820,6 +1876,7 @@ function frame(now: number) {
           floater('SMASH!', (ev.x0 + ev.x1) / 2, ev.y, 'smash', 0.9);
           break;
         case 'combo':
+          hitStop = Math.max(hitStop, IMPACT_PAUSE.combo[ev.combo] ?? 0);
           floater(`×${ev.combo} COMBO!`, ev.x, ev.y, `c${ev.combo}`, 1.4);
           sounds.chime(ev.combo >= 40 ? 3 : ev.combo >= 25 ? 2 : 1);
           break;
@@ -1864,6 +1921,7 @@ function frame(now: number) {
           toast(`Early call! +${ev.gold} gold`);
           break;
         case 'bossKilled':
+          hitStop = Math.max(hitStop, IMPACT_PAUSE.bossKilled);
           toast(`${game.plan.tower ? 'The siege tower falls!' : 'The Warlord falls!'} +${game.cfg.renown.bossKill} Renown`);
           break;
         default:
