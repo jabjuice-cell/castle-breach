@@ -75,8 +75,15 @@ export const defaultConfig = {
   // mass divides knockback; climbSeconds 0 means it smashes the wall without climbing.
   // wallDps is damage per second once it has climbed. Speeds are for loose orcs; blocks march at march.speed.
   grunt: { hp: 10, speed: 1.8, radius: 0.45, mass: 1, wallDps: 1, meleeDps: 2, climbSeconds: 3, gold: 1, threat: 1 },
-  /** Shielded from the front while its block's drummer lives; hit it from the sides or back. */
+  /** Carries a block's big shared shield (shieldTeam); hit it from the sides or back. */
   shieldOrc: { hp: 14, speed: 1.8, radius: 0.55, mass: 2, wallDps: 1.5, meleeDps: 3, climbSeconds: 3, gold: 2, threat: 1, shieldArc: 0.35 },
+  /**
+   * Shield teams (Jonny's twist, item 15): a block's shield orcs carry one huge shield between size of them
+   * (bigSize from bigFromWave). Front hits bounce off and crack it; it splinters after hits ball hits, a heave
+   * counting heaveHits (so 2 heaves). Then the carriers stumble back (stumble: knock speed) as plain bricks,
+   * and the ball that broke it gets breakCombo. A staggered carrier has its shield down; the drummer's fall drops them all.
+   */
+  shieldTeam: { size: 3, bigSize: 5, bigFromWave: 6, hits: 5, heaveHits: 2.5, stumble: 10, breakCombo: 2 },
   /** Beats the drum that holds a block's shields up: kill it and the formation breaks. */
   drummer: { hp: 8, speed: 1.8, radius: 0.5, mass: 1.5, wallDps: 0.5, meleeDps: 1, climbSeconds: 3, gold: 6, threat: 1 },
   /** A brick that shoots back: throws pebbles at the wall as its block marches, or (boltShare of them) fires fast bolts. */
@@ -105,10 +112,21 @@ export const defaultConfig = {
     /** 6 tiles either side, within a row's depth. */
     staggerRadius: 10, staggerSeconds: 2, staggerDamage: 5, staggerKnock: 0.83, killCombo: 3,
   },
-  /** Boss on the last wave, riding the siege tower. Speeds up orcs around it and bats balls back down. */
+  /**
+   * Boss on the last wave, riding the siege tower (item 17). hp is his core. His armour is a Breakout pattern of
+   * plateRows x plateCols plates across his front, each taking plateHits (a heave breaks one outright); a ball only
+   * reaches the core through a bare column, for its damage times the ball's combo multiplier. While plates stand they
+   * soak plateCover of other damage (bolts, arrows, splash) in step with how many are left. His club bats a ball
+   * straight back at the wall every clubSeconds. At roarAt of his core he roars: orcs within auraRadius march
+   * auraSpeed faster, and hits from behind do backMult. With the belt row (row 0) gone he waddles at waddle speed.
+   * Each broken plate lands in front of him as a bumper (debrisRadius) for debrisSeconds, at most debrisMax at once.
+   * guard: shield teams of 3 marching ahead of him.
+   */
   warlord: {
-    hp: 2000, speed: 0.6, radius: 1.6, mass: 10, wallDps: 25, meleeDps: 60, climbSeconds: 0, gold: 100, threat: 0,
+    hp: 450, speed: 0.6, radius: 1.6, mass: 10, wallDps: 25, meleeDps: 60, climbSeconds: 0, gold: 100, threat: 0,
     auraRadius: 7, auraSpeed: 1.3,
+    plateCols: 7, plateRows: 2, plateHits: 3, plateCover: 0.8, clubSeconds: 4, roarAt: 0.5, backMult: 2, waddle: 0.5,
+    debrisSeconds: 10, debrisRadius: 0.8, debrisMax: 4, guard: 2,
   },
   /** Blocks march down the field like Space Invaders, faster as they shrink. */
   march: {

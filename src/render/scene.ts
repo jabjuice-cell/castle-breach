@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { type Defender, type PlacedKind, groundAt } from '../sim/defenders';
-import { type Ball, type Capsule, type CapsuleKind, type Enemy, type Game, type GameEvent, type TerrainKind } from '../sim/game';
+import { type Ball, type Capsule, type CapsuleKind, type Enemy, type Game, type GameEvent, type ShieldTeam, type TerrainKind } from '../sim/game';
 import { ENEMY_KINDS, type EnemyKind, formation } from '../sim/waves';
 import aspects from '../assets/aspects.json';
 import arrowUrl from '../assets/fx/arrow.webp';
@@ -24,6 +24,9 @@ import scorchBlastUrl from '../assets/maps/scorch-blast.webp';
 import goblinPush1Url from '../assets/sprites/goblin-push-1.webp';
 import goblinPush2Url from '../assets/sprites/goblin-push-2.webp';
 import warlordRevealUrl from '../assets/sprites/warlord-reveal.webp';
+import teamShieldUrl from '../assets/sprites/team-shield.webp';
+import teamShieldCrackedUrl from '../assets/sprites/team-shield-cracked.webp';
+import teamShieldBrokenUrl from '../assets/sprites/team-shield-broken-soon.webp';
 import { type BurstOptions, Fireworks } from './fireworks';
 
 /** Numbered art sets (tower and warlord stages, flying planks, plates and debris), in order. */
@@ -35,6 +38,8 @@ const TOWER_STAGES = numbered(import.meta.glob<string>('../assets/sprites/siege-
 const WARLORD_STAGES = numbered(import.meta.glob<string>('../assets/sprites/warlord-stage*.webp', { eager: true, import: 'default' }));
 const PLANKS = numbered(import.meta.glob<string>('../assets/fx/plank-*.webp', { eager: true, import: 'default' }));
 const PLATES = numbered(import.meta.glob<string>('../assets/fx/plate-*.webp', { eager: true, import: 'default' }));
+/** One armour plate whole, cracked and nearly broken (hits left 3, 2, 1). */
+const LORD_PLATES = numbered(import.meta.glob<string>('../assets/fx/lord-plate-*.webp', { eager: true, import: 'default' }));
 const TOWER_DEBRIS = numbered(import.meta.glob<string>('../assets/fx/siege-debris-*.webp', { eager: true, import: 'default' }));
 const CAPSULE_ART = import.meta.glob<string>('../assets/fx/capsule-*.webp', { eager: true, import: 'default' });
 import { paintGround } from './ground';
@@ -121,6 +126,18 @@ const TOWER_ART = { aspect: 2 / 3, left: 0.181, right: 0.806, top: 0.33, bottom:
 const TOWER_WHEELS = [1499, 1499, 1390, 1429, 1499, 1467].map((y) => y / 1536);
 /** Warlord art by health: full armour, then shoulders off, chest off, sacks burst. */
 const WARLORD_STAGE_AT = [0.75, 0.5, 0.25];
+/**
+ * The armoured warlord is drawn as his bare art (the last stage) with his armour on top, placed in fractions of
+ * the art's canvas (from the left and from the top): the plates as a brick pattern over his chest and belly between
+ * left and right (row 0, his belt line, lowest), and the horns and pauldrons (pieces of PLATES) until they fly off.
+ */
+const LORD_ART = {
+  left: 0.27, right: 0.71, rows: [0.735, 0.6], plateH: 0.1, plateW: 1.22,
+  horns: [{ u: 0.42, v: 0.27, art: 1 }, { u: 0.66, v: 0.27, art: 2 }],
+  pauldrons: [{ u: 0.3, v: 0.45, art: 3 }, { u: 0.76, v: 0.47, art: 4 }],
+};
+/** A shield team's shield is drawn this much squatter than its art, so its carriers' heads show over it. */
+const TEAM_SHIELD_SQUASH = 0.95;
 /** About where the bottom floor's planks are, in world height, for hit effects. */
 const TOWER_PLANK_Y = 6.8;
 
@@ -335,6 +352,7 @@ const tmpQ = new THREE.Quaternion();
 const tmpQ2 = new THREE.Quaternion();
 const FORWARD = new THREE.Vector3(0, 0, 1);
 const UP = new THREE.Vector3(0, 1, 0);
+const RIGHT = new THREE.Vector3(1, 0, 0);
 const AHEAD = new THREE.Vector3(0, 0, -1);
 const tmpV = new THREE.Vector3();
 const tmpD = new THREE.Vector3();
@@ -449,6 +467,23 @@ export class BattleScene {
   /** The warlord's armour stage art (sprite in both orc styles, so the boss art always shows). */
   private warlordSprites: THREE.InstancedMesh[] = [];
   private lordStage = new WeakMap<Enemy, number>();
+  /** Each standing shield team's one big shield: a painted panel in front of its carriers, cracking as it's hit. */
+  private teamShields = new Map<ShieldTeam, THREE.Mesh>();
+  private teamShieldTex = [teamShieldUrl, teamShieldCrackedUrl, teamShieldBrokenUrl].map((url) => imageSprite(url, aspects['team-shield']).texture);
+  private teamShieldGeo = new THREE.PlaneGeometry(1, 1).translate(0, 0.5, 0);
+  /** When each team's shield was last hit (by team id), for a jolt. */
+  private teamJolt = new Map<number, number>();
+  /** The armoured warlord's pieces, drawn over his billboard; and where that billboard stands this frame. */
+  private lordArmour!: {
+    group: THREE.Group; plates: THREE.Mesh[]; glows: THREE.Mesh[]; horns: THREE.Mesh[]; pauldrons: THREE.Mesh[];
+    owner: Enemy | null; hornsOn: boolean; pauldronsOn: boolean;
+  };
+  private lordPlateTex = LORD_PLATES.map((p) => imageSprite(p.url, aspects[p.name as keyof typeof aspects] ?? 1).texture);
+  private lordPose: { e: Enemy; pos: THREE.Vector3; quat: THREE.Quaternion; scale: number } | null = null;
+  /** When each plate was last struck, by plate index, for a glint. */
+  private plateFlash: number[] = [];
+  /** The warlord's fallen plates lying on the field as bumpers. */
+  private debrisSprites: THREE.Sprite[] = [];
   private chunkArt = {
     planks: PLANKS.map((p) => imageSprite(p.url, aspects[p.name as keyof typeof aspects] ?? 1)),
     plates: PLATES.map((p) => imageSprite(p.url, aspects[p.name as keyof typeof aspects] ?? 1)),
@@ -731,6 +766,7 @@ export class BattleScene {
     this.towerHoles.count = 0;
     this.towerGroup.add(this.towerHoles);
     this.scene.add(this.towerGroup);
+    this.buildLordArmour();
 
     this.buildOverlay();
 
@@ -1411,8 +1447,54 @@ export class BattleScene {
           if (Math.random() < 0.6) fw.burst(ev.x, 0.9, -ev.y, { count: 8, colors: STEEL, speed: 6, life: 0.3, size: 0.3, gravity: 6 });
           break;
         case 'clang':
-          fw.burst(ev.x, 0.9, -ev.y, { count: 12, colors: STEEL, speed: 7, life: 0.3, size: 0.3, gravity: 6 });
+          fw.burst(ev.x, 0.9, -ev.y, { count: 12, colors: ev.team === undefined ? STEEL : [...WOOD, ...STEEL], speed: 7, life: 0.3, size: 0.3, gravity: 6 });
           this.spawnEffect('impact', ev.x, -ev.y, 0.2, 0.9);
+          if (ev.team !== undefined) this.teamJolt.set(ev.team, this.time);
+          break;
+        case 'shieldBreak':
+          // It bursts into planks and splinters, and the carriers are left holding the handles.
+          for (let i = 0; i < 7; i++) {
+            const x = ev.x0 + ((ev.x1 - ev.x0) * i) / 6;
+            this.chunk(this.chunkArt.planks[i % 3 === 2 ? 5 : i % 3], x, 1.2, -ev.y + 1, 0.9 + Math.random() * 0.4, 11);
+          }
+          fw.burst(ev.x, 1.2, -ev.y + 0.8, { count: 60, colors: [...WOOD, '#c8261c', ...STEEL], speed: 11, life: 0.7, size: 0.45, up: 0.5 });
+          this.spawnEffect('impact', ev.x, -ev.y + 0.8, 0.25, 2.4);
+          this.shake = Math.max(this.shake, 0.35);
+          break;
+        case 'plateHit':
+          this.plateFlash[ev.plate] = this.time;
+          fw.burst(ev.x, 2.6, -ev.y, { count: 14, colors: [...STEEL, '#ffd34a'], speed: 8, life: 0.35, size: 0.3, gravity: 8 });
+          this.shake = Math.max(this.shake, 0.12);
+          break;
+        case 'plateBroken': {
+          const at = this.platePoint(ev.plate);
+          if (at) this.chunk({ texture: this.lordPlateTex[2], aspect: aspects['lord-plate-2'] }, at.x, at.y, at.z + 0.3, 0.9, 12);
+          // It clangs down in front of him, where it lies as a bumper.
+          fw.burst(ev.toX, 0.5, -ev.toY, { count: 24, colors: ['#c9b79a', ...STEEL], speed: 5, life: 0.5, size: 0.4, up: 0.6, gravity: 6 });
+          this.fireworks.burst(at?.x ?? ev.x, at?.y ?? 3, at?.z ?? -ev.y, { count: 24, colors: [...STEEL, '#ff5a3a'], speed: 10, life: 0.45, size: 0.35, gravity: 10 });
+          this.shake = Math.max(this.shake, 0.25);
+          break;
+        }
+        case 'lordStage':
+          fw.burst(ev.x, 3, -ev.y, { count: 90, colors: [...STEEL, ...GOLD], speed: 13, life: 0.8, size: 0.5, up: 0.6, gravity: 12 });
+          this.spawnEffect('impact', ev.x, -ev.y, 0.3, 5);
+          this.shake = Math.max(this.shake, 0.7);
+          this.flash(0.35, '#fff6c8');
+          break;
+        case 'coreHit':
+          fw.burst(ev.x, 2.4, -ev.y, { count: 16, colors: ['#ff5a3a', '#ffd34a', '#ffffff'], speed: 7, life: 0.4, size: 0.35, gravity: 6 });
+          break;
+        case 'club':
+          fw.burst(ev.x - 1.5, 4, -ev.y, { count: 20, colors: [...WOOD, ...STEEL], speed: 8, life: 0.4, size: 0.35, gravity: 10 });
+          this.shake = Math.max(this.shake, 0.2);
+          break;
+        case 'roar':
+          this.shake = Math.max(this.shake, 0.8);
+          this.flash(0.3, '#ff6a5a');
+          for (let i = 0; i < 3; i++) this.spawnEffect('impact', ev.x, -ev.y, 0.4 + i * 0.15, 3 + i * 2);
+          break;
+        case 'debrisHit':
+          fw.burst(ev.x, 0.7, -ev.y, { count: 10, colors: STEEL, speed: 6, life: 0.3, size: 0.3, gravity: 6 });
           break;
         case 'formationBreak':
           fw.burst(ev.x, 1, -ev.y, { count: 40, colors: [...WOOD, ...STEEL], speed: 9, life: 0.6, size: 0.4, up: 0.5 });
@@ -1534,6 +1616,8 @@ export class BattleScene {
     this.updateCastle(dt);
     this.updateSmoke(dt);
     this.updateEnemies(time);
+    this.updateTeamShields();
+    this.updateLordArmour();
     this.updateSoldiers(time);
     this.updateDefenders();
     this.updateProjectiles();
@@ -1710,6 +1794,211 @@ export class BattleScene {
       sp.material.dispose();
       this.capsuleSprites.delete(c);
     }
+  }
+
+  // ---- shield teams and the warlord's armour ----------------------------------
+
+  /** One big painted shield in front of each team that still holds one up; tipped down while its carriers are staggered. */
+  private updateTeamShields() {
+    const g = this.game;
+    const teams = new Map<ShieldTeam, Enemy[]>();
+    for (const e of g.enemies) {
+      const t = e.team;
+      if (!t || t.broken || e.hp <= 0 || !e.shielded) continue;
+      const list = teams.get(t);
+      if (list) list.push(e);
+      else teams.set(t, [e]);
+    }
+    for (const [t, mesh] of this.teamShields) {
+      if (teams.has(t)) continue;
+      this.scene.remove(mesh);
+      (mesh.material as THREE.Material).dispose();
+      this.teamShields.delete(t);
+      this.teamJolt.delete(t.id);
+    }
+    const st = g.cfg.shieldTeam;
+    const r = g.cfg.shieldOrc.radius;
+    for (const [t, live] of teams) {
+      let mesh = this.teamShields.get(t);
+      if (!mesh) {
+        mesh = new THREE.Mesh(this.teamShieldGeo, new THREE.MeshBasicMaterial({ map: this.teamShieldTex[0], alphaTest: 0.5, alphaToCoverage: true }));
+        this.scene.add(mesh);
+        this.teamShields.set(t, mesh);
+      }
+      // Whole, then cracked, then about to give way.
+      const share = t.hits / st.hits;
+      const tex = this.teamShieldTex[share <= 0 ? 0 : share < 0.6 ? 1 : 2];
+      const mat = mesh.material as THREE.MeshBasicMaterial;
+      if (mat.map !== tex) {
+        mat.map = tex;
+        mat.needsUpdate = true;
+      }
+      let x0 = Infinity;
+      let x1 = -Infinity;
+      let front = Infinity;
+      for (const e of live) {
+        x0 = Math.min(x0, e.x);
+        x1 = Math.max(x1, e.x);
+        front = Math.min(front, e.y);
+      }
+      const w = x1 - x0 + r * 2 + 0.6;
+      const h = (w / aspects['team-shield']) * TEAM_SHIELD_SQUASH;
+      const x = (x0 + x1) / 2;
+      const z = -(front - r - 0.2);
+      const down = live.some((e) => e.stagger > 0);
+      const hit = this.teamJolt.get(t.id);
+      const jolt = hit === undefined ? 0 : Math.max(0, 1 - (this.time - hit) / 0.25);
+      mesh.position.set(x, this.groundHeight(x, z), z - jolt * 0.25);
+      // Staggered carriers drop it: it falls flat on its face toward the castle.
+      mesh.quaternion.copy(this.camera.quaternion).multiply(tmpQ2.setFromAxisAngle(RIGHT, down ? 1.1 : 0));
+      mesh.quaternion.multiply(tmpQ2.setFromAxisAngle(FORWARD, Math.sin(this.time * 50) * jolt * 0.06));
+      mesh.scale.set(w, h, 1);
+    }
+  }
+
+  /** The armoured warlord's plates, horns and pauldrons: meshes in the frame of his billboard. */
+  private buildLordArmour() {
+    const group = new THREE.Group();
+    group.visible = false;
+    const piece = (map: THREE.Texture, w: number, h: number, z: number) => {
+      const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshBasicMaterial({ map, alphaTest: 0.5, alphaToCoverage: true }));
+      m.position.z = z;
+      group.add(m);
+      return m;
+    };
+    const unit = SIZE.warlord * 1.15 * 2;
+    const a = LORD_ART;
+    const cols = this.game.cfg.warlord.plateCols;
+    const rows = this.game.cfg.warlord.plateRows;
+    const cw = (a.right - a.left) / cols;
+    const glow = glowTexture();
+    const plates: THREE.Mesh[] = [];
+    const glows: THREE.Mesh[] = [];
+    for (let row = 0; row < rows; row++) {
+      for (let col = 0; col < cols; col++) {
+        const u = a.left + (col + 0.5) * cw;
+        const v = a.rows[Math.min(row, a.rows.length - 1)];
+        // A bare column glows red: his weak spot, hit it there.
+        const g = new THREE.Mesh(
+          new THREE.PlaneGeometry(cw * unit * 1.6, a.plateH * unit * 1.6),
+          new THREE.MeshBasicMaterial({ map: glow, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, color: '#ff3a1a' }),
+        );
+        g.position.set((u - 0.5) * unit, (1 + ORC_OUTLINE - v) * unit, 0.04);
+        g.visible = false;
+        group.add(g);
+        glows.push(g);
+        const p = piece(this.lordPlateTex[0], cw * unit * a.plateW, a.plateH * unit, 0.08 + row * 0.01);
+        p.position.x = (u - 0.5) * unit;
+        p.position.y = (1 + ORC_OUTLINE - v) * unit;
+        plates.push(p);
+      }
+    }
+    const art = (i: number) => this.chunkArt.plates[i];
+    const place = (list: { u: number; v: number; art: number }[], size: number) =>
+      list.map((d) => {
+        const sa = art(d.art);
+        const m = piece(sa.texture, size * unit * Math.min(1, sa.aspect), (size * unit) / Math.max(1, sa.aspect), 0.06);
+        m.position.x = (d.u - 0.5) * unit;
+        m.position.y = (1 + ORC_OUTLINE - d.v) * unit;
+        return m;
+      });
+    const horns = place(a.horns, 0.12);
+    const pauldrons = place(a.pauldrons, 0.2);
+    this.scene.add(group);
+    this.lordArmour = { group, plates, glows, horns, pauldrons, owner: null, hornsOn: true, pauldronsOn: true };
+  }
+
+  /** Where plate n of the warlord's armour is in the world this frame (null when no armoured warlord is drawn). */
+  private platePoint(n: number): THREE.Vector3 | null {
+    const p = this.lordArmour.plates[n];
+    if (!p || !this.lordArmour.group.visible) return null;
+    this.lordArmour.group.updateMatrixWorld();
+    return p.getWorldPosition(new THREE.Vector3());
+  }
+
+  private updateLordArmour() {
+    const la = this.lordArmour;
+    const pose = this.lordPose;
+    const e = pose?.e;
+    const a = e?.armour;
+    if (!pose || !e || !a) {
+      la.group.visible = false;
+      la.owner = null;
+    } else {
+      if (la.owner !== e) {
+        la.owner = e;
+        la.hornsOn = la.pauldronsOn = true;
+      }
+      la.group.visible = true;
+      la.group.position.copy(pose.pos);
+      la.group.quaternion.copy(pose.quat);
+      la.group.scale.setScalar(pose.scale);
+      const cols = a.cols;
+      const hits = this.game.cfg.warlord.plateHits;
+      la.plates.forEach((m, i) => {
+        const left = a.plates[i];
+        m.visible = left > 0;
+        if (!m.visible) return;
+        const tex = this.lordPlateTex[Math.min(this.lordPlateTex.length - 1, hits - left)];
+        const mat = m.material as THREE.MeshBasicMaterial;
+        if (mat.map !== tex) {
+          mat.map = tex;
+          mat.needsUpdate = true;
+        }
+        // A struck plate glints and rattles.
+        const k = Math.max(0, 1 - (this.time - (this.plateFlash[i] ?? -9)) / 0.2);
+        mat.color.setScalar(1 + k * 1.2);
+        m.rotation.z = Math.sin(this.time * 60) * k * 0.15;
+      });
+      const pulse = 0.55 + 0.45 * Math.sin(this.time * 8);
+      la.glows.forEach((m, i) => {
+        const col = i % cols;
+        const bare = a.plates.every((p, j) => j % cols !== col || p <= 0);
+        m.visible = bare;
+        if (bare) (m.material as THREE.MeshBasicMaterial).opacity = pulse;
+      });
+      // The horns come off with the first row of plates, the pauldrons when he roars.
+      const rows = a.plates.length / cols;
+      const rowGone = [...Array(rows).keys()].some((r) => a.plates.slice(r * cols, (r + 1) * cols).every((p) => p <= 0));
+      if (la.hornsOn && rowGone) {
+        la.hornsOn = false;
+        this.throwPieces(la.horns, LORD_ART.horns);
+      }
+      if (la.pauldronsOn && a.roared) {
+        la.pauldronsOn = false;
+        this.throwPieces(la.pauldrons, LORD_ART.pauldrons);
+      }
+      for (const m of la.horns) m.visible = la.hornsOn;
+      for (const m of la.pauldrons) m.visible = la.pauldronsOn;
+    }
+    // The fallen plates lying in front of him, fading as they crumble.
+    const debris = this.game.debris;
+    while (this.debrisSprites.length < debris.length) {
+      const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.lordPlateTex[2], transparent: true }));
+      sp.renderOrder = 6;
+      this.scene.add(sp);
+      this.debrisSprites.push(sp);
+    }
+    this.debrisSprites.forEach((sp, i) => {
+      const d = debris[i];
+      sp.visible = !!d;
+      if (!d) return;
+      const z = -d.y;
+      const size = d.r * 2.6;
+      sp.scale.set(size, size * 0.68, 1);
+      sp.position.set(d.x, this.groundHeight(d.x, z) + size * 0.3, z);
+      sp.material.rotation = ((d.plate * 37) % 11) / 11 - 0.5;
+      sp.material.opacity = Math.min(1, (d.until - this.game.time) / 2);
+    });
+  }
+
+  /** Armour pieces fly off his billboard, spinning. */
+  private throwPieces(meshes: THREE.Mesh[], list: { art: number }[]) {
+    this.lordArmour.group.updateMatrixWorld();
+    meshes.forEach((m, i) => {
+      const at = m.getWorldPosition(new THREE.Vector3());
+      this.chunk(this.chunkArt.plates[list[i].art], at.x, at.y, at.z + 0.3, 1.2, 13);
+    });
   }
 
   // ---- the siege tower ------------------------------------------------------
@@ -2382,6 +2671,7 @@ export class BattleScene {
     const voxel = this.orcStyle === 'voxel';
     const sets = voxel ? this.voxelOrcs.meshes : this.sprites;
     const lordCounts = this.warlordSprites.map(() => 0);
+    let lordPose: typeof this.lordPose = null;
     const alive = horde.length ? [...this.game.enemies, ...horde] : this.game.enemies;
     for (const k of this.firstSeen.keys()) if (!alive.includes(k)) this.firstSeen.delete(k);
     for (const e of alive) {
@@ -2392,8 +2682,8 @@ export class BattleScene {
       // The warlord is always his painted art, which loses armour as he loses health.
       const lord = e.kind === 'warlord';
       const stage = lord ? this.warlordStage(e) : 0;
-      // A shield orc whose shield is down is drawn as a plain grunt-model orc.
-      const mk: EnemyKind = e.kind === 'shieldOrc' && !e.shielded ? 'grunt' : e.kind;
+      // A shield orc whose shield is down, or whose team carries one big shield, is drawn as a plain grunt-model orc.
+      const mk: EnemyKind = e.kind === 'shieldOrc' && (!e.shielded || e.team) ? 'grunt' : e.kind;
       const mesh = lord ? this.warlordSprites[stage] : sets[mk];
       const i = lord ? lordCounts[stage]++ : counts[mk]++;
       if (i >= mesh.instanceMatrix.count) continue;
@@ -2435,6 +2725,7 @@ export class BattleScene {
       }
       tmpS.multiplyScalar(phase);
       mesh.setMatrixAt(i, tmpM.compose(tmpV, tmpQ, tmpS));
+      if (lord && e.armour) lordPose = { e, pos: tmpV.clone(), quat: tmpQ.clone(), scale: phase };
       // Orcs attacking the wall pulse red, with now and then a puff of dust and sparks at the stones.
       const atWall = e.state === 'wall';
       const rage = atWall ? 0.55 + 0.25 * Math.sin(time * 8 + e.phase * 9) : 1;
@@ -2480,6 +2771,7 @@ export class BattleScene {
       mesh.instanceMatrix.needsUpdate = true;
       if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
     });
+    this.lordPose = lordPose;
     this.shadows.count = shadowN;
     this.shadows.instanceMatrix.needsUpdate = true;
     this.barrels.count = barrels;
@@ -2488,6 +2780,8 @@ export class BattleScene {
 
   /** Which armour stage a warlord is in; plates fly off as he passes each one. */
   private warlordStage(e: Enemy): number {
+    // An armoured one is his bare art with the armour drawn over it (updateLordArmour).
+    if (e.armour) return this.warlordSprites.length - 1;
     const frac = e.hp / e.maxHp;
     const stage = Math.min(this.warlordSprites.length - 1, WARLORD_STAGE_AT.filter((at) => frac <= at).length);
     const was = this.lordStage.get(e) ?? 0;

@@ -490,6 +490,64 @@ export class Sounds {
   }
 
   /** A wooden thunk when a defender is set down. */
+  /**
+   * A ball off a shield team's big wooden shield: a dull wooden-iron THUNK, not the castle's ringing clang.
+   * A low knock, a dark smack of planks and a short dead ring of the iron bands. splinter: it gives way, with cracking.
+   */
+  woodThunk(splinter: boolean) {
+    const ctx = this.ctx;
+    if (!ctx || this.muted) return;
+    const now = ctx.currentTime;
+    const out = ctx.createGain();
+    out.gain.value = splinter ? 0.55 : 0.4;
+    out.connect(ctx.destination);
+    const pitch = 0.9 + Math.random() * 0.2;
+    this.thud(now, out, 140 * pitch, 55, 0.16, 1);
+    this.smack(now, out, 420 * pitch, 0.08, 1);
+    this.plate(now, out, 240 * pitch, 0.18, 0.35);
+    if (!splinter) return;
+    // Planks cracking apart.
+    for (let i = 0; i < 6; i++) this.smack(now + 0.03 + i * 0.035 + Math.random() * 0.02, out, 1500 + Math.random() * 1500, 0.03, 0.7);
+  }
+
+  /** The warlord's roar at half health: a long, deep, growling bellow. */
+  roar() {
+    const ctx = this.ctx;
+    if (!ctx || this.muted) return;
+    const now = ctx.currentTime;
+    const len = 1.3;
+    const o = ctx.createOscillator();
+    o.type = 'sawtooth';
+    o.frequency.setValueAtTime(70, now);
+    o.frequency.exponentialRampToValueAtTime(95, now + 0.25);
+    o.frequency.exponentialRampToValueAtTime(55, now + len);
+    // A growl: the level shudders about 28 times a second.
+    const growl = ctx.createOscillator();
+    growl.frequency.value = 28;
+    const depth = ctx.createGain();
+    depth.gain.value = 0.35;
+    const out = ctx.createGain();
+    out.gain.setValueAtTime(0.0001, now);
+    out.gain.exponentialRampToValueAtTime(0.5, now + 0.08);
+    out.gain.setValueAtTime(0.5, now + len * 0.6);
+    out.gain.exponentialRampToValueAtTime(0.0001, now + len);
+    growl.connect(depth).connect(out.gain);
+    out.connect(ctx.destination);
+    for (const [freq, level] of [[420, 1], [900, 0.5]] as const) {
+      const band = ctx.createBiquadFilter();
+      band.type = 'bandpass';
+      band.frequency.value = freq;
+      band.Q.value = 3;
+      const g = ctx.createGain();
+      g.gain.value = level;
+      o.connect(band).connect(g).connect(out);
+    }
+    o.start(now);
+    growl.start(now);
+    o.stop(now + len + 0.05);
+    growl.stop(now + len + 0.05);
+  }
+
   thunk() {
     const ctx = this.ctx;
     if (!ctx || this.muted) return;

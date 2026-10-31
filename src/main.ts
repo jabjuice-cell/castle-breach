@@ -563,8 +563,8 @@ const ENEMY_TRICKS: Partial<Record<EnemyKind, string>> = {
   rider: 'boar riders zig-zag down the edges',
   orcCatapult: 'catapults lob boulders: block them to get balls',
   ogre: 'ogres take a beating and stun their row when they fall',
-  warlord: 'the Warlord bats balls back and hurries his orcs',
-  shieldOrc: 'Shields stop balls head-on. Bank a shot around the side or behind.',
+  warlord: 'the Warlord wears 14 armour plates: break a column to reach his core, and watch his club',
+  shieldOrc: 'Big shields stop balls head-on but crack: 5 hits or 2 heaves smash one. Or bank a shot round the side.',
   drummer: 'Kill the drummer and the formation breaks: shields drop and the block scatters.',
 };
 
@@ -1662,6 +1662,10 @@ const IMPACT_PAUSE = {
   bellVolley: 0.08,
   rampLand: 0.06,
   bossKilled: 0.2,
+  /** A shield team's shield splinters; a row of the warlord's armour comes off (the brief's 0.3 s set piece). */
+  shieldBreak: 0.06,
+  lordStage: 0.3,
+  roar: 0.12,
 };
 function frame(now: number) {
   const dt = Math.min(0.1, (now - last) / 1000);
@@ -1770,7 +1774,43 @@ function frame(now: number) {
           }
           break;
         case 'clang':
+          if (ev.team === undefined) sounds.clang(false);
+          else {
+            sounds.woodThunk(false);
+            floater('THUNK!', ev.x, ev.y + 1.2, 'bank', 0.6);
+          }
+          break;
+        case 'shieldBreak':
+          hitStop = Math.max(hitStop, IMPACT_PAUSE.shieldBreak);
+          sounds.woodThunk(true);
+          floater('SHIELD SMASHED!', ev.x, ev.y + 1.5, 'smash', 1);
+          break;
+        case 'plateHit':
+          sounds.clink();
+          break;
+        case 'plateBroken':
           sounds.clang(false);
+          break;
+        case 'lordStage':
+          hitStop = Math.max(hitStop, IMPACT_PAUSE.lordStage);
+          sounds.crunch(40);
+          floater(ev.row === 0 ? 'HIS BELT SNAPPED!' : 'ARMOUR CRACKED OPEN!', ev.x, ev.y + 3, 'smash', 1.6);
+          break;
+        case 'coreHit':
+          floater(`-${Math.round(ev.damage)}`, ev.x, ev.y + 1.5, 'chain hot', 0.7);
+          break;
+        case 'club':
+          sounds.thunk();
+          floater('CLUB!', ev.x, ev.y + 3, 'trick', 0.8);
+          break;
+        case 'roar':
+          hitStop = Math.max(hitStop, IMPACT_PAUSE.roar);
+          sounds.roar();
+          floater('ROAAAR!', ev.x, ev.y + 3.5, 'smash', 1.6);
+          break;
+        case 'debrisHit':
+          sounds.clink();
+          floater('CLANK!', ev.x, ev.y + 1.2, 'bank', 0.6);
           break;
         case 'formationBreak':
           sounds.thunk();

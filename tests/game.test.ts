@@ -2375,3 +2375,171 @@ describe('royal ball speed (31 Oct)', () => {
     expect(Math.hypot(b.vx, b.vy)).toBeLessThanOrEqual(game.cfg.balls.maxSpeed + 1e-6);
   });
 });
+
+describe('shield teams and the armoured warlord (31 Oct)', () => {
+  function teamGame(count: number, cfg = quiet()) {
+    const game = battle(1, cfg);
+    game.plan.groups = [{ time: 0, lane: 2, x: 0, shape: 'line', members: [{ kind: 'shieldOrc', count }] }];
+    game.step();
+    bringDown(game);
+    return game;
+  }
+
+  /** Moves the blocks that just came on down into the ball's reach. */
+  function bringDown(game: Game, y = 20) {
+    for (const b of game.blocks) {
+      b.y += y - game.cfg.field.spawnY;
+      for (const e of b.members) {
+        e.x = b.x + e.slotX;
+        e.y = b.y + e.slotY;
+      }
+    }
+  }
+
+  /** Fires a ball straight at an orc from the wall side and lets it bounce off. */
+  function shoot(game: Game, e: Enemy, over: Partial<Ball> = {}): Ball {
+    game.balls = [];
+    const b = ball(game, { x: e.x, y: e.y - game.cfg[e.kind].radius - 0.6, vx: 0, vy: 20, ...over });
+    run(game, 0.05);
+    return b;
+  }
+
+  it("a block's shield orcs share big shields, in even teams of 3 (5 later on)", () => {
+    const three = teamGame(3).enemies.filter((e) => e.kind === 'shieldOrc');
+    expect(three).toHaveLength(3);
+    expect(three.every((e) => e.shielded && e.team === three[0].team)).toBe(true);
+    const four = teamGame(4).enemies.filter((e) => e.kind === 'shieldOrc');
+    expect(new Set(four.map((e) => e.team)).size).toBe(2);
+    const cfg = quiet();
+    cfg.shieldTeam.bigFromWave = 1;
+    const five = teamGame(5, cfg).enemies.filter((e) => e.kind === 'shieldOrc');
+    expect(new Set(five.map((e) => e.team)).size).toBe(1);
+  });
+
+  it('front hits crack the shield without hurting anyone, and the fifth splinters it', () => {
+    const game = teamGame(3);
+    const team = game.enemies.filter((e) => e.kind === 'shieldOrc');
+    const mid = team.sort((p, q) => p.x - q.x)[1];
+    for (let i = 1; i <= 4; i++) {
+      const b = shoot(game, mid);
+      expect(b.vy).toBeLessThan(0);
+      expect(mid.team!.hits).toBe(i);
+      expect(game.events.some((ev) => ev.type === 'clang' && ev.cracked === i / 5)).toBe(true);
+    }
+    expect(team.every((e) => e.hp === e.maxHp && e.shielded)).toBe(true);
+    const b = shoot(game, mid);
+    expect(mid.team!.broken).toBe(true);
+    expect(team.every((e) => !e.shielded)).toBe(true);
+    expect(b.combo).toBe(game.cfg.shieldTeam.breakCombo);
+    expect(game.events.some((ev) => ev.type === 'shieldBreak')).toBe(true);
+    // Now they're plain bricks.
+    shoot(game, mid);
+    expect(mid.hp).toBeLessThan(mid.maxHp);
+  });
+
+  it("two heaves break it, and a heave doesn't go through", () => {
+    const game = teamGame(3);
+    const mid = game.enemies.filter((e) => e.kind === 'shieldOrc').sort((p, q) => p.x - q.x)[1];
+    const b = shoot(game, mid, { lines: 1, heaved: true });
+    expect(b.lines).toBe(0);
+    expect(b.vy).toBeLessThan(0);
+    expect(mid.team!.broken).toBe(false);
+    shoot(game, mid, { lines: 1, heaved: true });
+    expect(mid.team!.broken).toBe(true);
+  });
+
+  it('a carrier knocked flat by a falling ogre has its shield down', () => {
+    const game = teamGame(3);
+    const mid = game.enemies.filter((e) => e.kind === 'shieldOrc').sort((p, q) => p.x - q.x)[1];
+    mid.stagger = 2;
+    shoot(game, mid);
+    expect(mid.hp).toBeLessThan(mid.maxHp);
+    expect(mid.team!.hits).toBe(0);
+  });
+
+  function lordGame() {
+    const game = battle();
+    game.plan.groups = [{ time: 0, lane: 2, x: 0, shape: 'rect', members: [{ kind: 'warlord', count: 1 }] }];
+    game.step();
+    bringDown(game, 30);
+    const lord = game.enemies.find((e) => e.kind === 'warlord')!;
+    return { game, lord };
+  }
+
+  it('comes with 14 plates and an honour guard of two shield teams', () => {
+    const { game, lord } = lordGame();
+    expect(lord.armour!.plates).toEqual(new Array(14).fill(3));
+    const guard = game.enemies.filter((e) => e.kind === 'shieldOrc');
+    expect(guard).toHaveLength(6);
+    expect(new Set(guard.map((e) => e.team)).size).toBe(2);
+    expect(guard.every((e) => e.y < lord.y)).toBe(true);
+  });
+
+  it('only a bare column lets a ball through to his core, for its damage times the combo multiplier', () => {
+    const { game, lord } = lordGame();
+    game.enemies = game.enemies.filter((e) => e === lord || e.hp > 1e6);
+    const a = lord.armour!;
+    a.clubAt = Infinity;
+    const col = game.armourColumn(lord, lord.x);
+    for (let i = 0; i < 6; i++) {
+      shoot(game, lord);
+      expect(lord.hp).toBe(lord.maxHp);
+    }
+    expect(a.plates[col]).toBe(0);
+    expect(a.plates[a.cols + col]).toBe(0);
+    expect(a.plates.filter((p) => p === 3)).toHaveLength(12);
+    shoot(game, lord, { combo: 10 });
+    // 10 damage at 2x for a combo of 10 (11 after this hit counts, but the multiplier is read before it lands).
+    expect(lord.maxHp - lord.hp).toBeCloseTo(game.cfg.balls.damage * (1 + 11 * game.cfg.balls.comboStep), 5);
+  });
+
+  it('a heave knocks a plate clean off, and it lands in front of him as a bumper', () => {
+    const { game, lord } = lordGame();
+    game.enemies = game.enemies.filter((e) => e === lord || e.hp > 1e6);
+    lord.armour!.clubAt = Infinity;
+    shoot(game, lord, { lines: 1, heaved: true });
+    expect(lord.armour!.plates.filter((p) => p === 0)).toHaveLength(1);
+    expect(game.debris).toHaveLength(1);
+    const d = game.debris[0];
+    expect(d.y).toBeLessThan(lord.y);
+    game.balls = [];
+    const b = ball(game, { x: d.x, y: d.y - d.r - 0.6, vx: 0, vy: 20 });
+    run(game, 0.05);
+    expect(b.vy).toBeLessThan(0);
+    expect(b.banked).toBe(true);
+    // It crumbles after a while.
+    run(game, game.cfg.warlord.debrisSeconds);
+    expect(game.debris).toHaveLength(0);
+  });
+
+  it('his club bats one ball back every 4 s, not every ball', () => {
+    const { game, lord } = lordGame();
+    game.enemies = game.enemies.filter((e) => e === lord || e.hp > 1e6);
+    lord.armour!.clubAt = 0;
+    shoot(game, lord);
+    expect(game.events.filter((ev) => ev.type === 'club')).toHaveLength(1);
+    expect(lord.armour!.clubAt).toBeCloseTo(game.time + game.cfg.warlord.clubSeconds, 0);
+    game.events.length = 0;
+    shoot(game, lord);
+    expect(game.events.some((ev) => ev.type === 'club')).toBe(false);
+  });
+
+  it('plates soak other damage; at half health he roars, and then his back takes double', () => {
+    const { game, lord } = lordGame();
+    game.enemies = game.enemies.filter((e) => e === lord || e.hp > 1e6);
+    const a = lord.armour!;
+    a.clubAt = Infinity;
+    lord.hp -= 100;
+    game.step();
+    expect(lord.maxHp - lord.hp).toBeCloseTo(100 * (1 - game.cfg.warlord.plateCover), 5);
+    a.plates.fill(0);
+    lord.hp = lord.maxHp * 0.49;
+    game.step();
+    expect(a.roared).toBe(true);
+    const before = lord.hp;
+    game.balls = [];
+    ball(game, { x: lord.x, y: lord.y + game.cfg.warlord.radius + 0.6, vx: 0, vy: -20 });
+    run(game, 0.05);
+    expect(before - lord.hp).toBeCloseTo(game.cfg.balls.damage * game.cfg.warlord.backMult * (1 + game.cfg.balls.comboStep), 5);
+  });
+});
