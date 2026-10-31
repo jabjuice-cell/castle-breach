@@ -12,6 +12,7 @@ import ogrePortrait from './assets/sprites/enemy-ogre.webp';
 import warlordPortrait from './assets/sprites/enemy-warlord.webp';
 import barrelPortrait from './assets/sprites/powder-barrel.webp';
 import queenUrl from './assets/characters/queen.webp';
+import logoUrl from './assets/ui/logo.webp';
 import queenAngryUrl from './assets/characters/queen-angry.webp';
 import { queenAdvice, queenCross, queenVerdict } from './queen';
 import { BattleScene, CAPSULE_LOOK, type PlanPreview, QUALITIES, type Quality } from './render/scene';
@@ -37,6 +38,7 @@ const icon = (name: string) => `<img class="ico" src="${ICONS[name]}" alt="" />`
 document.querySelectorAll<HTMLImageElement>('img[data-icon]').forEach((img) => (img.src = ICONS[img.dataset.icon!]));
 document.documentElement.style.setProperty('--wall-states', `url(${wallStatesUrl})`);
 document.querySelectorAll<HTMLImageElement>('img[data-queen]').forEach((img) => (img.src = queenUrl));
+document.querySelectorAll<HTMLImageElement>('img[data-logo]').forEach((img) => (img.src = logoUrl));
 
 /** Per-viewer settings kept in the browser; the game works the same without them. */
 function loadSetting(key: string): string | null {

@@ -214,6 +214,7 @@
       .overlay { position: fixed; inset: 0; display: grid; place-items: center; background: rgba(20, 16, 12, 0.55); pointer-events: auto; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
       .scroll { background: var(--parchment); color: var(--ink); max-width: 460px; border-radius: 6px; padding: 26px 28px; border: 3px solid var(--ink); box-shadow: 0 8px 0 rgba(0, 0, 0, 0.35); }
       .scroll h1 { font-family: var(--display); font-weight: 800; font-size: 54px; margin: 0; line-height: 0.95; }
+      .scroll h1 .logo { display: block; width: min(420px, 100%); height: auto; margin: -6px auto 4px; }
       .scroll .sub { margin: 6px 0 16px; font-size: 15px; }
       .scroll ul { margin: 0 0 18px; padding-left: 18px; display: grid; gap: 6px; font-size: 14px; line-height: 1.4; }
       .scroll kbd { background: var(--ink); color: var(--parchment); }
@@ -279,7 +280,7 @@
 
     <div class="overlay" id="intro">
       <div class="scroll">
-        <h1>Hold the Wall!</h1>
+        <h1><img data-logo class="logo" alt="Hold the Wall!" /></h1>
         <p class="sub">The orcs are coming. They are not clever, but there are a great many of them, and they march in neat blocks like bricks.</p>
         <ul>
           <li>Move the mouse to slide the great royal shield along the wall. Every boulder the orc catapults throw that you block bounces back as one of <b>your</b> balls. The gold Royal Ball is yours from the start: click to serve it.</li>
