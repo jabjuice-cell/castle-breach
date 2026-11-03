@@ -5,7 +5,7 @@ export const ENEMY_KINDS = ['grunt', 'chucker', 'barrel', 'runner', 'rider', 'or
 export type EnemyKind = (typeof ENEMY_KINDS)[number];
 
 /** The outline a block of orcs keeps as it marches: the bricks of the Breakout wall. */
-export const SHAPES = ['rect', 'wedge', 'column', 'line', 'pins'] as const;
+export const SHAPES = ['rect', 'wedge', 'column', 'line', 'pins', 'bricks'] as const;
 export type Shape = (typeof SHAPES)[number];
 
 /** One marching block: a formation of orcs that arrives together and keeps its shape. */
@@ -17,6 +17,8 @@ export interface SpawnGroup {
   shape: Shape;
   /** Front ranks first: catapults always go at the back. */
   members: { kind: EnemyKind; count: number }[];
+  /** A brick wall: orcs per row (its rows are count / cols). */
+  cols?: number;
 }
 
 export interface WavePlan {
@@ -39,10 +41,34 @@ export function blockCount(n: number, cfg: Config): number {
   return Math.min(w.blocksMax, w.blocksBase + Math.floor((n - 1) / w.blocksEvery));
 }
 
-/** Formation offsets for n orcs, front rank first: dy grows away from the wall. */
-export function formation(shape: Shape, n: number, spacing: number): { dx: number; dy: number }[] {
+/** Gap between orcs in a brick wall: shoulder to shoulder, too tight for a ball to slip through. */
+export const BRICK_SPACING = 1.05;
+
+/** A brick-wall wave: every brickWall.every-th wave from brickWall.fromWave. */
+export function isBrickWave(n: number, cfg: Config): boolean {
+  const b = cfg.brickWall;
+  return n >= b.fromWave && (n - b.fromWave) % b.every === 0;
+}
+
+/** Helmet layers for a brick-wall row (0 = front): bare at the front, helmets behind, iron at the back. */
+export function brickHelmet(row: number, rows: number): number {
+  return Math.min(2, Math.floor((row * 3) / Math.max(1, rows)));
+}
+
+/** Formation offsets for n orcs, front rank first: dy grows away from the wall. cols: a brick wall's row length. */
+export function formation(shape: Shape, n: number, spacing: number, cols = 0): { dx: number; dy: number }[] {
   const out: { dx: number; dy: number }[] = [];
   if (n <= 0) return out;
+  if (shape === 'bricks') {
+    // Straight rows, shoulder to shoulder; a short last row is centred.
+    const per = Math.max(1, cols || Math.ceil(Math.sqrt(n * 4)));
+    for (let i = 0; i < n; i++) {
+      const row = Math.floor(i / per);
+      const inRow = Math.min(per, n - row * per);
+      out.push({ dx: ((i % per) - (inRow - 1) / 2) * BRICK_SPACING, dy: row * BRICK_SPACING });
+    }
+    return out;
+  }
   if (shape === 'wedge') {
     // The point leads: row r holds 2r + 1 orcs.
     for (let r = 0; out.length < n; r++) {
@@ -60,15 +86,15 @@ export function formation(shape: Shape, n: number, spacing: number): { dx: numbe
     }
     return out;
   }
-  const cols = shape === 'column'
+  const across = shape === 'column'
     ? Math.max(2, Math.ceil(Math.sqrt(n / 2.5)))
     : shape === 'line'
       ? Math.max(3, Math.ceil(n / 2))
       : Math.max(3, Math.ceil(Math.sqrt(n * 2.2)));
   for (let i = 0; i < n; i++) {
-    const row = Math.floor(i / cols);
-    const inRow = Math.min(cols, n - row * cols);
-    out.push({ dx: ((i % cols) - (inRow - 1) / 2) * spacing, dy: row * spacing * 0.9 });
+    const row = Math.floor(i / across);
+    const inRow = Math.min(across, n - row * across);
+    out.push({ dx: ((i % across) - (inRow - 1) / 2) * spacing, dy: row * spacing * 0.9 });
   }
   return out;
 }
@@ -115,6 +141,21 @@ export function planWave(n: number, seed: number, cfg: Config): WavePlan {
 
   const duration = Math.min(w.spawnMax, w.spawnBase + w.spawnPerWave * n);
   const groups: SpawnGroup[] = [];
+  // A brick-wall wave: a wide wall of grunts leads, made from the wave's grunts plus a few extra.
+  // The rest of the blocks keep at least a handful each. Its own rng stream, so other waves are unchanged.
+  if (isBrickWave(n, cfg)) {
+    const bw = cfg.brickWall;
+    const rows = Math.min(bw.maxRows, bw.minRows + Math.floor((n - bw.fromWave) / bw.every));
+    const maxCols = Math.floor((cfg.field.halfWidth * 2 * bw.width) / BRICK_SPACING);
+    const spare = Math.max(0, totals.grunt - 4 * blocks) + bw.extraGrunts;
+    const cols = Math.min(maxCols, Math.floor(spare / rows));
+    if (cols >= 6) {
+      const count = cols * rows;
+      const taken = Math.min(count, Math.max(0, totals.grunt - 4 * blocks));
+      totals.grunt -= taken;
+      groups.push({ time: 0, lane: Math.floor(cfg.wall.segments / 2), x: 0, shape: 'bricks', members: [{ kind: 'grunt', count }], cols });
+    }
+  }
   // Foot orcs are split across the blocks; catapults stand at the back of them.
   const split = (total: number, i: number) => Math.floor((total * (i + 1)) / blocks) - Math.floor((total * i) / blocks);
   // Five lanes, one per wall section. Foot blocks keep to the path down the middle three;
@@ -150,7 +191,7 @@ export function planWave(n: number, seed: number, cfg: Config): WavePlan {
     if (members.length === 0) continue;
     const picked = (['rect', 'wedge', 'column'] as const)[rng.int(0, 2)];
     const shape: Shape = pins[i] ? 'pins' : picked;
-    const time = i === 0 ? 0 : rng.range(0, duration);
+    const time = i === 0 && groups.length === 0 ? 0 : rng.range(i === 0 ? 3 : 0, duration);
     groups.push({ time, lane: lanes[i], x: laneX(lanes[i]) + rng.range(-1.5, 1.5), shape, members });
   }
   // Goblin runners sprint down the side lanes in small loose packs.
@@ -176,6 +217,7 @@ export function planWave(n: number, seed: number, cfg: Config): WavePlan {
   }
   if (totals.warlord && !tower) groups.push({ time: duration * 0.4, lane: Math.floor(segs / 2), x: 0, shape: 'rect', members: [{ kind: 'warlord', count: 1 }] });
   groups.sort((a, b) => a.time - b.time);
+  totals.grunt = groups.reduce((s, g) => s + g.members.reduce((t, m) => t + (m.kind === 'grunt' ? m.count : 0), 0), 0);
   return { number: n, groups, totals, boss, tower };
 }
 

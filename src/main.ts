@@ -13,7 +13,7 @@ import warlordPortrait from './assets/sprites/enemy-warlord.webp';
 import barrelPortrait from './assets/sprites/powder-barrel.webp';
 import queenUrl from './assets/characters/queen.webp';
 import queenAngryUrl from './assets/characters/queen-angry.webp';
-import { queenAdvice, queenCross, queenVerdict } from './queen';
+import { queenAdvice, queenCross, queenPerfect, queenVerdict } from './queen';
 import { BattleScene, CAPSULE_LOOK, type PlanPreview, QUALITIES, type Quality } from './render/scene';
 import { Sounds } from './render/sound';
 import { defenderPortraits } from './render/portraits';
@@ -52,6 +52,13 @@ function saveSetting(key: string, value: string) {
   } catch {
     // Private windows can refuse storage; the setting just won't stick.
   }
+}
+
+/** The best score per level, cached so the HUD doesn't read storage every frame. */
+const bestScores = new Map<number, number>();
+function bestScore(level: number): number {
+  if (!bestScores.has(level)) bestScores.set(level, Number(loadSetting(`best-${level}`)) || 0);
+  return bestScores.get(level)!;
 }
 
 const QUALITY_NAMES: Record<Quality, string> = { low: 'Low', medium: 'Medium', high: 'High' };
@@ -597,6 +604,7 @@ const hud = {
   phase: $('phaseLabel'),
   gold: $('gold'),
   kills: $('kills'),
+  score: $('score'),
   renown: $('renown'),
   heaveText: $('heaveText'),
   heaveBar: $('heaveBar'),
@@ -726,6 +734,7 @@ function addFloater(text: string, x: number, y: number, cls: string, life: numbe
 const bowlPopups = new Map<number, ReturnType<typeof addFloater>>();
 const BOWL_WORDS = ['', '', 'DOUBLE!', 'TRIPLE!', 'ORC BOWLING!'];
 let lastBowlSound = 0;
+let lastHelmetSound = 0;
 let lastVoice = 0;
 function updateFloaters(dt: number) {
   for (let i = floaters.length - 1; i >= 0; i--) {
@@ -770,6 +779,8 @@ function updateHud(dt: number) {
     : 'Breached';
   hud.gold.textContent = `${Math.floor(game.gold)} gold`;
   hud.kills.textContent = `${game.kills} slain`;
+  const scoreText = `Score ${game.score.toLocaleString()} · Best ${Math.max(bestScore(game.level), game.score).toLocaleString()}`;
+  if (hud.score.textContent !== scoreText) hud.score.textContent = scoreText;
   hud.renown.textContent = `${game.renownEarned} Renown`;
 
   // The heave: a bar that refills after each heave.
@@ -788,6 +799,8 @@ function updateHud(dt: number) {
   const left = (until: number) => Math.ceil(until - game.time);
   if (game.time < game.effects.banner) fx.push(`${CAPSULE_LOOK.banner.emoji} ${left(game.effects.banner)}s`);
   if (game.time < game.effects.flask) fx.push(`${CAPSULE_LOOK.flask.emoji} ${left(game.effects.flask)}s`);
+  if (game.time < game.effects.crossbow) fx.push(`${CAPSULE_LOOK.crossbow.emoji} ${left(game.effects.crossbow)}s`);
+  if (game.time < game.effects.fireball) fx.push(`${CAPSULE_LOOK.fireball.emoji} ${left(game.effects.fireball)}s`);
   if (game.time < game.effects.trick) fx.push(`${CAPSULE_LOOK.trick.emoji} ${left(game.effects.trick)}s`);
   if (game.stickyCatches > 0) fx.push(`${CAPSULE_LOOK.sticky.emoji} ×${game.stickyCatches}`);
   const fxText = fx.join('  ');
@@ -1514,6 +1527,16 @@ function showEnd(won: boolean, segment = 0) {
     progress.levelsBeaten = 0;
   }
   saveProgress();
+  // The level's best score, kept whether it was won or lost.
+  const newBest = game.score > bestScore(game.level);
+  if (newBest) {
+    bestScores.set(game.level, game.score);
+    saveSetting(`best-${game.level}`, String(game.score));
+  }
+  $('lostScore').textContent = `Score ${game.score.toLocaleString()} · Best ${bestScore(game.level).toLocaleString()}${newBest ? ' · New best!' : ''}`;
+  $('lostStars').textContent = won ? '★'.repeat(game.stars) + '☆'.repeat(3 - game.stars) : '';
+  $('lostStars').hidden = !won;
+  $('lostExtras').textContent = `${game.perfectWaves} perfect waves · ${game.rowClears} rows cleared · ${game.breakthroughs} breakthroughs · ${game.coinsCaught} coins caught`;
   $('lostWaves').textContent = String(game.wavesSurvived);
   $('lostKills').textContent = String(game.kills);
   $('lostCombo').textContent = String(game.bestCombo);
@@ -1808,6 +1831,39 @@ function frame(now: number) {
           break;
         case 'obstacle':
           if (game.obstacles[ev.index]?.placed) sounds.thunk();
+          break;
+        case 'helmetPop': {
+          const now = performance.now();
+          if (now - lastHelmetSound > 80) {
+            lastHelmetSound = now;
+            sounds.clang(false);
+          }
+          break;
+        }
+        case 'rowClear':
+          floater(`ROW CLEAR! +${ev.gold}`, ev.x, ev.y, 'smash', 1.3);
+          sounds.chime(2);
+          break;
+        case 'coin':
+          floater(`+${ev.gold}`, ev.x, ev.y + 1, 'good', 0.9);
+          sounds.coin();
+          break;
+        case 'breakthrough':
+          showBanner('BREAKTHROUGH!');
+          floater(`+${ev.gold}`, ev.x, ev.y, 'smash', 1.3);
+          sounds.boom();
+          hitStop = Math.max(hitStop, 0.06);
+          break;
+        case 'mason':
+          floater('Wall patched', ev.x, 2, 'good', 1.2);
+          sounds.thunk();
+          break;
+        case 'shieldBolts':
+          sounds.ballista();
+          break;
+        case 'perfectWave':
+          toast(`PERFECT WAVE! +${ev.gold} gold · ${queenPerfect(game)}`);
+          toastTimer = 3.5;
           break;
         case 'battleReady':
           sounds.horn();

@@ -97,3 +97,14 @@ export function queenVerdict(game: Game, won: boolean): string {
   if (game.bestCombo >= 10) return `A combo of ${game.bestCombo}! The orcs looked quite dizzy.`;
   return won ? 'Acceptable. I have had worse afternoons.' : 'Chin up. Walls are only stones, and stones are cheap.';
 }
+
+/** Her smug remark on a Perfect Wave, picked by wave number. */
+export function queenPerfect(game: Game): string {
+  const lines = [
+    'Not a scratch. I shall pretend I expected nothing less.',
+    'Not one stone chipped. The masons are weeping with boredom.',
+    'Flawless, darling. Do try not to let it go to your head.',
+    'I barely had to look up from my tea.',
+  ];
+  return lines[game.wave % lines.length];
+}

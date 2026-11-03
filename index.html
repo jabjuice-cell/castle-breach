@@ -218,6 +218,7 @@
       .scroll ul { margin: 0 0 18px; padding-left: 18px; display: grid; gap: 6px; font-size: 14px; line-height: 1.4; }
       .scroll kbd { background: var(--ink); color: var(--parchment); }
       .scroll .stats { display: flex; gap: 20px; margin: 10px 0 18px; font-size: 15px; }
+      #lostStars { font-size: 36px; color: var(--gold); letter-spacing: 6px; }
       .scroll .stats b { display: block; font-family: var(--display); font-size: 32px; }
       .tag { font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; opacity: 0.7; margin-top: 14px; }
       .topright { display: flex; gap: 8px; align-items: flex-start; flex-wrap: wrap; justify-content: flex-end; }
@@ -243,7 +244,7 @@
       <div class="top">
         <div class="panel wave"><span id="waveLabel">Wave 1</span><small id="phaseLabel">Get ready</small></div>
         <div class="topright">
-          <div class="panel purse"><span class="g"><img class="ico" data-icon="gold" alt="" /><span id="gold">0 gold</span></span><span><img class="ico" data-icon="renown" alt="" /><span id="renown">0 Renown</span></span><span id="kills">0 slain</span></div>
+          <div class="panel purse"><span class="g"><img class="ico" data-icon="gold" alt="" /><span id="gold">0 gold</span></span><span><img class="ico" data-icon="renown" alt="" /><span id="renown">0 Renown</span></span><span id="kills">0 slain</span><span id="score">Score 0</span></div>
           <button id="sound" type="button">Sound: On</button>
           <button id="shake" type="button" title="Camera shake on impacts">Shake: On</button>
           <button id="quality" type="button" title="Graphics detail: lower it if the game stutters">Detail: Medium</button>
@@ -310,6 +311,9 @@
           <div><b id="lostPerfects">0</b>Perfect Returns</div>
           <div><b id="lostGold">0</b>gold earned</div>
         </div>
+        <p class="sub" id="lostScore"></p>
+        <p class="sub" id="lostStars"></p>
+        <p class="sub" id="lostExtras"></p>
         <p class="sub"><i id="lostQueen"></i></p>
         <p class="sub" id="bank"></p>
         <button id="again" type="button">To the town</button>

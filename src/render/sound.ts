@@ -231,6 +231,15 @@ export class Sounds {
     for (let i = 0; i < 2 + level; i++) this.tone(notes[i % notes.length], now + i * 0.07, 0.35, 0.12, 'triangle');
   }
 
+  /** A coin caught: a short bright two-note ping. */
+  coin() {
+    const ctx = this.ctx;
+    if (!ctx || this.muted) return;
+    const now = ctx.currentTime;
+    this.tone(1319, now, 0.12, 0.1, 'triangle');
+    this.tone(1976, now + 0.06, 0.25, 0.1, 'triangle');
+  }
+
   /** A bell ring: a bright strike with a bronze overtone, a step higher for each bell of the set already rung. */
   bell(n: number) {
     const ctx = this.ctx;

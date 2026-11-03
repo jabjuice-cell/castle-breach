@@ -26,7 +26,7 @@ function run(game: Game, seconds: number) {
 function enemy(over: Partial<Enemy>): Enemy {
   return {
     kind: 'grunt', x: 0, y: 10, vx: 0, vy: 0, hp: 10, maxHp: 10, state: 'march', standY: 25, timer: 99, phase: 0,
-    burn: 0, burnTime: 0, rally: 1, foe: null, block: null, slotX: 0, slotY: 0, goldMult: 1, lastBall: -1, stagger: 0, blasted: false, shielded: false, bowl: null, pinned: 0,
+    burn: 0, burnTime: 0, rally: 1, foe: null, block: null, slotX: 0, slotY: 0, goldMult: 1, lastBall: -1, stagger: 0, blasted: false, shielded: false, bowl: null, pinned: 0, helmet: 0, brickRow: -1,
     ...over,
   };
 }
@@ -72,7 +72,7 @@ function battle(seed = 1, cfg = quiet()) {
 function ball(game: Game, over: Partial<Ball>): Ball {
   const b: Ball = {
     id: 999, kind: 'claimed', x: 0, y: 10, vx: 0, vy: -20, primary: false, power: 1, combo: 0, behind: false, heaved: false, perfect: false,
-    stuck: false, stuckOffset: 0, stuckAt: 0, hitShieldAt: -99, born: 0, passing: null, lines: 0, milestone: 0, banked: false, spin: 0, ...over,
+    stuck: false, stuckOffset: 0, stuckAt: 0, hitShieldAt: -99, born: 0, passing: null, lines: 0, milestone: 0, banked: false, spin: 0, breakHits: 0, ...over,
   };
   game.balls.push(b);
   return b;
@@ -1039,6 +1039,7 @@ describe('run loop', () => {
 
   it('pays kill gold, wave-clear gold and Renown', () => {
     const game = new Game(1, quiet());
+    game.cfg.score.perfectWaveBonus = 0;
     game.endSetup();
     game.plan.groups = [];
     game.callEarly();
@@ -2353,5 +2354,142 @@ describe('town plot packing', () => {
     const { layout } = autoPack(meta);
     expect(layout).toHaveLength(PIECE_IDS.length);
     expect(activePairs(layout).filter((p) => p.kind === 'clash')).toEqual([]);
+  });
+});
+
+describe('more Breakout', () => {
+  it('plans a brick wall every 4th wave from wave 3: wide rows of grunts', () => {
+    const cfg = makeConfig();
+    for (const n of [1, 2, 4, 5, 6]) expect(planWave(n, 1, cfg).groups.some((g) => g.shape === 'bricks')).toBe(false);
+    for (const n of [3, 7, 11]) {
+      const wall = planWave(n, 1, cfg).groups.find((g) => g.shape === 'bricks')!;
+      expect(wall).toBeDefined();
+      const rows = wall.members[0].count / wall.cols!;
+      expect(rows).toBeGreaterThanOrEqual(cfg.brickWall.minRows);
+      expect(rows).toBeLessThanOrEqual(cfg.brickWall.maxRows);
+      expect(wall.cols! * 1.05).toBeGreaterThan(cfg.field.halfWidth);
+    }
+  });
+
+  it('brick-wall helmets each soak a ball hit, and clearing a row pays ROW CLEAR!', () => {
+    const game = battle();
+    game.plan.groups = [{ time: 0, lane: 2, x: 0, shape: 'bricks', members: [{ kind: 'grunt', count: 9 }], cols: 3 }];
+    (game as unknown as { nextGroup: number }).nextGroup = 0;
+    run(game, 1 / 60);
+    const wall = game.enemies.filter((e) => e.brickRow >= 0);
+    expect(wall.length).toBe(9);
+    // Bring it down the field, standing still.
+    const block = wall[0].block!;
+    block.y = 20;
+    block.speed = 0;
+    for (const e of wall) {
+      e.x = block.x + e.slotX;
+      e.y = block.y + e.slotY;
+    }
+    expect(wall.map((e) => e.helmet).sort()).toEqual([0, 0, 0, 1, 1, 1, 2, 2, 2]);
+    const iron = wall.find((e) => e.helmet === 2)!;
+    // From behind the wall (it came over the top), straight down onto the iron row.
+    const b = ball(game, { x: iron.x, y: iron.y + 0.85, vx: 0, vy: -20 });
+    run(game, 1 / 60);
+    expect(iron.helmet).toBe(1);
+    expect(iron.hp).toBe(iron.maxHp);
+    expect(b.vy).toBeGreaterThan(0);
+    // Fell the front row: one bonus.
+    const gold = game.gold;
+    for (const e of wall.filter((o) => o.helmet === 0)) e.hp = 0;
+    run(game, 1 / 60);
+    expect(game.rowClears).toBe(1);
+    expect(game.gold - gold).toBeGreaterThanOrEqual(game.cfg.brickWall.rowGold);
+  });
+
+  it('catches falling gold coins with the shield', () => {
+    const game = battle();
+    game.coins.push({ x: game.shield.x, y: game.cfg.shield.y + 1, big: false });
+    game.coins.push({ x: game.shield.x + 15, y: game.cfg.shield.y + 1, big: true });
+    const gold = game.gold;
+    run(game, 1);
+    expect(game.gold - gold).toBe(game.cfg.coins.gold);
+    expect(game.coinsCaught).toBe(1);
+    expect(game.coins.length).toBe(0);
+  });
+
+  it('big orcs always drop a big coin', () => {
+    const game = battle();
+    game.enemies.push(enemy({ kind: 'rider', x: 5, y: 20, hp: 0 }));
+    run(game, 1 / 60);
+    expect(game.coins.some((c) => c.big)).toBe(true);
+  });
+
+  it('Crossbow Shield capsule: each heave looses two bolts straight up', () => {
+    const game = battle();
+    game.capsules.push({ kind: 'crossbow', x: game.shield.x, y: game.cfg.shield.y + 0.05 });
+    run(game, 0.1);
+    expect(game.effects.crossbow).toBeGreaterThan(game.time);
+    const before = game.projectiles.length;
+    game.heave();
+    const bolts = game.projectiles.slice(before).filter((p) => p.kind === 'bolt' && p.friendly);
+    expect(bolts.length).toBe(2);
+    expect(bolts.every((p) => p.vx === 0 && p.vy > 0 && p.damage === 10)).toBe(true);
+  });
+
+  it('Fireball capsule: balls burn through orcs without bouncing', () => {
+    const game = battle();
+    game.effects.fireball = game.time + 6;
+    const e = enemy({ x: 0, y: 20, hp: 100, maxHp: 100 });
+    game.enemies.push(e);
+    const b = ball(game, { x: 0, y: 19, vx: 0, vy: 20 });
+    run(game, 0.1);
+    expect(e.hp).toBeLessThan(100);
+    expect(b.vy).toBeGreaterThan(0);
+  });
+
+  it('Mason capsule patches the most damaged wall section', () => {
+    const game = battle();
+    const full = game.cfg.wall.segmentHp;
+    game.segmentHp[1] = full * 0.5;
+    game.segmentHp[3] = full * 0.2;
+    game.capsules.push({ kind: 'mason', x: game.shield.x, y: game.cfg.shield.y + 0.05 });
+    run(game, 0.1);
+    expect(game.segmentHp[3]).toBeCloseTo(full * 0.45);
+    expect(game.segmentHp[1]).toBe(full * 0.5);
+  });
+
+  it('Breakthrough: a ball at the back wall smashes the camp target there, once a wave', () => {
+    const game = battle();
+    expect(game.camp.length).toBe(game.cfg.wall.segments - 1);
+    expect(game.camp.filter((t) => t.kind === 'chest').length).toBe(1);
+    const t = game.camp.find((c) => c.kind !== 'chest')!;
+    const gold = game.gold;
+    const b = ball(game, { kind: 'royal', x: t.x, y: game.cfg.field.topY - 1, vx: 0, vy: 20 });
+    run(game, 0.1);
+    expect(t.down).toBe(true);
+    expect(game.gold - gold).toBe(game.cfg.camp.gold);
+    expect(b.breakHits).toBe(game.cfg.camp.hits);
+    expect(game.breakthroughs).toBe(1);
+  });
+
+  it('scores kills times combo, and gives a perfect-wave bonus when the wall is untouched', () => {
+    const game = new Game(1, quiet());
+    game.endSetup();
+    game.plan.groups = [];
+    game.skipPreview();
+    game.balls = [];
+    game.enemies.push(enemy({ x: 0, y: 30, hp: 0, goldMult: 2 }));
+    run(game, 0.1);
+    expect(game.score).toBe(Math.round(game.cfg.grunt.gold * 2 * game.cfg.score.perGold));
+    expect(game.perfectWaves).toBe(1);
+  });
+
+  it('gives 1 to 3 stars for a won level', () => {
+    const game = new Game(1, quiet());
+    expect(game.stars).toBe(0);
+    game.phase = 'won';
+    game.bestCombo = 0;
+    game.segmentHp = game.segmentHp.map(() => 1);
+    expect(game.stars).toBe(1);
+    game.segmentHp = game.segmentHp.map(() => game.cfg.wall.segmentHp);
+    expect(game.stars).toBe(2);
+    game.bestCombo = game.cfg.score.starCombo;
+    expect(game.stars).toBe(3);
   });
 });

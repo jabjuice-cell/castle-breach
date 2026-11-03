@@ -258,7 +258,7 @@ export const defaultConfig = {
     maxFalling: 2,
     fallSpeed: 5,
     radius: 0.8,
-    weights: { grog: 3, banner: 3, flask: 3, sticky: 0, trick: 1 },
+    weights: { grog: 3, banner: 3, flask: 3, sticky: 0, trick: 1, crossbow: 2, fireball: 2, mason: 2 },
     grogSpread: 0.35,
     bannerSeconds: 15,
     bannerWidth: 1.5,
@@ -267,6 +267,65 @@ export const defaultConfig = {
     stickyCatches: 3,
     trickSeconds: 10,
     trickWidth: 0.7,
+    /** Crossbow Shield: for this long each heave also looses two bolts straight up from the shield's ends. */
+    crossbowSeconds: 8,
+    crossbowDamage: 10,
+    crossbowPierce: 1,
+    crossbowSpeed: 40,
+    crossbowRange: 70,
+    /** Fireball: for this long balls burn straight through orcs without bouncing. */
+    fireballSeconds: 6,
+    /** Mason: patches this share of a section's full health on the most damaged section. */
+    masonShare: 0.25,
+  },
+  /** Catch the gold: a share of slain orcs drop a coin that falls like a capsule (same catch rules). */
+  coins: {
+    chance: 1 / 8,
+    fallSpeed: 6,
+    radius: 0.7,
+    /** Gold for a caught coin, times the level (wave tier): level 1 pays 5, level 2 pays 10. */
+    gold: 5,
+    /** Riders, ogres and bosses always drop a big coin worth this many coins. */
+    bigMult: 3,
+    maxFalling: 6,
+  },
+  /**
+   * Brick-wall waves: one block marches as a wide, tight wall of grunts in rows, slower than usual,
+   * colour-coded by helmet (each helmet soaks one ball hit). Clearing a whole row pays a bonus.
+   */
+  brickWall: {
+    fromWave: 3,
+    every: 4,
+    /** Rows deep (front first) and the share of the field's width it spans. */
+    minRows: 3,
+    maxRows: 5,
+    width: 0.8,
+    /** Extra grunts on top of the wave's budget so the wall is a proper wall. */
+    extraGrunts: 12,
+    speed: 0.7,
+    /** "ROW CLEAR!" bonus gold, times the level. */
+    rowGold: 8,
+  },
+  /**
+   * Breakthrough: the orc supply camp along the back wall. A ball that reaches the back wall where a target
+   * stands smashes it (they stand again each wave): gold, a banner, and the ball's next few hits deal double.
+   */
+  camp: {
+    halfWidth: 1.6,
+    gold: 30,
+    chestGold: 80,
+    hits: 3,
+    damageMult: 2,
+  },
+  /** Arcade score: every kill scores its gold times the combo multiplier, times this; bosses score boss. */
+  score: {
+    perGold: 10,
+    boss: 1000,
+    /** Stars at the end of a level: 1 for holding, +1 for this share of the wall left, +1 for this best combo. */
+    starWall: 0.6,
+    starCombo: 20,
+    /** A wave where the wall takes no damage: bonus on the gold earned in it. */
+    perfectWaveBonus: 0.2,
   },
 
   // ---- defenders --------------------------------------------------------------

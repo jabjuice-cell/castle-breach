@@ -94,6 +94,8 @@ const ORANGE = ['#ffd08a', '#ff9a2a', '#ff7a1a'];
 const TRAIL_WHITE = ['#ffffff', '#f2f2f2'];
 const TRAIL_ORANGE = ['#ffb04a', '#ff8a1a', '#ffd08a'];
 const TRAIL_BLUE = ['#d8ecff', '#9fd0ff', '#ffffff'];
+/** Helmet colours on brick-wall orcs by layer: steel, then dark iron. */
+const HELMET_COLOR = ['#000000', '#c9d4e0', '#33363f'];
 const FIRE = ['#fff2a8', '#ffb43a', '#ff6a2a', '#e2331f'];
 const ARCANE = ['#ffffff', '#e2baff', '#b06aff', '#6a3ad8'];
 const OIL = ['#fff2a8', '#ffb43a', '#ff7a2a', '#3a2a1a'];
@@ -109,6 +111,9 @@ export const CAPSULE_LOOK: Record<CapsuleKind, { color: string; emoji: string; n
   flask: { color: '#4fd06a', emoji: '🧪', name: 'Flask: exploding balls' },
   sticky: { color: '#a060e0', emoji: '🧤', name: 'Gauntlet: catch and aim' },
   trick: { color: '#e2533f', emoji: '💀', name: 'Orc trick! Shield shrinks' },
+  crossbow: { color: '#8a6a3a', emoji: '🏹', name: 'Crossbow Shield: heaves shoot bolts' },
+  fireball: { color: '#ff6a1a', emoji: '🔥', name: 'Fireball: balls burn through' },
+  mason: { color: '#b8a888', emoji: '🧱', name: 'Mason: wall patched' },
 };
 
 /**
@@ -435,6 +440,13 @@ export class BattleScene {
   /** Hits the shield has taken this wave: every few knock a cluster of blocks off it. */
   private halos: THREE.InstancedMesh;
   private barrels: THREE.InstancedMesh;
+  /** Brick-wall helmets, sat on the orcs' heads (one colour per instance). */
+  private helmets: THREE.InstancedMesh;
+  /** Falling gold coins (sprites, spinning edge-on to flat) and the supply camp's targets. */
+  private coinSprites = new Map<object, THREE.Sprite>();
+  private coinTex: THREE.Texture;
+  private campGroup = new THREE.Group();
+  private campKey = '';
   private capsuleTex = {} as Record<CapsuleKind, THREE.Texture>;
   private capsuleSprites = new Map<Capsule, THREE.Sprite>();
   private towerGroup: THREE.Group;
@@ -688,6 +700,14 @@ export class BattleScene {
     this.halos.count = 0;
     this.scene.add(this.halos);
 
+    this.helmets = new THREE.InstancedMesh(new THREE.BoxGeometry(0.95, 0.45, 0.95), new THREE.MeshLambertMaterial(), MAX_ENEMIES);
+    this.helmets.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(MAX_ENEMIES * 3).fill(1), 3);
+    this.helmets.frustumCulled = false;
+    this.helmets.count = 0;
+    this.scene.add(this.helmets);
+    this.coinTex = capsuleTexture('#ffd34a', '🪙');
+    this.scene.add(this.campGroup);
+
     // Barrels on the barrel orcs' backs, with a glowing band.
     const keg = imageSprite(powderBarrelUrl, aspects['powder-barrel']);
     this.barrels = new THREE.InstancedMesh(
@@ -805,6 +825,9 @@ export class BattleScene {
     this.defenderObjs.clear();
     for (const sp of this.capsuleSprites.values()) this.scene.remove(sp);
     this.capsuleSprites.clear();
+    for (const sp of this.coinSprites.values()) this.scene.remove(sp);
+    this.coinSprites.clear();
+    this.campKey = '';
     this.fireworks.clear();
     this.rockets = [];
     this.towerStage = -1;
@@ -1431,6 +1454,34 @@ export class BattleScene {
           this.flash(0.15, look.color);
           break;
         }
+        case 'helmetPop':
+          fw.burst(ev.x, 1.9, -ev.y, { count: 22, colors: ev.layers > 1 ? ['#ffffff', '#6a6e7a', '#33363f'] : STEEL, speed: 8, life: 0.4, size: 0.35, up: 0.6, gravity: 12 });
+          this.chunk(this.chunkArt.plates[(Math.random() * this.chunkArt.plates.length) | 0], ev.x, 2, -ev.y + 0.5, 0.9, 11);
+          break;
+        case 'rowClear':
+          // A line of gold fireworks along the row, and a couple of rockets.
+          for (let i = 0; i <= 12; i++) fw.burst(ev.x - 6 + i, 1.2, -ev.y, { count: 10, colors: GOLD, speed: 5, life: 0.7, size: 0.4, up: 0.8, gravity: 6, twinkle: true });
+          for (let i = 0; i < 2; i++) this.rocket(ev.x + (Math.random() - 0.5) * 8, -ev.y, GOLD, i * 0.15, 0.8);
+          break;
+        case 'breakthrough':
+          this.burst(ev.x, 1, -ev.y, 14, '#8a5a2e', 12);
+          fw.burst(ev.x, 1.5, -ev.y, { count: 90, colors: [...WOOD, ...GOLD], speed: 12, life: 0.9, size: 0.45, up: 0.6, gravity: 9, twinkle: true });
+          for (let i = 0; i < 4; i++) this.rocket(ev.x + (Math.random() - 0.5) * 8, -ev.y, GOLD, i * 0.12, 0.9);
+          this.flash(0.3, '#ffd34a');
+          this.shake = Math.max(this.shake, 0.7);
+          break;
+        case 'mason':
+          // The wall's little builder: a cloud of dust and stone bits at the patched section.
+          this.dust(ev.x, WALL_H * 0.5, 0.5, '#d9d0b0', '#a3a19c');
+          for (let i = 0; i < 6; i++) this.burst(ev.x + (Math.random() - 0.5) * 3, WALL_H * 0.8, 0.3, 2, STONE[i % STONE.length], 5);
+          break;
+        case 'shieldBolts':
+          for (const x of [ev.x0, ev.x1]) fw.burst(x, BALL_Y + 0.4, -ev.y - 0.3, { count: 8, colors: ['#fff2a8', '#c8945a'], speed: 6, life: 0.25, size: 0.3, up: 0.3, gravity: 4 });
+          break;
+        case 'perfectWave':
+          for (let i = 0; i < 12; i++) this.rocket(-16 + Math.random() * 32, 2 + Math.random() * 6, i % 2 ? ROYAL : PARTY, i * 0.2, 1.3);
+          this.flash(0.2, '#ffd34a');
+          break;
         case 'waveCleared':
           // Fireworks over the castle for every wave held.
           for (let i = 0; i < 6; i++) this.rocket(-14 + Math.random() * 28, 2 + Math.random() * 6, i % 2 ? ROYAL : PARTY, i * 0.25, 1);
@@ -1544,6 +1595,8 @@ export class BattleScene {
     this.updateShield(dt);
     this.updateBalls();
     this.updateCapsules(time);
+    this.updateCoins(time);
+    this.updateCamp();
     this.updateTower(dt);
     this.updatePlanning();
     this.updateSetupFx(dt);
@@ -1646,7 +1699,7 @@ export class BattleScene {
       if (n >= MAX_BALLS) break;
       // A ball just beyond the shield (from the castle's view) is hidden by it.
       if (!b.air && Math.abs(b.x - g.shield.x) < g.shieldHalfWidth() * SHIELD_OVERHANG && b.y > g.cfg.shield.y - 0.2 && b.y < g.cfg.shield.y + SHIELD_HIDE_DEPTH) continue;
-      const color = this.ballColor(b);
+      const color = g.time < g.effects.fireball ? '#ff8a2a' : b.breakHits > 0 ? '#ffd34a' : this.ballColor(b);
       let size = (b.kind === 'pebble' ? 0.75 : b.kind === 'royal' ? 1.25 : 1) * BALL_DRAW;
       let y = BALL_Y;
       if (b.air) {
@@ -1665,10 +1718,13 @@ export class BattleScene {
       // A comet trail that grows longer with speed and shifts white, then orange, then blue-white.
       if (!b.stuck) {
         const t = Math.min(1, Math.hypot(b.vx, b.vy) / g.cfg.balls.maxSpeed);
-        const trail = b.perfect ? ORANGE : t < 0.5 ? (t < 0.25 ? TRAIL_WHITE : TRAIL_ORANGE) : TRAIL_BLUE;
+        const fire = g.time < g.effects.fireball;
+        const trail = fire ? FIRE : b.perfect ? ORANGE : t < 0.5 ? (t < 0.25 ? TRAIL_WHITE : TRAIL_ORANGE) : TRAIL_BLUE;
         this.fireworks.burst(b.x, BALL_Y, -b.y, {
           count: 1 + t * 5, colors: trail, speed: 0.8, life: 0.15 + t * 0.65, size: r * size * (1.2 + t), gravity: 0, drag: 4,
         });
+        if (fire && Math.random() < 0.3) this.fireworks.burst(b.x, BALL_Y + 0.2, -b.y, { count: 2, colors: FIRE, speed: 3, life: 0.5, size: 0.3, gravity: -3 });
+        if (b.breakHits > 0 && Math.random() < 0.25) this.fireworks.burst(b.x, BALL_Y, -b.y, { count: 1, colors: GOLD, speed: 2, life: 0.35, size: 0.3, gravity: 0, twinkle: true });
       }
     }
     for (const c of g.capsules) {
@@ -1709,6 +1765,78 @@ export class BattleScene {
       this.scene.remove(sp);
       sp.material.dispose();
       this.capsuleSprites.delete(c);
+    }
+  }
+
+  /** Gold coins fall like capsules and spin edge-on to flat. */
+  private updateCoins(time: number) {
+    const seen = new Set<object>();
+    for (const c of this.game.coins) {
+      seen.add(c);
+      let sp = this.coinSprites.get(c);
+      if (!sp) {
+        sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.coinTex, depthTest: false }));
+        sp.renderOrder = 9;
+        this.coinSprites.set(c, sp);
+        this.scene.add(sp);
+      }
+      const s = c.big ? 1.9 : 1.2;
+      sp.position.set(c.x, 1.4, -c.y);
+      sp.scale.set(s * Math.max(0.15, Math.abs(Math.cos(time * 7 + c.x * 3))), s, 1);
+      if (Math.random() < 0.15) this.fireworks.burst(c.x, 1.4, -c.y, { count: 1, colors: GOLD, speed: 1, life: 0.35, size: 0.25, gravity: -1, twinkle: true });
+    }
+    for (const [c, sp] of this.coinSprites) {
+      if (seen.has(c)) continue;
+      this.scene.remove(sp);
+      sp.material.dispose();
+      this.coinSprites.delete(c);
+    }
+  }
+
+  /** The orc supply camp along the back wall: rebuilt whenever a target falls or the wave sets a new camp. */
+  private updateCamp() {
+    const g = this.game;
+    const key = g.camp.map((t) => `${t.kind}${t.x}${t.down ? 0 : 1}`).join();
+    if (key === this.campKey) return;
+    this.campKey = key;
+    for (const o of [...this.campGroup.children]) {
+      this.campGroup.remove(o);
+      o.traverse((m) => {
+        if (!(m instanceof THREE.Mesh)) return;
+        m.geometry.dispose();
+        (m.material as THREE.Material).dispose();
+      });
+    }
+    const box = (w: number, h: number, d: number, color: string, x: number, y: number, z: number, parent: THREE.Object3D) => {
+      const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), new THREE.MeshLambertMaterial({ color }));
+      m.position.set(x, y, z);
+      parent.add(m);
+    };
+    for (const t of g.camp) {
+      if (t.down) continue;
+      const grp = new THREE.Group();
+      grp.position.set(t.x, 0, -g.cfg.field.topY);
+      if (t.kind === 'tent') {
+        // Orc-brown canvas on a pole, with a red pennant.
+        const roof = new THREE.Mesh(new THREE.ConeGeometry(1.7, 2.2, 4), new THREE.MeshLambertMaterial({ color: '#8a6a44' }));
+        roof.position.y = 1.1;
+        roof.rotation.y = Math.PI / 4;
+        grp.add(roof);
+        box(0.08, 1, 0.08, '#4a3220', 0, 2.5, 0, grp);
+        box(0.5, 0.3, 0.05, '#c8372a', 0.25, 2.8, 0, grp);
+      } else if (t.kind === 'cart') {
+        // A wooden cart on two wheels, heaped with sacks.
+        box(2.2, 0.8, 1.4, '#8a5a2e', 0, 0.9, 0, grp);
+        box(1.6, 0.5, 1, '#c8b070', 0, 1.5, 0, grp);
+        for (const dx of [-0.8, 0.8]) box(0.35, 1, 1.7, '#3e2a18', dx, 0.5, 0, grp);
+      } else {
+        // The war chest: bigger, dark wood banded and locked in gold.
+        box(2.6, 1.4, 1.8, '#5a3a1e', 0, 0.7, 0, grp);
+        box(2.7, 0.5, 1.9, '#6e4826', 0, 1.6, 0, grp);
+        for (const dx of [-0.9, 0.9]) box(0.25, 1.9, 1.95, '#ffd34a', dx, 0.95, 0, grp);
+        box(0.4, 0.5, 0.1, '#ffd34a', 0, 1.2, 0.95, grp);
+      }
+      this.campGroup.add(grp);
     }
   }
 
@@ -2365,7 +2493,7 @@ export class BattleScene {
         const x = Math.max(-g.cfg.field.halfWidth + 0.5, Math.min(g.cfg.field.halfWidth - 0.5, grp.x + (kind === 'orcCatapult' ? (i % 3 - 1) * 3 : s.dx)));
         this.horde.push({
           kind, x, y, vx: 0, vy: 0, hp: 1, maxHp: 1, state: 'stand', standY: y, timer: 0, phase: (i * 0.618) % 1,
-          burn: 0, burnTime: 0, rally: 1, foe: null, block: null, slotX: 0, slotY: 0, goldMult: 1, lastBall: -1, stagger: 0, blasted: false, pinned: 0, shielded: kind === 'shieldOrc', bowl: null,
+          burn: 0, burnTime: 0, rally: 1, foe: null, block: null, slotX: 0, slotY: 0, goldMult: 1, lastBall: -1, stagger: 0, blasted: false, pinned: 0, shielded: kind === 'shieldOrc', bowl: null, helmet: 0, brickRow: -1,
         });
       });
       depth[grp.lane] = back + deepest + 4;
@@ -2378,6 +2506,7 @@ export class BattleScene {
     const counts = Object.fromEntries(ENEMY_KINDS.map((k) => [k, 0])) as Record<EnemyKind, number>;
     let shadowN = 0;
     let barrels = 0;
+    let helmets = 0;
     const horde = this.musterHorde();
     const voxel = this.orcStyle === 'voxel';
     const sets = voxel ? this.voxelOrcs.meshes : this.sprites;
@@ -2439,6 +2568,12 @@ export class BattleScene {
       const atWall = e.state === 'wall';
       const rage = atWall ? 0.55 + 0.25 * Math.sin(time * 8 + e.phase * 9) : 1;
       mesh.setColorAt(i, burning ? tmpC.setRGB(1, 0.6, 0.3) : e.stagger > 0 ? tmpC.setRGB(0.7, 0.7, 1) : tmpC.setRGB(1, hurt * rage, hurt * rage));
+      // A brick-wall orc's helmet sits on its head: steel, or dark iron for the toughest.
+      if (e.helmet > 0 && helmets < MAX_ENEMIES) {
+        const hs = size * phase;
+        this.helmets.setMatrixAt(helmets, tmpM.compose(tmpD.set(tmpV.x, tmpV.y + hs * 1.78, tmpV.z + 0.05), tmpQ.identity(), tmpS.set(hs, hs, hs)));
+        this.helmets.setColorAt(helmets++, tmpC.set(HELMET_COLOR[e.helmet] ?? HELMET_COLOR[1]));
+      }
       if (atWall && Math.random() < 0.05) this.fireworks.burst(e.x, tmpV.y + 1.2, -e.y - 0.6, { count: 3, colors: ['#ff7a3a', '#c9b79a'], speed: 3, life: 0.35, size: 0.3, gravity: 6 });
       if (e.kind === 'barrel' && voxel) {
         if (Math.random() < 0.35) this.fireworks.burst(e.x, tmpV.y + 1.8, -e.y - 0.55, { count: 1, colors: FIRE, speed: 1.5, life: 0.3, size: 0.25, gravity: -2 });
@@ -2484,6 +2619,9 @@ export class BattleScene {
     this.shadows.instanceMatrix.needsUpdate = true;
     this.barrels.count = barrels;
     this.barrels.instanceMatrix.needsUpdate = true;
+    this.helmets.count = helmets;
+    this.helmets.instanceMatrix.needsUpdate = true;
+    if (this.helmets.instanceColor) this.helmets.instanceColor.needsUpdate = true;
   }
 
   /** Which armour stage a warlord is in; plates fly off as he passes each one. */

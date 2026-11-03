@@ -7,7 +7,7 @@ import { type Contraption, footprint, generateLayout, layoutRng } from './contra
 import { type Obstacle, contact, needsHeave, nearestOn, plantTrees } from './obstacles';
 import { Rng } from './rng';
 import { type Choices, applyChoices } from './town';
-import { type EnemyKind, type Shape, type WavePlan, formation, planSize, planWave } from './waves';
+import { BRICK_SPACING, type EnemyKind, type Shape, type WavePlan, brickHelmet, formation, planSize, planWave } from './waves';
 
 /**
  * The whole run simulation. It has no rendering or DOM code, so it runs
@@ -60,6 +60,10 @@ export interface Enemy {
   bowl: Bowl | null;
   /** Seconds left walking slowed by a Pin arrow. */
   pinned: number;
+  /** Brick-wall helmets left (1: helmet, 2: iron): each soaks one ball hit and pops off. */
+  helmet: number;
+  /** The brick-wall row it stands in (an id into Game.brickRows), or -1. */
+  brickRow: number;
 }
 
 /** One orc's tumble in a bowling chain: slides along (dx, dy), slowing steadily to a stop over dur seconds. */
@@ -206,6 +210,8 @@ export interface Ball {
   spin: number;
   /** Flying over a ramp: ignores orcs and scenery until it passes landY (or the time runs out). */
   air?: { fromY: number; landY: number; until: number };
+  /** Hits left at double damage after smashing a supply-camp target (Breakthrough). */
+  breakHits: number;
 }
 
 /** A tower turret jutting out in front of the shield: a round bumper for bank shots. */
@@ -217,13 +223,30 @@ export interface Bumper {
   manned: boolean;
 }
 
-export const CAPSULE_KINDS = ['grog', 'banner', 'flask', 'sticky', 'trick'] as const;
+export const CAPSULE_KINDS = ['grog', 'banner', 'flask', 'sticky', 'trick', 'crossbow', 'fireball', 'mason'] as const;
 export type CapsuleKind = (typeof CAPSULE_KINDS)[number];
 
 export interface Capsule {
   kind: CapsuleKind;
   x: number;
   y: number;
+}
+
+/** A gold coin a slain orc dropped: it falls to the wall like a capsule, and pays if the shield catches it. */
+export interface Coin {
+  x: number;
+  y: number;
+  /** A big coin (riders, ogres, bosses) is worth several. */
+  big: boolean;
+}
+
+export type CampKind = 'tent' | 'cart' | 'chest';
+
+/** One target of the orc supply camp along the back wall (Breakthrough). */
+export interface CampTarget {
+  kind: CampKind;
+  x: number;
+  down: boolean;
 }
 
 /** The town's buildings behind the wall: the keep has a power, the rest are passive boons. */
@@ -301,6 +324,20 @@ export type GameEvent =
   | { type: 'splash'; x: number; y: number; radius: number }
   /** damage: how hard, so a boulder can throw more stone about than a pebble. */
   | { type: 'wallHit'; x: number; y: number; segment: number; damage: number }
+  /** A ball popped a brick-wall helmet off (layers: how many it had). */
+  | { type: 'helmetPop'; x: number; y: number; layers: number }
+  /** Every orc of a brick-wall row is down. */
+  | { type: 'rowClear'; x: number; y: number; gold: number }
+  /** A coin was caught (gold paid) or reached the wall uncaught. */
+  | { type: 'coin'; x: number; y: number; gold: number; big: boolean }
+  /** A ball got past the whole army and smashed a supply-camp target (camp index). */
+  | { type: 'breakthrough'; x: number; y: number; index: number; kind: CampKind; gold: number }
+  /** The Crossbow Shield loosed its two bolts. */
+  | { type: 'shieldBolts'; x0: number; x1: number; y: number }
+  /** The Mason patched a wall section. */
+  | { type: 'mason'; segment: number; x: number; amount: number }
+  /** The wall took no damage all wave. */
+  | { type: 'perfectWave'; wave: number; gold: number }
   /** The town choices were changed in the setup. */
   | { type: 'choicesChanged' }
   /** A Powder Ball's every-4th-hit blast. */
@@ -377,6 +414,21 @@ export class Game {
   projectiles: Projectile[] = [];
   balls: Ball[] = [];
   capsules: Capsule[] = [];
+  coins: Coin[] = [];
+  /** The orc supply camp along the back wall; it stands again each wave. */
+  camp: CampTarget[] = [];
+  /** Brick-wall rows still standing, by id: orcs left in each and where it is. */
+  private brickRows = new Map<number, number>();
+  private nextBrickRow = 0;
+  /** Arcade score: kills times combo, bosses on top. */
+  score = 0;
+  /** Wall damage taken in the wave in progress, and the gold earned when it started (for a perfect wave). */
+  private waveDamage = 0;
+  private waveGoldStart = 0;
+  perfectWaves = 0;
+  rowClears = 0;
+  breakthroughs = 0;
+  coinsCaught = 0;
   private chantAt = new Map<number, number>();
   soldiers: Soldier[] = [];
   /** Archers, crossbows and catapults the player has placed. */
@@ -420,7 +472,7 @@ export class Game {
   /** Barrel blasts waiting to go off (chain reactions run through this queue). */
   private blasts: { x: number; y: number; at: number; mult: number; ball: number }[] = [];
   /** Capsule effects: the game time each one runs out. */
-  effects = { banner: 0, flask: 0, trick: 0 };
+  effects = { banner: 0, flask: 0, trick: 0, crossbow: 0, fireball: 0 };
   stickyCatches = 0;
   /** Orc tricks the shield plating can still shrug off this wave. */
   platingLeft = 0;
@@ -468,6 +520,7 @@ export class Game {
     this.wave = this.cleared = this.firstWave - 1;
     this.plan = planWave(this.firstWave, seed, cfg);
     this.relayout(false);
+    this.raiseCamp();
     // Every run starts with one free company at the foot of the wall's centre.
     this.addDefender('soldiers', 0, -0.5);
     this.musterSoldiers();
@@ -643,6 +696,7 @@ export class Game {
     s.readyAt = this.time + this.heaveCooldown();
     this.events.push({ type: 'heave', x: s.x });
     if (this.phase === 'battle') this.slam();
+    if (this.phase === 'battle' && this.time < this.effects.crossbow) this.shieldBolts();
     // A click just after an impact still counts.
     for (const b of this.balls) {
       if (!b.stuck && !b.heaved && b.vy > 0 && this.time - b.hitShieldAt <= this.heaveWindow()) this.powerUp(b);
@@ -704,6 +758,20 @@ export class Game {
       }
     }
     this.events.push({ type: 'slam', x: s.x, hits });
+  }
+
+  /** The Crossbow Shield: two bolts straight up the field from the shield's ends. */
+  private shieldBolts(): void {
+    const c = this.cfg.capsules;
+    const half = this.shieldHalfWidth();
+    const y = this.cfg.shield.y + 0.5;
+    for (const x of [this.shield.x - half, this.shield.x + half]) {
+      this.projectiles.push({
+        kind: 'bolt', x, y, vx: 0, vy: c.crossbowSpeed, friendly: true, travelled: 0, flight: c.crossbowRange,
+        damage: c.crossbowDamage * this.cfg.bonuses.damage, hitsLeft: 1 + c.crossbowPierce, hit: new Set(),
+      });
+    }
+    this.events.push({ type: 'shieldBolts', x0: this.shield.x - half, x1: this.shield.x + half, y });
   }
 
   /** The town has built this one. */
@@ -1354,6 +1422,30 @@ export class Game {
     return Math.round(this.renown);
   }
 
+  /** The share of the wall's full health left, 0 to 1. */
+  get wallShare(): number {
+    return this.segmentHp.reduce((n, hp) => n + hp, 0) / (this.segmentHp.length * this.cfg.wall.segmentHp);
+  }
+
+  /** Stars for the level: none until it is won, then 1, +1 for wall left, +1 for the best combo. */
+  get stars(): number {
+    if (this.phase !== 'won') return 0;
+    const c = this.cfg.score;
+    return 1 + (this.wallShare >= c.starWall ? 1 : 0) + (this.bestCombo >= c.starCombo ? 1 : 0);
+  }
+
+  /** Sets the supply camp up along the back wall, one target at each join between wall sections (the chest in the middle). */
+  private raiseCamp(): void {
+    const n = this.cfg.wall.segments - 1;
+    const w = this.segmentWidth();
+    const mid = Math.floor((n - 1) / 2);
+    this.camp = [];
+    for (let i = 0; i < n; i++) {
+      const kind: CampKind = i === mid ? 'chest' : Math.abs(i - mid) % 2 === 1 ? 'cart' : 'tent';
+      this.camp.push({ kind, x: -this.cfg.field.halfWidth + (i + 1) * w, down: false });
+    }
+  }
+
   /** The player's balls in play (not counting enemy boulders). */
   get ballCount(): number {
     return this.balls.length;
@@ -1391,6 +1483,7 @@ export class Game {
     this.updateSalvo(dt);
     this.updateBalls(dt);
     this.updateCapsules(dt);
+    this.updateCoins(dt);
     this.removeDead();
     this.processBlasts();
     this.healWall(dt);
@@ -1408,6 +1501,7 @@ export class Game {
       this.projectiles = this.projectiles.filter((p) => p.friendly);
       this.balls = [];
       this.capsules = [];
+      this.coins = [];
       if (this.wave >= this.lastWave) {
         const clear = this.cfg.renown.levelClear;
         this.renown += clear[Math.min(this.level, clear.length - 1)];
@@ -1442,6 +1536,13 @@ export class Game {
     const r = this.cfg.renown;
     const gold = e.clearBase + e.clearPerWave * w;
     this.addGold(gold);
+    if (this.waveDamage <= 0 && this.wave === w) {
+      // Not a scratch on the wall: a share of everything the wave paid, on top.
+      const bonus = Math.round((this.goldEarned - this.waveGoldStart) * this.cfg.score.perfectWaveBonus);
+      this.addGold(bonus);
+      this.perfectWaves++;
+      this.events.push({ type: 'perfectWave', wave: w, gold: bonus });
+    }
     this.renown += (r.perWaveBase + r.perWave * w) * (1 + (this.earlyBonus.get(w) ?? 0));
     // Towers still standing mend their top storey.
     for (const s of this.stacks) s.hp = this.cfg.towers.storeyHp;
@@ -1458,6 +1559,9 @@ export class Game {
     this.phaseTimer = 0;
     this.nextGroup = 0;
     this.platingLeft = this.shieldLevels.plating;
+    this.waveDamage = 0;
+    this.waveGoldStart = this.goldEarned;
+    this.raiseCamp();
     this.salvoTimer = this.cfg.waves.salvoInterval;
     // Sally Forth: only so many of the fallen come back each wave (not before the level's first).
     const alive = this.soldiers.filter((s) => s.hp > 0).length;
@@ -1498,8 +1602,9 @@ export class Game {
       const foot = g.members.filter((m) => !REAR_KINDS.has(m.kind));
       const footCount = foot.reduce((s, m) => s + m.count, 0);
       const radius = Math.max(...g.members.map((m) => (REAR_KINDS.has(m.kind) ? 0 : this.cfg[m.kind].radius)));
-      const spacing = Math.max(radius, 0.45) * 2 * this.cfg.march.spacing;
-      const speed = lead === 'runner' || lead === 'rider' || lead === 'ogre' || lead === 'warlord' ? this.cfg[lead].speed : this.cfg.march.speed;
+      const bricks = g.shape === 'bricks';
+      const spacing = bricks ? BRICK_SPACING : Math.max(radius, 0.45) * 2 * this.cfg.march.spacing;
+      const speed = (lead === 'runner' || lead === 'rider' || lead === 'ogre' || lead === 'warlord' ? this.cfg[lead].speed : this.cfg.march.speed) * (bricks ? this.cfg.brickWall.speed : 1);
       const block: Block = {
         id: this.nextBlockId++, x: g.x, y: this.cfg.field.spawnY, shape: g.shape, members: [], start: 0,
         spacing, speed, homeX: g.x, zig: lead === 'rider', phase: this.rng.next() * Math.PI * 2, dirty: false, regroupAt: 0, drummed: false, haltUntil: 0,
@@ -1510,10 +1615,11 @@ export class Game {
       for (const m of foot) if (m.kind !== 'shieldOrc') for (let i = 0; i < m.count; i++) kinds.push(m.kind);
       this.rng.shuffle(kinds);
       kinds.unshift(...Array<EnemyKind>(shieldCount).fill('shieldOrc'));
-      const slots = formation(g.shape, footCount, spacing);
+      const slots = formation(g.shape, footCount, spacing, g.cols);
       const drummers = g.members.find((m) => m.kind === 'drummer')?.count ?? 0;
       block.drummed = drummers > 0;
       kinds.forEach((kind, i) => this.spawn(kind, block, slots[i].dx, slots[i].dy));
+      if (bricks) this.buildBrickRows(block, g.cols ?? footCount);
       // The drummer follows the foot; catapults trundle along behind.
       const footBack = slots.length ? Math.max(...slots.map((s) => s.dy)) : 0;
       if (drummers > 0) this.spawn('drummer', block, 0, footBack + 1.2);
@@ -1541,9 +1647,23 @@ export class Game {
       phase: this.rng.next(),
       burn: 0, burnTime: 0, rally: 1, foe: null, block, slotX, slotY, goldMult: 1,
       lastBall: -1, stagger: 0, blasted: false, shielded: kind === 'shieldOrc' && block.drummed, bowl: null, pinned: 0,
+      helmet: 0, brickRow: -1,
     };
     this.enemies.push(e);
     block.members.push(e);
+  }
+
+  /** A brick wall's rows: each gets an id (for the ROW CLEAR! bonus) and its helmets, bare at the front, iron at the back. */
+  private buildBrickRows(block: Block, cols: number): void {
+    const rows = Math.ceil(block.members.length / Math.max(1, cols));
+    const ids: number[] = [];
+    for (let r = 0; r < rows; r++) ids.push(this.nextBrickRow++);
+    block.members.forEach((e, i) => {
+      const r = Math.floor(i / cols);
+      e.helmet = brickHelmet(r, rows);
+      e.brickRow = ids[r];
+      this.brickRows.set(ids[r], (this.brickRows.get(ids[r]) ?? 0) + 1);
+    });
   }
 
   /** Shifts a block sideways so its whole formation stays between the tree lines. */
@@ -1596,7 +1716,7 @@ export class Game {
       b.members = b.members.filter((e) => e.hp > 0 && e.block === b);
       if (b.members.length === 0) continue;
       if (b.members.length !== before) b.dirty = true;
-      if (b.dirty && this.time >= b.regroupAt) this.regroup(b);
+      if (b.dirty && this.time >= b.regroupAt && b.shape !== 'bricks') this.regroup(b);
       keep.push(b);
       // Space Invaders: a block marches faster the more of it is gone.
       const lost = 1 - b.members.length / b.start;
@@ -1745,8 +1865,9 @@ export class Game {
             const b = e.block;
             const cap = b.speed * 3 + 3;
             // A rabble, not a parade: each stands a little off its slot and sways about.
-            const off = this.cfg.march.jitter * b.spacing;
-            const sway = this.cfg.march.sway;
+            const parade = b.shape === 'bricks';
+            const off = parade ? 0 : this.cfg.march.jitter * b.spacing;
+            const sway = parade ? 0 : this.cfg.march.sway;
             const jx = Math.sin(e.phase * 91.7) * off + Math.sin(this.time * 1.3 + e.phase * 40) * sway;
             const jy = Math.cos(e.phase * 53.3) * off + Math.cos(this.time * 1.1 + e.phase * 23) * sway;
             mx = (b.x + e.slotX + jx - e.x) * pull;
@@ -1937,6 +2058,7 @@ export class Game {
   private damageSegment(seg: number, amount: number, x: number, source: string): void {
     if (this.segmentHp[seg] <= 0) return;
     this.wallDamage[source] = (this.wallDamage[source] ?? 0) + Math.min(amount, this.segmentHp[seg]);
+    if (amount > 0) this.waveDamage += amount;
     this.segmentHp[seg] = Math.max(0, this.segmentHp[seg] - amount);
     if (this.rng.next() < 0.03) this.events.push({ type: 'wallHit', x, y: 0, segment: seg, damage: amount });
     if (this.segmentHp[seg] === 0) this.events.push({ type: 'segmentDestroyed', segment: seg });
@@ -2332,7 +2454,7 @@ export class Game {
   private addBall(kind: BallKind, x: number, y: number, vx: number, vy: number, primary = false): Ball {
     const b: Ball = {
       id: this.nextBallId++, kind, x, y, vx, vy, primary, power: 1, combo: 0, behind: false, heaved: false, perfect: false,
-      stuck: false, stuckOffset: 0, stuckAt: 0, hitShieldAt: -99, born: this.time, passing: null, lines: 0, milestone: 0, banked: false, spin: 0,
+      stuck: false, stuckOffset: 0, stuckAt: 0, hitShieldAt: -99, born: this.time, passing: null, lines: 0, milestone: 0, banked: false, spin: 0, breakHits: 0,
     };
     this.balls.push(b);
     this.enforceCap();
@@ -2535,6 +2657,7 @@ export class Game {
           this.events.push({ type: 'edge', x: hw, y: b.y, side: 1 });
         }
         if (b.y > top - r) {
+          this.breakthrough(b);
           // Only the Royal Ball rebounds off the back; a caught boulder sails away over the horde.
           if (b.kind !== 'royal') {
             this.events.push({ type: 'flyOff', x: b.x, y: top });
@@ -2571,6 +2694,21 @@ export class Game {
     }
     this.balls = keep;
     this.ballVsBalls();
+  }
+
+  /** A ball reached the back wall: if a supply-camp target stands there, it is smashed. */
+  private breakthrough(b: Ball): void {
+    if (this.phase !== 'battle') return;
+    const k = this.cfg.camp;
+    const index = this.camp.findIndex((t) => !t.down && Math.abs(t.x - b.x) <= k.halfWidth + this.cfg.balls.radius);
+    if (index < 0) return;
+    const t = this.camp[index];
+    t.down = true;
+    const gold = t.kind === 'chest' ? k.chestGold : k.gold;
+    this.addGold(gold);
+    this.breakthroughs++;
+    b.breakHits = k.hits;
+    this.events.push({ type: 'breakthrough', x: t.x, y: this.cfg.field.topY, index, kind: t.kind, gold });
   }
 
   /** Balls knock into each other: an equal-mass elastic bounce, with a hit size a touch smaller than they look. */
@@ -2841,13 +2979,14 @@ export class Game {
     if (!hit) return;
     const e: Enemy = hit;
     const mult = this.ballGoldMult(b);
-    const boost = (b.banked ? this.cfg.bumpers.bankDamage : 1) * (b.perfect ? this.cfg.shield.perfectDamage : 1);
+    const boost = (b.banked ? this.cfg.bumpers.bankDamage : 1) * (b.perfect ? this.cfg.shield.perfectDamage : 1) * (b.breakHits > 0 ? this.cfg.camp.damageMult : 1);
     const empowered = b.perfect;
+    const fire = this.time < this.effects.fireball;
     b.banked = false;
 
     // A raised shield: front hits do nothing at all, not even to a heave or the Royal Ball.
-    // They do no damage, so a Perfect Return survives the bounce.
-    if (e.shielded) {
+    // They do no damage, so a Perfect Return survives the bounce. A fireball burns straight through.
+    if (e.shielded && !fire) {
       const cd = Math.hypot(b.x - e.x, b.y - e.y) || 1;
       if ((b.y - e.y) / cd < -this.cfg.shieldOrc.shieldArc) {
         const nx = (b.x - e.x) / cd;
@@ -2864,6 +3003,18 @@ export class Game {
 
     // This is the damaging impact: the Perfect Return's 1.5x (in boost) is spent here.
     b.perfect = false;
+    if (b.breakHits > 0) b.breakHits--;
+
+    // A brick-wall helmet soaks the whole hit and pops off; the ball bounces as off a brick.
+    if (e.helmet > 0 && b.lines <= 0) {
+      this.popHelmet(e, b, mult);
+      if (fire) {
+        b.passing = e;
+        return;
+      }
+      this.bounceOff(b, e);
+      return;
+    }
 
     if (b.lines > 0 && e.kind !== 'warlord') {
       // Heave power shot: smash through the whole line without bouncing.
@@ -2874,8 +3025,12 @@ export class Game {
       let x0 = e.x;
       let x1 = e.x;
       for (const o of line) {
-        o.hp -= dmg;
         o.goldMult = mult;
+        if (o.helmet > 0) {
+          this.popHelmet(o, b, mult);
+          continue;
+        }
+        o.hp -= dmg;
         o.lastBall = b.id;
         const kb = c.knockback / this.cfg[o.kind].mass;
         o.vx += (b.vx / sp) * kb * 0.5;
@@ -2909,7 +3064,7 @@ export class Game {
       const d = Math.hypot(dx, dy);
       if (o !== e && d > sr + this.cfg[o.kind].radius * 0.5) return;
       if (o !== e) {
-        o.hp -= sd;
+        if (o.helmet <= 0) o.hp -= sd;
         o.goldMult = mult;
         o.lastBall = b.id;
       }
@@ -2937,6 +3092,11 @@ export class Game {
     this.events.push({ type: 'hit', x: e.x, y: e.y, combo: b.combo });
     if (pinBlock) this.topplePins(b, e, pinBlock, mult);
     if (empowered) this.startBowling(b, e);
+    // A fireball: no bounce, it ploughs on through (a boss still bats it away).
+    if (fire && e.kind !== 'warlord') {
+      b.passing = e;
+      return;
+    }
 
     if (e.kind === 'warlord') {
       // The Warlord bats it back down at the wall with his club.
@@ -2960,18 +3120,32 @@ export class Game {
         b.vy *= floor / sp;
       }
     }
-    // Bounce off it like a brick: mirror the velocity about the line between centres.
+    this.bounceOff(b, e);
+  }
+
+  /** Bounce off an orc like a brick: mirror the velocity about the line between centres. */
+  private bounceOff(b: Ball, e: Enemy): void {
     let nx = b.x - e.x;
     let ny = b.y - e.y;
     const d = Math.hypot(nx, ny) || 1;
     nx /= d;
     ny /= d;
     this.reflect(b, nx, ny);
-    const min = r + this.cfg[e.kind].radius + 0.01;
+    const min = this.cfg.balls.radius + this.cfg[e.kind].radius + 0.01;
     b.x = e.x + nx * min;
     b.y = e.y + ny * min;
     b.passing = e;
     this.events.push({ type: 'bounce', x: b.x, y: b.y });
+  }
+
+  /** A ball knocks one helmet off a brick-wall orc: no damage, but it counts for the combo. */
+  private popHelmet(e: Enemy, b: Ball, mult: number): void {
+    this.events.push({ type: 'helmetPop', x: e.x, y: e.y, layers: e.helmet });
+    e.helmet--;
+    e.goldMult = mult;
+    e.lastBall = b.id;
+    this.addCombo(b, 1);
+    this.events.push({ type: 'hit', x: e.x, y: e.y, combo: b.combo });
   }
 
   // ---- orc bowling -------------------------------------------------------------
@@ -3197,6 +3371,7 @@ export class Game {
     // Down it comes.
     this.tower = null;
     this.addGold(t.gold);
+    this.score += this.cfg.score.boss;
     this.renown += this.cfg.renown.bossKill;
     this.events.push({ type: 'bossKilled', x: tw.x, y: tw.y });
     // On the final wave the warlord rode it down: now he walks.
@@ -3338,8 +3513,74 @@ export class Game {
         if (this.platingLeft > 0) this.platingLeft--;
         else this.effects.trick = this.time + c.trickSeconds;
         break;
+      case 'crossbow':
+        this.effects.crossbow = this.time + c.crossbowSeconds;
+        break;
+      case 'fireball':
+        this.effects.fireball = this.time + c.fireballSeconds;
+        break;
+      case 'mason': {
+        // Patches the most damaged section still standing.
+        let seg = -1;
+        this.segmentHp.forEach((hp, i) => {
+          if (hp > 0 && (seg < 0 || hp < this.segmentHp[seg])) seg = i;
+        });
+        if (seg < 0) break;
+        const full = this.cfg.wall.segmentHp;
+        const amount = Math.min(full - this.segmentHp[seg], full * c.masonShare);
+        this.segmentHp[seg] += amount;
+        this.events.push({ type: 'mason', segment: seg, x: -this.cfg.field.halfWidth + (seg + 0.5) * this.segmentWidth(), amount });
+        break;
+      }
     }
     this.events.push({ type: 'caught', x: k.x, y: k.y, kind: k.kind });
+  }
+
+  // ---- coins ------------------------------------------------------------------
+
+  /** Catch the gold: some slain orcs drop a coin (the big ones always drop a big one). */
+  private dropCoin(e: Enemy): void {
+    const c = this.cfg.coins;
+    if (this.phase !== 'battle' || this.coins.length >= c.maxFalling || e.y > this.cfg.field.topY) return;
+    const big = e.kind === 'rider' || e.kind === 'ogre' || e.kind === 'warlord';
+    if (!big && this.rng.next() >= c.chance) return;
+    this.coins.push({ x: e.x, y: e.y, big });
+  }
+
+  /** Coins fall to the wall like capsules: the shield catches them, or they are gone. */
+  private updateCoins(dt: number): void {
+    const c = this.cfg.coins;
+    const sy = this.cfg.shield.y;
+    const keep: Coin[] = [];
+    for (const k of this.coins) {
+      const prevY = k.y;
+      k.y -= c.fallSpeed * dt;
+      if (prevY >= sy && k.y < sy && Math.abs(k.x - this.shield.x) <= this.shieldHalfWidth() + c.radius) {
+        const gold = c.gold * (this.level + 1) * (k.big ? c.bigMult : 1);
+        this.addGold(gold);
+        this.coinsCaught++;
+        this.events.push({ type: 'coin', x: k.x, y: sy, gold, big: k.big });
+        continue;
+      }
+      if (k.y > 0) keep.push(k);
+    }
+    this.coins = keep;
+  }
+
+  /** An orc of a brick-wall row fell: the last one of the row pays ROW CLEAR!. */
+  private brickDown(e: Enemy): void {
+    const id = e.brickRow;
+    e.brickRow = -1;
+    const left = (this.brickRows.get(id) ?? 1) - 1;
+    if (left > 0) {
+      this.brickRows.set(id, left);
+      return;
+    }
+    this.brickRows.delete(id);
+    const gold = this.cfg.brickWall.rowGold * (this.level + 1);
+    this.addGold(gold);
+    this.rowClears++;
+    this.events.push({ type: 'rowClear', x: e.x, y: e.y, gold });
   }
 
   private removeDead(): void {
@@ -3352,12 +3593,16 @@ export class Game {
         continue;
       }
       if (e.block) e.block.dirty = true;
+      if (e.brickRow >= 0) this.brickDown(e);
       // A barrel that reached the wall went off there: no gold, no second blast.
       if (e.kind === 'barrel' && e.state === 'wall') continue;
-      this.addGold(this.cfg[e.kind].gold * growth * e.goldMult);
+      const gold = this.cfg[e.kind].gold * growth * e.goldMult;
+      this.addGold(gold);
+      this.score += e.kind === 'warlord' ? this.cfg.score.boss : Math.round(gold * this.cfg.score.perGold);
       this.kills++;
       this.events.push({ type: 'kill', x: e.x, y: e.y, kind: e.kind, heaved: this.balls.find((x) => x.id === e.lastBall)?.heaved === true });
       this.dropCapsule(e.x, e.y);
+      this.dropCoin(e);
       if (e.kind === 'barrel') {
         this.blasts.push({ x: e.x, y: e.y, at: this.time + (e.blasted ? this.cfg.barrel.chainDelay : 0), mult: e.goldMult, ball: e.lastBall });
       }
