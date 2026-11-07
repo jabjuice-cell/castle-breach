@@ -550,7 +550,7 @@ const ENEMY_NAMES: Record<EnemyKind, [string, string]> = {
 
 const DEFENDER_INFO: Record<DefenderKind, { name: string; blurb: string }> = {
   crossbow: { name: 'Giant crossbow', blurb: 'Fires straight up its lane, piercing a column, and hunts catapults first. On a tower it also angles across into the next lanes.' },
-  archers: { name: 'Archers', blurb: 'Thirty bowmen. Their cone shoots boulders out of the sky and rains volleys on the crowd. Leave a section without them and it is a blind spot.' },
+  archers: { name: 'Archers', blurb: 'Twelve bowmen. Their cone shoots boulders out of the sky and rains volleys on the crowd. Leave a section without them and it is a blind spot.' },
   catapult: { name: 'Catapult', blurb: 'Lobs extra gold balls far up the field, but can\'t reach anything close to the wall.' },
   soldiers: { name: 'Soldier company', blurb: 'Twelve big soldiers hold the foot of the wall in their section and a little either side.' },
   mage: { name: 'Mage tower', blurb: 'Tower tops only. Blasts the thickest crowd in range; taller towers reach further.' },
@@ -1052,7 +1052,7 @@ function townPopHtml(b: ChoiceBuilding): string {
   const done = '<footer><button type="button" data-action="close">Done</button></footer>';
   if (b === 'warroom') return `<h3>The War Room – one tactic for this level</h3>${optionRows(b, 'tactic', TACTIC_INFO, true)}${done}`;
   if (b === 'barracks') {
-    const archers = (townMeta().archers ?? 0) > 0 ? optionRows(b, 'archers', ARCHER_ROLE_INFO) : '<small>Unlock archers first</small>';
+    const archers = optionRows(b, 'archers', ARCHER_ROLE_INFO);
     return `<h3>The Barracks</h3><h4>Archers</h4>${archers}<h4>Soldiers</h4>${optionRows(b, 'soldiers', SOLDIER_ROLE_INFO)}${done}`;
   }
   if (b === 'blacksmith') return `<h3>The Blacksmith</h3><h4>Shield</h4>${optionRows(b, 'shield', SHIELD_KIT_INFO)}<h4>Royal Ball</h4>${optionRows(b, 'ball', BALL_KIT_INFO)}${done}`;
@@ -1380,7 +1380,7 @@ $('town').addEventListener('click', (e) => {
 
 /** Placeholder colours for each building on the plot (the voxel pieces use the same feel). */
 const PIECE_COLOR: Record<PieceId, string> = {
-  archers: '#6fae4a', soldiers: '#8f8a82', catapult: '#a0703a', mage: '#7a5ab8', ballista: '#7a4a24', oil: '#4a4a52', spiketrap: '#b0a070',
+  crossbow: '#6fae4a', soldiers: '#8f8a82', catapult: '#a0703a', mage: '#7a5ab8', ballista: '#7a4a24', oil: '#4a4a52', spiketrap: '#b0a070',
   fletching: '#d8c070', drill: '#c8a878', masonry: '#e7d8b4', tavern: '#d9572b', alchemist: '#3a8a5a', blacksmith: '#5a5a62', chapel: '#4a5878',
   forge: '#8a3a2a', warroom: '#c8322a', watchtower: '#9a6a3a', treasury: '#e8b730', market: '#ec7440', guild: '#3d66d6',
 };

@@ -8,6 +8,7 @@ import { type Obstacle, contact, needsHeave, nearestOn, plantTrees } from './obs
 import { Rng } from './rng';
 import { type Choices, applyChoices } from './town';
 import { BRICK_SPACING, type EnemyKind, type Shape, type WavePlan, brickHelmet, formation, planSize, planWave } from './waves';
+import type { Move } from './waves';
 
 /**
  * The whole run simulation. It has no rendering or DOM code, so it runs
@@ -162,6 +163,14 @@ export interface Block {
   drummed: boolean;
   /** The game time until which a Pin arrow holds the block from marching. */
   haltUntil: number;
+  /** How it moves down the field (waves.ts). */
+  move?: Move;
+  /** An invader or weave block swings this far either side of homeX. */
+  sweep?: number;
+  /** An invader block: where it is in its sweep, which way it is going, and seconds of step-down left. */
+  side?: number;
+  dir?: number;
+  dropLeft?: number;
 }
 
 export interface Soldier {
@@ -230,6 +239,10 @@ export interface Ball {
   stuck: boolean;
   stuckOffset: number;
   stuckAt: number;
+  /** Seconds of the 3, 2, 1 before a re-served Royal Ball goes by itself (0: the usual quick auto-serve). */
+  countdown: number;
+  /** The last countdown number announced. */
+  tick: number;
   hitShieldAt: number;
   born: number;
   /** The orc it is passing through, so it isn't hit twice in a row. */
@@ -395,6 +408,8 @@ export type GameEvent =
   /** An arrow pinned an orc (Pin role). */
   | { type: 'pinned'; x: number; y: number }
   | { type: 'ballLost'; x: number; kind: BallKind }
+  /** The re-served Royal Ball's countdown: 3, 2, 1, then 0 as it goes. */
+  | { type: 'countdown'; n: number; x: number }
   | { type: 'caught'; x: number; y: number; kind: CapsuleKind }
   | { type: 'segmentDestroyed'; segment: number }
   /** A tower's top storey fell; storeys is what is left (0: the tower is gone). */
@@ -531,6 +546,8 @@ export class Game {
   private royalHits = 0;
   /** When the Royal Ball is served again after being lost. */
   royalDue = 0;
+  /** The Royal Ball hit the wall: its next serve gets the countdown. */
+  private royalLost = false;
   /** While true no wall segment can fall (the tutorial wave sets it). */
   forgiving = false;
 
@@ -574,9 +591,6 @@ export class Game {
     this.plan = planWave(this.firstWave, seed, cfg);
     this.relayout(false);
     this.raiseCamp();
-    // Every run starts with one free company at the foot of the wall's centre.
-    this.addDefender('soldiers', 0, -0.5);
-    this.musterSoldiers();
   }
 
   /** The level's fixed contraption layout when the config pins one (tests do), else none. */
@@ -1668,6 +1682,7 @@ export class Game {
       const block: Block = {
         id: this.nextBlockId++, x: g.x, y: this.cfg.field.spawnY, shape: g.shape, members: [], start: 0,
         spacing, speed, homeX: g.x, zig: lead === 'rider', phase: this.rng.next() * Math.PI * 2, dirty: false, regroupAt: 0, drummed: false, haltUntil: 0,
+        move: g.move ?? 'march', sweep: g.sweep ?? 0, side: 0, dir: 1, dropLeft: 0,
       };
       // Chuckers are mixed through the block rather than all in one corner; shield orcs take the front.
       const shieldCount = foot.find((m) => m.kind === 'shieldOrc')?.count ?? 0;
@@ -1830,11 +1845,40 @@ export class Game {
       const rally = Math.max(...b.members.map((e) => e.rally));
       // Spike traps slow a block in step with the share of it caught in them.
       const slow = this.hasTraps ? b.members.reduce((n, e) => n + this.trapSlow(e.x, e.y), 0) / b.members.length : 1;
-      if (this.time >= b.haltUntil) b.y -= b.speed * (1 + m.growthPerWave) ** Math.max(0, this.wave - 1) * boost * rally * slow * dt;
+      const v = b.speed * (1 + m.growthPerWave) ** Math.max(0, this.wave - 1) * boost * rally * slow;
+      if (this.time >= b.haltUntil) b.y -= v * this.paceOf(b, v, dt) * dt;
       if (b.zig) b.x = b.homeX + Math.sin(this.time * this.cfg.rider.zigRate + b.phase) * (this.cfg.rider.zigSpeed / this.cfg.rider.zigRate);
+      else if (b.move === 'weave') b.x = b.homeX + Math.sin(this.time * m.weaveRate + b.phase) * (b.sweep ?? 0);
+      else if (b.move === 'invader') b.x = b.homeX + (b.side ?? 0);
       this.keepInField(b);
     }
     this.blocks = keep;
+  }
+
+  /**
+   * How fast a block advances this step, as a share of its march speed (it averages about 1).
+   * An invader block sweeps sideways without advancing, then steps down quickly at each end;
+   * a surging block rushes, then nearly stops.
+   */
+  private paceOf(b: Block, v: number, dt: number): number {
+    const m = this.cfg.march;
+    if (b.move === 'surge') {
+      const t = (this.time / m.surgeSeconds + b.phase / (Math.PI * 2)) % 1;
+      return t < 0.5 ? m.surgeFast : m.surgeSlow;
+    }
+    if (b.move !== 'invader' || !b.sweep) return 1;
+    if ((b.dropLeft ?? 0) > 0) {
+      b.dropLeft = (b.dropLeft ?? 0) - dt;
+      const traverse = (2 * b.sweep) / Math.max(0.1, v * m.invaderSide);
+      return (traverse + m.invaderDrop) / m.invaderDrop;
+    }
+    b.side = (b.side ?? 0) + (b.dir ?? 1) * v * m.invaderSide * dt;
+    if (Math.abs(b.side) >= b.sweep) {
+      b.side = Math.sign(b.side) * b.sweep;
+      b.dir = -(b.dir ?? 1);
+      b.dropLeft = m.invaderDrop;
+    }
+    return 0;
   }
 
   // ---- enemies ------------------------------------------------------------
@@ -2562,7 +2606,7 @@ export class Game {
   private addBall(kind: BallKind, x: number, y: number, vx: number, vy: number, primary = false): Ball {
     const b: Ball = {
       id: this.nextBallId++, kind, x, y, vx, vy, primary, power: 1, combo: 0, behind: false, heaved: false, perfect: false,
-      stuck: false, stuckOffset: 0, stuckAt: 0, hitShieldAt: -99, born: this.time, passing: null, lines: 0, milestone: 0, banked: false, spin: 0, breakHits: 0,
+      stuck: false, stuckOffset: 0, stuckAt: 0, countdown: 0, tick: 3, hitShieldAt: -99, born: this.time, passing: null, lines: 0, milestone: 0, banked: false, spin: 0, breakHits: 0,
     };
     this.balls.push(b);
     this.enforceCap();
@@ -2589,6 +2633,12 @@ export class Game {
     b.stuck = true;
     b.stuckOffset = 0;
     b.stuckAt = this.time;
+    // After the Royal Ball hit the wall: a quick 3, 2, 1 on the shield before it goes again (a click still serves at once).
+    if (this.royalLost) {
+      b.countdown = this.cfg.balls.royalCountdown;
+      this.royalLost = false;
+      this.events.push({ type: 'countdown', n: 3, x: b.x });
+    }
   }
 
   /** Launches every ball riding on the shield. */
@@ -2605,16 +2655,16 @@ export class Game {
   }
 
   /**
-   * The Hybrid bounce: the angle off straight up a ball leaves the shield at. Across the
-   * middle the shield is a flat mirror, so it leaves at the angle it came in (inAngle,
-   * measured the same way: + heading right). The edges (offset beyond edgeZone, -1 is the
-   * left edge) kick it wide outward, a trick shot.
+   * The curved shield (Jonny, 7 Nov): where the ball lands on the shield steers it, like a gently curved
+   * paddle. Across the middle (out to edgeZone) the outgoing angle is a blend of the mirror bounce (inAngle,
+   * measured the same way: + heading right) and an aim set by the hit point (offset: -1 the left edge, +1 the
+   * right), curveWeight of the way to offset x curveMax. The very edges still kick it wide, a trick shot.
    */
   bounceAngle(offset: number, inAngle = 0): number {
     const c = this.cfg.shield;
     const o = Math.max(-1, Math.min(1, offset));
     const a = Math.abs(o);
-    if (a <= c.edgeZone) return inAngle;
+    if (a <= c.edgeZone) return inAngle * (1 - c.curveWeight) + (o / c.edgeZone) * c.curveMax * c.curveWeight;
     return Math.sign(o) * (c.trickMin + ((a - c.edgeZone) / (1 - c.edgeZone)) * (c.trickMax - c.trickMin));
   }
 
@@ -2653,7 +2703,7 @@ export class Game {
     const base = b.kind === 'royal' ? c.royalSpeed : c.speed;
     const k = this.kit(b);
     const speed = Math.min(this.speedCap(b), Math.max(base * (k?.speed ?? 1), Math.hypot(b.vx, b.vy) * (k?.speedUp ?? c.speedUp)));
-    // Hybrid bounce: mirror off the flat middle, kick off the edges, plus English and curve from the shield's movement.
+    // The curved shield: the hit point steers it, the edges kick it wide, plus English and curve from the shield's movement.
     const move = s.vx / this.cfg.shield.speed;
     this.launch(b, this.bounceAngle(offset, Math.atan2(b.vx, -b.vy)) + move * this.cfg.shield.english, speed);
     b.spin = -move * this.cfg.shield.curve;
@@ -2726,8 +2776,17 @@ export class Game {
       if (b.stuck) {
         b.x = this.shield.x + b.stuckOffset;
         b.y = sy;
-        if (this.time - b.stuckAt >= c.autoServeSeconds) {
+        const wait = b.countdown > 0 ? b.countdown : c.autoServeSeconds;
+        const held = this.time - b.stuckAt;
+        if (b.countdown > 0) {
+          const n = Math.ceil(3 * (1 - held / b.countdown));
+          if (n >= 1 && n < b.tick) this.events.push({ type: 'countdown', n, x: b.x });
+          b.tick = Math.min(b.tick, Math.max(n, 0));
+        }
+        if (held >= wait) {
           b.stuck = false;
+          if (b.countdown > 0) this.events.push({ type: 'countdown', n: 0, x: b.x });
+          b.countdown = 0;
           this.serve(b);
         }
         keep.push(b);
@@ -2861,7 +2920,10 @@ export class Game {
     this.ballsLost++;
     this.events.push({ type: 'ballLost', x: b.x, kind: b.kind });
     this.events.push({ type: 'wallHit', x: b.x, y: 0, segment: seg, damage });
-    if (b.primary) this.royalDue = this.time + this.cfg.balls.reserveSeconds;
+    if (b.primary) {
+      this.royalDue = this.time + this.cfg.balls.reserveSeconds;
+      this.royalLost = true;
+    }
   }
 
   /** Adds to a ball's combo, with an event at each milestone (a bell, "Glorious!", a golden ball). */

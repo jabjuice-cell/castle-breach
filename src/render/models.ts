@@ -1179,7 +1179,7 @@ const glowCap = (v: Vox, x: number, y: number, z: number, c: string) => {
 
 /** How each town building looks as a plot piece (placeholders until the piece art exists). */
 const PIECE_LOOKS: Record<string, PieceLook> = {
-  archers: { wall: '#6fae4a', roof: '#6fae4a', h: 0, accent: (v, x, z) => { for (let i = -2; i <= 2; i += 2) v.box(x + i * 3, 1, z, x + i * 3 + 1, 4, z, (_, y) => (y === 3 ? '#e03a2a' : '#e8d070')); } },
+  crossbow: { wall: '#6fae4a', roof: '#6fae4a', h: 0, accent: (v, x, z) => { for (let i = -2; i <= 2; i += 2) v.box(x + i * 3, 1, z, x + i * 3 + 1, 4, z, (_, y) => (y === 3 ? '#e03a2a' : '#e8d070')); } },
   soldiers: { wall: PAL.stone, roof: PAL.slate, h: 8, accent: (v, x, z, t) => { v.box(x, t, z, x, t + 6, z, PAL.wood); v.box(x + 1, t + 3, z, x + 3, t + 6, z, '#c8322a'); } },
   catapult: { wall: PAL.wood, roof: PAL.timber, h: 5, accent: (v, x, z, t) => { v.box(x - 3, t, z, x + 3, t, z, PAL.woodDark); v.box(x + 3, t + 1, z, x + 3, t + 4, z, PAL.woodDark); } },
   mage: { wall: '#7a5ab8', roof: '#4a2f80', h: 10, accent: (v, x, z, t) => { v.cone(x, z, 3, t, 9, '#4a2f80'); glowCap(v, x + 1, t + 9, z + 1, '#c08aff'); } },

@@ -72,7 +72,7 @@ function battle(seed = 1, cfg = quiet()) {
 function ball(game: Game, over: Partial<Ball>): Ball {
   const b: Ball = {
     id: 999, kind: 'claimed', x: 0, y: 10, vx: 0, vy: -20, primary: false, power: 1, combo: 0, behind: false, heaved: false, perfect: false,
-    stuck: false, stuckOffset: 0, stuckAt: 0, hitShieldAt: -99, born: 0, passing: null, lines: 0, milestone: 0, banked: false, spin: 0, breakHits: 0, ...over,
+    stuck: false, stuckOffset: 0, stuckAt: 0, countdown: 0, tick: 3, hitShieldAt: -99, born: 0, passing: null, lines: 0, milestone: 0, banked: false, spin: 0, breakHits: 0, ...over,
   };
   game.balls.push(b);
   return b;
@@ -197,21 +197,27 @@ describe('the shield and the balls', () => {
     expect(game.segmentHp[game.segmentAt(15)]).toBe(400 - 25);
   });
 
-  it('hybrid bounce: the flat middle mirrors the ball, the edges kick it wide as a trick shot', () => {
+  it('curved shield: the hit point steers the ball, the dead centre mirrors it, the edges kick it wide as a trick shot', () => {
     const game = new Game(1);
-    expect(game.bounceAngle(0, 0.3)).toBe(0.3);
-    expect(game.bounceAngle(0.7, -0.4)).toBe(-0.4);
+    const s = game.cfg.shield;
+    // Dead centre: part of the mirror angle survives.
+    expect(game.bounceAngle(0, 0.3)).toBeCloseTo(0.3 * (1 - s.curveWeight));
+    // Off-centre to the right steers it right, whatever it came in at.
+    expect(game.bounceAngle(0.7, -0.4)).toBeGreaterThan(0.3);
+    expect(game.bounceAngle(-0.7, 0.4)).toBeLessThan(-0.3);
+    // Further out steers it more.
+    expect(game.bounceAngle(0.6, 0)).toBeGreaterThan(game.bounceAngle(0.2, 0));
     expect(game.bounceAngle(1, -0.4)).toBeCloseTo(1.309);
     expect(game.bounceAngle(-1, 0.4)).toBeCloseTo(-1.309);
     expect(game.bounceAngle(0.9)).toBeGreaterThan(1.134);
-    // A ball coming in at an angle leaves at the same angle off the middle.
+    // A ball landing on the shield's left half goes off to the left, even coming in heading right.
     const m = battle();
     m.setShield(-6);
     run(m, 0.2);
-    const mb = ball(m, { x: -6, y: 3.2, vx: 6, vy: -18 });
+    const mb = ball(m, { x: -6 - m.shieldHalfWidth() * 0.5, y: 3.2, vx: 3, vy: -18 });
     run(m, 0.05);
     expect(mb.vy).toBeGreaterThan(0);
-    expect(mb.vx / mb.vy).toBeCloseTo(6 / 18, 1);
+    expect(mb.vx).toBeLessThan(0);
     // A trick shot off the edge starts its combo at 1.
     // Clear of the tower turrets, which would bank it.
     const g = battle();
@@ -749,16 +755,17 @@ describe('run loop', () => {
     expect(game.phase).toBe('preview');
   });
 
-  it('sells the crossbow only until the town unlocks the rest', () => {
+  it('sells archers and catapults only until the town unlocks the rest (7 Nov)', () => {
     const first = new Game(1, applyMeta({}, 0));
     expect(first.defenders).toHaveLength(0);
     first.gold = 1000;
-    expect(first.place('archers', -4, -1)).toBe(false);
-    expect(first.place('catapult', -4, -1)).toBe(false);
-    expect(first.place('crossbow', -4, -1)).toBe(true);
-    const later = new Game(1, applyMeta({ archers: 1 }, 0));
+    expect(first.place('crossbow', -4, -1)).toBe(false);
+    expect(first.place('soldiers', -4, -1)).toBe(false);
+    expect(first.place('archers', -4, -1)).toBe(true);
+    expect(first.place('catapult', 8, -3)).toBe(true);
+    const later = new Game(1, applyMeta({ crossbow: 1 }, 0));
     later.gold = 1000;
-    expect(later.place('archers', -4, -1)).toBe(true);
+    expect(later.place('crossbow', -4, -1)).toBe(true);
     expect(later.place('mage', 8, -1)).toBe(false);
   });
 
@@ -772,7 +779,7 @@ describe('run loop', () => {
     expect(buyMeta(p, 'power')).toBe(false);
     for (let i = 0; i < 3; i++) buyMeta(p, 'recovery');
     buyMeta(p, 'masonry');
-    buyMeta(p, 'archers');
+    buyMeta(p, 'crossbow');
     buyMeta(p, 'fletching');
     buyMeta(p, 'treasury');
     const plain = new Game(1, applyMeta({}, 2), 2);
@@ -790,11 +797,11 @@ describe('run loop', () => {
     const p = newProgress();
     p.renown = 5000;
     expect(buyMeta(p, 'fletching')).toBe(false);
-    expect(metaLocked(p.meta, 'fletching')).toMatch(/Archery/);
+    expect(metaLocked(p.meta, 'fletching')).toMatch(/Crossbow loft/);
     expect(p.renown).toBe(5000);
-    expect(buyMeta(p, 'archers') && buyMeta(p, 'fletching')).toBe(true);
+    expect(buyMeta(p, 'crossbow') && buyMeta(p, 'fletching')).toBe(true);
     expect(metaLocked(p.meta, 'fletching')).toBe('');
-    expect(metaDepth('archers')).toBe(0);
+    expect(metaDepth('crossbow')).toBe(0);
     // Every prerequisite names a real upgrade, and the tree has no cycles.
     for (const u of META_UPGRADES) expect(metaDepth(u.id)).toBeLessThan(META_UPGRADES.length);
   });
@@ -1175,7 +1182,7 @@ describe('run loop', () => {
     run(game, 0.05);
     expect(game.projectiles.filter((p) => p.kind === 'arrow')).toHaveLength(game.cfg.archers.archers);
     run(game, 2.2);
-    expect(game.enemies.filter((e) => e.hp < 100).length).toBeGreaterThanOrEqual(10);
+    expect(game.enemies.filter((e) => e.hp < 100).length).toBeGreaterThanOrEqual(6);
     expect(game.enemies[30].hp).toBe(100); // the lone orc nearer the wall is not the target
   });
 
@@ -1962,23 +1969,23 @@ describe('the four new defenders', () => {
   });
 
   it('the town unlocks them in order, and the old four are unchanged', () => {
-    expect(applyMeta({}, 0).unlocks.defenders).toEqual(['crossbow', 'soldiers']);
-    expect(applyMeta({ archers: 1, soldiers: 1, catapult: 1 }, 0).unlocks.defenders).toEqual(['crossbow', 'soldiers', 'archers', 'catapult']);
+    expect(applyMeta({}, 0).unlocks.defenders).toEqual(['archers', 'catapult']);
+    expect(applyMeta({ crossbow: 1, soldiers: 1, catapult: 1 }, 0).unlocks.defenders).toEqual(['archers', 'catapult', 'crossbow', 'soldiers']);
     const all = { mage: 1, ballista: 1, oil: 1, spiketrap: 1 };
-    expect(applyMeta(all, 0).unlocks.defenders).toEqual(['crossbow', 'soldiers', 'mage', 'ballista', 'oil', 'spiketrap']);
+    expect(applyMeta(all, 0).unlocks.defenders).toEqual(['archers', 'catapult', 'mage', 'ballista', 'oil', 'spiketrap']);
     const p = newProgress();
     p.renown = 1000;
     for (const id of ['mage', 'ballista', 'oil', 'spiketrap']) {
       expect(metaLocked(p.meta, id)).not.toBe('');
       expect(buyMeta(p, id)).toBe(false);
     }
-    for (const id of ['archers', 'fletching', 'mage', 'ballista', 'masonry', 'oil', 'soldiers', 'spiketrap']) expect(buyMeta(p, id)).toBe(true);
+    for (const id of ['crossbow', 'fletching', 'mage', 'ballista', 'masonry', 'oil', 'soldiers', 'spiketrap']) expect(buyMeta(p, id)).toBe(true);
     const game = new Game(1, applyMeta(p.meta, 0), 0);
     towers(game);
     game.gold = 1000;
     expect(game.place('mage', 4, -1)).toBe(true);
     expect(game.place('crossbow', -4, -1)).toBe(true);
-    expect(game.place('catapult', 0, -6)).toBe(false); // not bought
+    expect(game.place('catapult', 0, -6)).toBe(true); // on sale from the start (7 Nov)
   });
 });
 
@@ -2263,13 +2270,13 @@ describe('town plot', () => {
       expect(turns.has(mirrored)).toBe(false);
     }
     // Rotated shapes sit with their top-left corner on the anchor.
-    const bar = pieceCells(at('archers', 2, 1, 1));
+    const bar = pieceCells(at('crossbow', 2, 1, 1));
     expect(bar).toEqual([[2, 1], [2, 2], [2, 3], [2, 4]]);
   });
 
   it('rejects overlaps with the keep and other pieces, and anything off the open land', () => {
-    expect(canPlace([], at('archers', 5, 1), 3)).toBe(false); // runs into the keep
-    expect(canPlace([], at('archers', 9, 0), 3)).toBe(true);
+    expect(canPlace([], at('crossbow', 5, 1), 3)).toBe(false); // runs into the keep
+    expect(canPlace([], at('crossbow', 9, 0), 3)).toBe(true);
     expect(canPlace([at('drill', 0, 0)], at('oil', 1, 1), 3)).toBe(false);
     expect(canPlace([at('drill', 0, 0)], at('oil', 2, 1), 3)).toBe(true);
     // The same piece never blocks itself.
@@ -2283,11 +2290,11 @@ describe('town plot', () => {
   });
 
   it('counts neighbours by shared edge only, and each pair once', () => {
-    const touching: Layout = [at('archers', 0, 3), at('fletching', 0, 4)];
+    const touching: Layout = [at('crossbow', 0, 3), at('fletching', 0, 4)];
     const pairs = activePairs(touching);
-    expect(pairs.map((p) => p.id)).toEqual(['fletchingArchers']);
+    expect(pairs.map((p) => p.id)).toEqual(['fletchingCrossbow']);
     expect(pairs[0].edges).toHaveLength(2);
-    expect(activePairs([at('archers', 0, 3), at('fletching', 4, 4)])).toEqual([]); // diagonal only
+    expect(activePairs([at('crossbow', 0, 3), at('fletching', 4, 4)])).toEqual([]); // diagonal only
     // The keep is a neighbour too.
     expect(activePairs([at('masonry', 5, 0)]).map((p) => p.id)).toEqual(['masonryKeep']);
   });
@@ -2295,8 +2302,8 @@ describe('town plot', () => {
   it('applies bonuses and clashes only for placed, touching buildings', () => {
     const meta = { archers: 1, fletching: 1 };
     const base = applyMeta(meta, 0);
-    expect(applyMeta(meta, 0, undefined, [at('archers', 0, 3), at('fletching', 0, 4)]).archers.damage).toBeCloseTo(base.archers.damage * 1.15);
-    expect(applyMeta(meta, 0, undefined, [at('archers', 0, 3), at('fletching', 4, 4)]).archers.damage).toBeCloseTo(base.archers.damage);
+    expect(applyMeta(meta, 0, undefined, [at('crossbow', 0, 3), at('fletching', 0, 4)]).crossbow.damage).toBeCloseTo(base.crossbow.damage * 1.15);
+    expect(applyMeta(meta, 0, undefined, [at('crossbow', 0, 3), at('fletching', 4, 4)]).crossbow.damage).toBeCloseTo(base.crossbow.damage);
     const m2 = { alchemist: 1, treasury: 1 };
     const chest = applyMeta(m2, 0).economy.warChest;
     expect(applyMeta(m2, 0, undefined, [at('alchemist', 0, 3), at('treasury', 2, 3)]).economy.warChest).toBe(chest - 30);
@@ -2315,19 +2322,19 @@ describe('town plot', () => {
   });
 
   it('sanitizePlot drops junk, unowned, duplicate, off-land and overlapping entries', () => {
-    const meta = { archers: 1, oil: 1, drill: 1 };
+    const meta = { crossbow: 1, oil: 1, drill: 1 };
     expect(sanitizePlot(meta, 'junk')).toEqual([]);
     expect(sanitizePlot(meta, null)).toEqual([]);
     const messy = [
-      null, 7, { id: 'bogus', x: 3, y: 0, rot: 0 }, { id: 'archers', x: 'a', y: 0, rot: 0 }, { id: 'archers', x: 3, y: 0, rot: 9 },
+      null, 7, { id: 'bogus', x: 3, y: 0, rot: 0 }, { id: 'crossbow', x: 'a', y: 0, rot: 0 }, { id: 'crossbow', x: 3, y: 0, rot: 9 },
       at('forge', 3, 0), // not owned
-      at('archers', 3, 3),
-      at('archers', 3, 2), // duplicate
+      at('crossbow', 3, 3),
+      at('crossbow', 3, 2), // duplicate
       at('oil', 4, 3), // overlaps archers
       at('drill', 0, 0), // off the starting land
       at('oil', 3, 1),
     ];
-    expect(sanitizePlot(meta, messy)).toEqual([at('archers', 3, 3), at('oil', 3, 1)]);
+    expect(sanitizePlot(meta, messy)).toEqual([at('crossbow', 3, 3), at('oil', 3, 1)]);
     expect(sanitizePlot({ ...meta, land: 3 }, messy)).toContainEqual(at('drill', 0, 0));
   });
 
@@ -2336,7 +2343,7 @@ describe('town plot', () => {
     expect(full.land).toBe(3);
     expect(full.layout).toHaveLength(20);
     for (const p of full.layout) expect(canPlace(full.layout, p, 3)).toBe(true);
-    const early = Object.fromEntries(['archers', 'soldiers', 'watchtower', 'warroom', 'treasury', 'masonry', 'fletching', 'tavern'].map((id) => [id, 1]));
+    const early = Object.fromEntries(['crossbow', 'soldiers', 'watchtower', 'warroom', 'treasury', 'masonry', 'fletching', 'tavern'].map((id) => [id, 1]));
     const small = autoPack(early);
     expect(small.land).toBe(0);
     expect(small.layout).toHaveLength(8);

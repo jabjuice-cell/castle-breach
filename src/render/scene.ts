@@ -292,13 +292,14 @@ function cutStones(stones: Stone[], res: number): { p: THREE.Vector3; c: THREE.C
   return out;
 }
 const TOWER_HALF = 1.5;
-const TOWER_Z = 1;
+/** Towers stand across the middle of the wall's depth (config wall.depth, 3 since 7 Nov). */
+const TOWER_Z = 1.5;
 /** Each storey the player stacks on a tower adds this much height. */
 const STOREY_H = 2.25;
 /** How high the top of a tower of n storeys is: it rises from the ground, one storey above the level wall per storey. */
 const towerTop = (storeys: number) => WALL_H + storeys * STOREY_H;
 /** How a squad of archers stands: columns x rows around its spot. */
-const SQUAD_COLS = 6;
+const SQUAD_COLS = 4;
 /** A soldier company's banner group where it was placed (the rest muster at the wall). */
 const COMPANY = [[0, 0], [-0.7, 0.3], [0.7, 0.3], [-0.35, -0.4], [0.35, -0.4]];
 const SQUAD_SPACING = 0.75;

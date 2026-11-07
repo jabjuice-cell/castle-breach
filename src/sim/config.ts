@@ -68,8 +68,8 @@ export const defaultConfig = {
    * hit (it still bounces off); orcs go round them. They keep off the road down the middle.
    */
   fieldTrees: { counts: [7, 9, 10], radius: 0.75, minY: 14, maxY: 56, roadHalf: 6, apart: 4 },
-  /** The run is lost when any one segment reaches 0 HP. */
-  wall: { segments: 5, segmentHp: 400, depth: 2, warnBelow: 0.25 },
+  /** The run is lost when any one segment reaches 0 HP. depth: the wall walk is 3 deep (7 Nov), room to place defenders on it. */
+  wall: { segments: 5, segmentHp: 400, depth: 3, warnBelow: 0.25 },
 
   // ---- enemies (the bricks) ---------------------------------------------------
   // mass divides knockback; climbSeconds 0 means it smashes the wall without climbing.
@@ -89,9 +89,9 @@ export const defaultConfig = {
   /** A brick that shoots back: throws pebbles at the wall as its block marches, or (boltShare of them) fires fast bolts. */
   chucker: { hp: 10, speed: 1.8, radius: 0.5, mass: 1, wallDps: 1, meleeDps: 2, climbSeconds: 3, gold: 2, threat: 2, throwFromY: 44, throwInterval: 4, boltShare: 0.5 },
   /** Goblin runners: small, quick and fragile, sprinting down the side lanes in loose packs. */
-  runner: { hp: 6, speed: 3.6, radius: 0.4, mass: 0.8, wallDps: 1, meleeDps: 2, climbSeconds: 2, gold: 1, threat: 1 },
+  runner: { hp: 6, speed: 2.1, radius: 0.4, mass: 0.8, wallDps: 1, meleeDps: 2, climbSeconds: 2, gold: 1, threat: 1 },
   /** Riders zig-zag across the field in a skirmish line. */
-  rider: { hp: 8, speed: 2.6, radius: 0.55, mass: 1.2, wallDps: 1, meleeDps: 3, climbSeconds: 2, gold: 2, threat: 2, zigSpeed: 4, zigRate: 1.6 },
+  rider: { hp: 8, speed: 1.7, radius: 0.55, mass: 1.2, wallDps: 1, meleeDps: 3, climbSeconds: 2, gold: 2, threat: 2, zigSpeed: 2.4, zigRate: 1.1 },
   /** The ball source: marches at the back of a block, then parks and lobs boulders at the wall. */
   orcCatapult: {
     hp: 60, speed: 1.2, radius: 1, mass: 6, wallDps: 5, meleeDps: 5, climbSeconds: 0, gold: 15, threat: 0,
@@ -145,6 +145,15 @@ export const defaultConfig = {
     regroupSeconds: 0.5,
     /** Distance between slots in a block: wide enough that each voxel orc reads on its own. */
     spacing: 2.1,
+    /** Attack patterns (waves.ts): an invader block sweeps sideways at invaderSide x its march speed, then steps down over invaderDrop seconds. */
+    invaderSide: 2.2,
+    invaderDrop: 0.5,
+    /** A weaving block swings at this rate (radians per second). */
+    weaveRate: 0.9,
+    /** A surging block rushes at surgeFast for half of each surgeSeconds, then crawls at surgeSlow. */
+    surgeSeconds: 3,
+    surgeFast: 1.75,
+    surgeSlow: 0.25,
   },
 
   /** Enemy projectiles: what reaches the wall does wallDamage. A blocked one becomes a ball. */
@@ -181,6 +190,12 @@ export const defaultConfig = {
     trickMax: 1.309,
     /** A serve off the shield goes up at up to this angle, by where the ball sits on it. */
     serveAngle: 0.6,
+    /**
+     * The curved shield: across the middle the outgoing angle is curveWeight of the way from the mirror
+     * bounce to an aim set by the hit point, up to curveMax (radians) at the edge of the middle.
+     */
+    curveWeight: 0.6,
+    curveMax: 1.0,
     /** Moving the shield at full speed adds up to this much angle in the direction of travel (20 degrees)... */
     english: 0.35,
     /** ...and this much curve (radians per second the path bends), fading over curveSeconds: about 20 degrees in all. */
@@ -243,6 +258,8 @@ export const defaultConfig = {
     reserveSeconds: 0.4,
     /** The served Royal Ball launches by itself after this long, so nobody gets stuck. */
     autoServeSeconds: 0.5,
+    /** After the Royal Ball hits the wall, its re-serve counts 3, 2, 1 over this many seconds, then goes. */
+    royalCountdown: 1.2,
     /** Balls never travel flatter than 75 degrees: this share of their speed up or down the field. */
     minVertical: 0.259,
     /** Combo milestones: a bell, "Glorious!", and the ball turns gold. */
@@ -353,8 +370,11 @@ export const defaultConfig = {
    * Archers, crossbows and catapults can be placed anywhere on the castle grounds:
    * on the wall, the towers or in the courtyard behind (y from minY up to the wall's front face).
    */
-  /** Defenders on sale. At first only the crossbow; the town's upgrades unlock the rest (see meta.ts). */
-  unlocks: { defenders: ['crossbow', 'soldiers'] as string[], buildings: ['keep'] as string[] },
+  /**
+   * Defenders on sale. A bare config (tests, balance sims) sells the original four; in the game applyMeta
+   * sets it: archers and the catapult at first, the town's upgrades unlock the rest (see meta.ts).
+   */
+  unlocks: { defenders: ['archers', 'catapult', 'crossbow', 'soldiers'] as string[], buildings: ['keep'] as string[] },
   castle: {
     minY: -7,
     maxY: 0,
@@ -425,8 +445,8 @@ export const defaultConfig = {
    * Arrows arc high and rain down around the target; each one hits whoever it lands on.
    */
   archers: {
-    cost: 80, archers: 30, interval: 4, damage: 10, range: 66, flightTime: 1.7, spread: 2.6, hitRadius: 0.75,
-    burnSeconds: 3, footprint: 2.6,
+    cost: 80, archers: 12, interval: 4, damage: 22, range: 66, flightTime: 1.7, spread: 2.2, hitRadius: 0.85,
+    burnSeconds: 3, footprint: 1.6,
     /** Each volley has this chance to shoot down each enemy boulder in its cover. */
     shootDown: 0.3,
     /** Arrows do only this share of their damage to orcs climbing or hacking at the wall. */
@@ -655,7 +675,7 @@ export const defaultConfig = {
     ],
     bonuses: {
       blacksmithSoldiers: { soldierCost: 0.8 },
-      fletchingArchers: { archerDamage: 1.15 },
+      fletchingCrossbow: { crossbowDamage: 1.15 },
       drillSoldiers: { soldierHp: 1.2 },
       tavernSoldiers: { soldierCount: 3 },
       workshopForge: { catapultInterval: 0.85 },
@@ -665,7 +685,7 @@ export const defaultConfig = {
       spiketrapMasonry: { spikeTrapCost: 0.75 },
       alchemistOil: { oilBurnSeconds: 2 },
       alchemistMage: { mageRadius: 1.15 },
-      watchtowerArchers: { archerReach: 1.1 },
+      watchtowerCrossbow: { archerReach: 1.1 },
       marketTreasury: { warChest: 40 },
       marketGuild: { killGold: 1.1 },
       tavernMarket: { earlyGold: 1.25 },
