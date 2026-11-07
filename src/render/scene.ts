@@ -8,7 +8,6 @@ import explosionUrl from '../assets/fx/explosion.webp';
 import impactUrl from '../assets/fx/impact.webp';
 import fireballUrl from '../assets/fx/fireball.webp';
 import enemyBoltUrl from '../assets/fx/enemy-bolt.webp';
-import craterUrl from '../assets/maps/crater.webp';
 import scorchUrl from '../assets/maps/scorch.webp';
 import courtyardUrl from '../assets/maps/courtyard.jpg';
 import catapultUrl from '../assets/sprites/enemy-catapult.webp';
@@ -186,12 +185,11 @@ const HEAVE_SECONDS = 0.15;
 const SHIELD_FLASH_SECONDS = 0.25;
 /** Balls fly at this height, and are drawn this much bigger than their hit size so they read from up here. */
 const BALL_Y = 0.9;
-const SHIELD_HIDE_DEPTH = 3.4; // how far past the shield a ball is still hidden by it
 const PHASE_IN = 1.5; // seconds an enemy takes to phase in after spawning
 const BALL_DRAW = 1.7;
 
 /** Sprite height relative to the orc grunt (and defenders), from the art guide. */
-const SIZE: Record<EnemyKind, number> = { grunt: 1, chucker: 1, barrel: 1, runner: 0.85, rider: 1.4, orcCatapult: 2, ogre: 2.5, warlord: 3, shieldOrc: 1, drummer: 1.15 };
+const SIZE: Record<EnemyKind, number> = { grunt: 1, chucker: 1, barrel: 1, runner: 0.85, rider: 1.4, orcCatapult: 2.8, ogre: 2.5, warlord: 3, shieldOrc: 1, drummer: 1.15 };
 const KILL_COLOR: Record<EnemyKind, string> = {
   grunt: '#6f9a3c', chucker: '#8a9a42', barrel: '#8a5a2e', runner: '#9ac040', rider: '#6d4a32', orcCatapult: '#7a5530', ogre: '#8d9a6a', warlord: '#5d8a34', shieldOrc: '#7a7a82', drummer: '#b8452a',
 };
@@ -407,6 +405,10 @@ export class BattleScene {
   /** The same orcs as voxel models; orcStyle picks which set is drawn. */
   private voxelOrcs: VoxelOrcs;
   orcStyle: 'voxel' | 'sprite' = 'voxel';
+  /** Green orc blood, flying bits and messier deaths (settings: Gore). */
+  gore = true;
+  /** Draw calls in the last frame, both scenes together (the FPS meter shows it). */
+  get drawCalls() { return this.renderer.info.render.calls; }
   /** Orcs a heave sent flying: they tumble up the field and land in a puff of dust. */
   private flung: { kind: EnemyKind; pos: THREE.Vector3; vel: THREE.Vector3; spin: THREE.Vector3; rot: THREE.Euler; life: number }[] = [];
   private soldierSprites: THREE.InstancedMesh;
@@ -433,7 +435,6 @@ export class BattleScene {
   /** The see-through defender that follows the mouse while placing or moving one, by kind. */
   private ghosts = new Map<PlacedKind, THREE.Group>();
   private ghostShown: { kind: PlacedKind; ok: boolean } | null = null;
-  private crater = loadImage(craterUrl);
   private scorch = loadImage(scorchUrl);
   private scorchBlast = loadImage(scorchBlastUrl);
   private courtyard = loadImage(courtyardUrl);
@@ -574,6 +575,7 @@ export class BattleScene {
     topSun.position.copy(sun.position);
     this.topScene.add(topSun);
     this.renderer.autoClear = false;
+    this.renderer.info.autoReset = false;
 
     this.groundMat = new THREE.MeshLambertMaterial();
     this.addDetail(this.groundMat);
@@ -689,14 +691,16 @@ export class BattleScene {
     this.scene.add(this.debrisMesh);
 
     // The royal shield: a real steel shield standing out in front of the wall, its painted face
-    // to the orcs, so from the castle we see its back. Balls are drawn over it, so none hide behind it.
+    // to the orcs, so from the castle we see its back. It is drawn in the top pass with the balls, so a ball
+    // rebounding off it is hidden behind it by the depth test, never clipping through its face (Jonny, 7 Nov).
     this.shieldModel = new ShieldModel(this.voxelRes);
-    this.scene.add(this.shieldModel.group);
+    this.topScene.add(this.shieldModel.group);
     const bearerGeo = this.figureGeo('soldiers').solid!;
     for (let i = 0; i < 2; i++) {
       const b = new THREE.Mesh(bearerGeo, new THREE.MeshLambertMaterial({ vertexColors: true }));
       this.bearers.push(b);
-      this.scene.add(b);
+      // With the shield in the top pass, so they stay in front of it.
+      this.topScene.add(b);
     }
     this.shieldShadow = new THREE.Mesh(
       new THREE.PlaneGeometry(1, 0.5).rotateX(-Math.PI / 2),
@@ -1214,12 +1218,13 @@ export class BattleScene {
             this.cameo([this.chunkArt.reveal.texture], ev.x, -ev.y, 4.2, 4.5, new THREE.Vector3(1.5, 0, -6), this.chunkArt.reveal.aspect);
           }
           if (big >= 2) {
-            this.ground.decal(ev.x, -ev.y, big, this.scorch, 0.75);
+            this.ground.mud(ev.x, -ev.y, big * 0.7);
             this.terrain.crater(ev.x, -ev.y, big * 0.8, 0.4);
             fw.burst(ev.x, big, -ev.y, { count: 40 * big, colors: [...GOLD, KILL_COLOR[ev.kind]], speed: 8 + big * 2, life: 1, size: 0.45, up: 0.4, twinkle: true });
           } else if (Math.random() < 0.5) {
             this.ground.stamp(ev.x, -ev.y, 0.9 * big, 'rgba(60,70,20,0.5)');
           }
+          if (this.gore && ev.kind !== 'warlord') this.goreDeath(ev.kind, ev.x, -ev.y, big, ev.heaved === true);
           if (this.orcStyle === 'voxel' && ev.kind !== 'warlord') this.breakOrc(ev.kind, ev.x, -ev.y);
           else this.burst(ev.x, 0.6 * big, -ev.y, big >= 2 ? Math.round(4 * big) : 2, KILL_COLOR[ev.kind], 4 + big);
           // A pop of gold glints: every kill pays.
@@ -1228,7 +1233,7 @@ export class BattleScene {
         }
         case 'splash':
           this.spawnEffect('explosion', ev.x, -ev.y, 0.45, ev.radius);
-          this.ground.decal(ev.x, -ev.y, ev.radius * 0.6, this.crater, 0.8);
+          this.ground.mud(ev.x, -ev.y, ev.radius * 0.6);
           this.terrain.crater(ev.x, -ev.y, ev.radius * 0.55, 0.55);
           this.burst(ev.x, 0.4, -ev.y, 6, '#9a8f78', 6);
           fw.burst(ev.x, 0.6, -ev.y, { count: 40, colors: FIRE, speed: 9, life: 0.6, size: 0.45, up: 0.5 });
@@ -1289,6 +1294,12 @@ export class BattleScene {
           cue.mesh.rotation.y = Math.atan2(ev.vy, ev.vx);
           cue.mesh.scale.set(1.2, 1, 1);
           cue.mesh.visible = true;
+          // A return you feel (Jonny, 7 Nov): sparks off the steel, a white-gold flare, and the shield kicks back.
+          const sp = Math.min(1, Math.hypot(ev.vx, ev.vy) / 40);
+          this.sparks(ev.x, BALL_Y, -sy - 0.2, 6 + Math.round(sp * 8));
+          fw.burst(ev.x, BALL_Y + 0.2, -sy - 0.3, { count: 14 + Math.round(sp * 16), colors: ['#ffffff', '#fff2a8', '#ffd34a'], speed: 7 + sp * 6, life: 0.3, size: 0.32, up: 0.4, gravity: 10 });
+          this.shieldJolt = Math.max(this.shieldJolt, 0.6 + sp * 0.4);
+          this.shake = Math.max(this.shake, 0.06 + sp * 0.08);
           break;
         }
         case 'perfect':
@@ -1324,7 +1335,7 @@ export class BattleScene {
           break;
         case 'rampLand':
           this.spawnEffect('explosion', ev.x, -ev.y, 0.35, ev.radius * 0.8);
-          this.ground.decal(ev.x, -ev.y, ev.radius * 0.5, this.crater, 0.7);
+          this.ground.mud(ev.x, -ev.y, ev.radius * 0.5);
           this.burst(ev.x, 0.4, -ev.y, 8, '#9a8f78', 7);
           this.shake = Math.max(this.shake, 0.3);
           break;
@@ -1591,8 +1602,10 @@ export class BattleScene {
           fw.burst(ev.x, WALL_H * 0.65, -0.2, { count: 10 + k * 40, colors: ['#e8d8b0', '#ffb43a', '#ffffff'], speed: 6 + k * 8, life: 0.45, size: 0.4, up: 0.5 });
           for (let i = 0; i < 1 + k * 4; i++) this.puff(ev.x + (Math.random() - 0.5) * 2, WALL_H * 0.65 + Math.random(), 0.5, 2 + k * 2.5, '#d8ccb0', 0.8 + k * 0.6);
           if (this.effects.length < 40) this.spawnEffect('impact', ev.x, 0.5, 0.25, 1.6 + k * 1.6);
-          if (ev.damage >= 3) this.shake = Math.max(this.shake, 0.15 + k * 0.45);
-          if (k >= 0.8) this.flash(0.15, '#ffb43a');
+          // Every hit is felt (Jonny, 7 Nov: wall hits more impactful): a jolt, a scorch on the stone, a flash for big ones.
+          this.shake = Math.max(this.shake, 0.12 + k * 0.5);
+          this.ground.decal(ev.x, -1, 0.8 + k * 1.2, this.scorch, 0.5);
+          if (k >= 0.5) this.flash(0.1 + k * 0.1, '#ffb43a');
           break;
         }
         case 'segmentDestroyed': {
@@ -1706,6 +1719,7 @@ export class BattleScene {
       this.camBase.z - ahead,
     );
     this.camera.lookAt(tmpD.copy(this.camLook).setZ(this.camLook.z - ahead));
+    this.renderer.info.reset();
     this.renderer.clear();
     this.renderer.render(this.scene, this.camera);
     this.renderer.clearDepth();
@@ -1782,11 +1796,10 @@ export class BattleScene {
     let sh = 0;
     for (const b of g.balls) {
       if (n >= MAX_BALLS) break;
-      // A ball just beyond the shield (from the castle's view) is hidden by it.
-      if (!b.air && Math.abs(b.x - g.shield.x) < g.shieldHalfWidth() * SHIELD_OVERHANG && b.y > g.cfg.shield.y - 0.2 && b.y < g.cfg.shield.y + SHIELD_HIDE_DEPTH) continue;
       const color = g.time < g.effects.fireball ? '#ff8a2a' : b.breakHits > 0 ? '#ffd34a' : this.ballColor(b);
       let size = (b.kind === 'pebble' ? 0.75 : b.kind === 'royal' ? 1.25 : 1) * BALL_DRAW;
       let y = BALL_Y;
+      if (b.rail) y += g.rails[b.rail.index]?.height ?? 0;
       if (b.air) {
         // Over a ramp: up in an arc, bigger, with its shadow left on the ground.
         const arc = Math.sin(Math.PI * Math.min(1, Math.max(0, (b.y - b.air.fromY) / Math.max(0.1, b.air.landY - b.air.fromY))));
@@ -3012,6 +3025,56 @@ export class BattleScene {
         color: p.color.clone(),
         size,
       });
+    }
+  }
+
+  /**
+   * One of several messier deaths, picked at random: a spray of green blood, a head
+   * that pops off and spins away, a flattening splat, or a scorched smoking husk.
+   */
+  private goreDeath(kind: EnemyKind, x: number, z: number, big: number, heaved: boolean) {
+    const fw = this.fireworks;
+    const ground = this.groundHeight(x, z);
+    const roll = heaved ? 2 : (Math.random() * 4) | 0;
+    const cap = QUALITY[this.quality].debris;
+    const blood = ['#3f7a12', '#5c9e1c', '#2c5a0c'];
+    // Every gory death leaves a green splash on the grass.
+    this.ground.stamp(x, z, 0.8 * big + Math.random() * 0.5, 'rgba(52,110,18,0.7)');
+    fw.burst(x, ground + 0.7 * big, z, { count: 14 * big, colors: blood, speed: 5 + big, life: 0.7, size: 0.32, up: 0.6, gravity: 14 });
+    if (roll === 0 && this.debris.length < cap) {
+      // Head pop: one big chunk flies high and spins away.
+      this.debris.push({
+        pos: new THREE.Vector3(x, ground + 1.1 * big, z),
+        vel: new THREE.Vector3((Math.random() - 0.5) * 4, 9 + Math.random() * 4, (Math.random() - 0.5) * 3),
+        spin: new THREE.Vector3(14, 9, 11),
+        rot: new THREE.Euler(),
+        life: 1.6,
+        color: new THREE.Color(KILL_COLOR[kind]),
+        size: 2.4 * Math.min(big, 1.6),
+      });
+      fw.burst(x, ground + 1.1 * big, z, { count: 18, colors: blood, speed: 3, life: 0.9, size: 0.28, up: 1.4, gravity: 10 });
+    } else if (roll === 1) {
+      // Bits: a handful of meaty chunks scatter low and bounce.
+      for (let i = 0; i < 6 * big && this.debris.length < cap; i++) {
+        this.debris.push({
+          pos: new THREE.Vector3(x, ground + 0.5, z),
+          vel: new THREE.Vector3((Math.random() - 0.5) * 9, 3 + Math.random() * 3, (Math.random() - 0.5) * 9),
+          spin: new THREE.Vector3(Math.random() * 12, Math.random() * 12, Math.random() * 12),
+          rot: new THREE.Euler(),
+          life: 1.4 + Math.random() * 0.6,
+          color: new THREE.Color(i % 2 ? '#7a2a1a' : blood[i % 3]),
+          size: 0.9 + Math.random() * 0.6,
+        });
+      }
+    } else if (roll === 2) {
+      // Splat: flattened into a wide green puddle.
+      this.ground.stamp(x, z, 1.6 * big, 'rgba(40,96,14,0.75)');
+      fw.burst(x, ground + 0.2, z, { count: 24 * big, colors: blood, speed: 9, life: 0.5, size: 0.3, up: 0.15, gravity: 18 });
+    } else {
+      // Scorched: a black husk and a puff of smoke.
+      this.ground.stamp(x, z, 0.9 * big, 'rgba(30,24,18,0.6)');
+      this.burst(x, ground + 0.6, z, 4, '#2a2420', 3);
+      fw.burst(x, ground + 1, z, { count: 10, colors: ['#555048', '#7a746a'], speed: 1.5, life: 1.2, size: 0.6, up: 2, gravity: -2 });
     }
   }
 

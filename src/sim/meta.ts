@@ -123,8 +123,11 @@ export function metaCost(meta: MetaLevels, id: string): number {
 export interface Progress {
   renown: number;
   meta: MetaLevels;
-  /** Levels beaten so far; the next one to play is this (0-based). */
+  /** Levels beaten so far in the old three-level run (the balance sim still plays it that way). */
   levelsBeaten: number;
+  /** The campaign (campaign.ts): best stars on each stage cleared, and the stage picked on the overmap. */
+  cleared: Record<string, number>;
+  stage: string;
   /** The last level's defenders, so the setup can put them back in one click. */
   lastLoadout: { kind: DefenderKind; x: number; y: number }[];
   /** True once the guided first wave has been played (or skipped by an older save). */
@@ -136,7 +139,7 @@ export interface Progress {
 }
 
 export function newProgress(): Progress {
-  return { renown: 0, meta: {}, levelsBeaten: 0, lastLoadout: [], tutorialDone: false, choices: defaultChoices(), plot: [] };
+  return { renown: 0, meta: {}, levelsBeaten: 0, cleared: {}, stage: '1-1', lastLoadout: [], tutorialDone: false, choices: defaultChoices(), plot: [] };
 }
 
 /** Spends Renown on the next level of an upgrade. */

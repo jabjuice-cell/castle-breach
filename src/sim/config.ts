@@ -28,7 +28,7 @@ export const defaultConfig = {
      * routeClear beyond their radius off any orc route. Ramps go between rampMinY and rampMaxY.
      */
     layout: {
-      counts: [{ bumper: 2, bell: 4, ramp: 0 }, { bumper: 2, bell: 4, ramp: 1 }, { bumper: 3, bell: 4, ramp: 1 }],
+      counts: [{ bumper: 2, bell: 4, ramp: 0, target: 0 }, { bumper: 2, bell: 4, ramp: 1, target: 0 }, { bumper: 3, bell: 4, ramp: 1, target: 0 }],
       minY: 40, maxY: 62, apart: 4, routeClear: 1.5, edge: 0.5, rampMinY: 18, rampMaxY: 28, ramp: { hw: 2.2, hh: 1.6 }, tries: 400,
     } as LayoutRules,
     /** The sink-and-rise when the layout changes in the wave break (seconds each way; visual only). */
@@ -42,7 +42,20 @@ export const defaultConfig = {
     bell: { radius: 1.1, count: 4, resetSeconds: 6, combo: 1, arrows: 30, damage: 10, spread: 2.6, flightTime: 1.7 },
     /** A ball entering a ramp flies distance up the field, then drops, hurting orcs within splashRadius. */
     ramp: { distance: 14, splashRadius: 3.5, damage: 30, knockback: 12, combo: 1 },
+    /**
+     * Drop targets: a bank of count straw orc dummies side by side (each hw x hh), placed like bells. A hit knocks one
+     * flat (combo); knock the whole bank down for jackpot gold (times the tier) and a bonus Royal Ball fired up the field
+     * from the bank (multiball). The bank stands again after resetSeconds.
+     */
+    target: { count: 3, hw: 0.55, hh: 0.3, gap: 1.35, combo: 1, jackpot: 25, resetSeconds: 8 },
   },
+  /**
+   * Orbit rails (pinball): a raised track that runs out over the tree line, up the outside of the field, across behind
+   * the orc camp and back in on the far side. A ball going up the field into its mouth (mouth radius, entry at entryY,
+   * inset from the tree line) rides it at speed or better, then drops back in behind the orc lines heading down, with
+   * combo added. count per stage (campaign.ts): 1 enters on the left, 2 also on the right.
+   */
+  rails: { count: 0, mouth: 1.3, entryY: 30, inset: 2.4, outside: 2.6, speed: 34, combo: 3, height: 2.6 },
   /**
    * War Council shaping: between waves the player places barricades and rubble (limits per level) and
    * moves bumpers and ramps anywhere between minY and maxY. Pieces keep edge off the side trees and
@@ -497,6 +510,10 @@ export const defaultConfig = {
    */
   levels: {
     waves: 5,
+    /** The wave number the level's first wave plays as (a campaign stage sets it; otherwise level x waves + 1). */
+    firstWave: 0,
+    /** The level's tier for gold rewards (coins, rows, jackpots): a campaign stage sets its act + 1; otherwise level + 1. */
+    tier: 0,
     names: ['The Old Road', 'Mill Ford', 'The Black Gate'],
     warChest: [400, 550, 750],
     /** Level 1 is a narrow road; later fields are wider, behind a longer wall of more sections. */
@@ -516,6 +533,8 @@ export const defaultConfig = {
   waves: {
     /** The lull between waves: time to repair, upgrade and buy before the next one marches. */
     previewSeconds: 30,
+    /** While the player is placing or upgrading, the lull's countdown holds above this many seconds. */
+    holdFloor: 8,
     /** Threat budget in grunt-equivalents: base * growth^(wave - 1). */
     budgetBase: 55,
     budgetGrowth: 1.3,

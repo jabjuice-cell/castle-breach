@@ -115,9 +115,98 @@ export class Sounds {
     out.gain.value = 0.32;
     out.connect(ctx.destination);
     const pitch = 0.9 + Math.random() * 0.22;
-    this.thud(now, out, 160 * pitch, 60, 0.12, 0.7);
-    this.smack(now, out, 1300 * pitch, 0.04, 0.6);
-    this.plate(now, out, 196 * pitch, 0.55, 0.8);
+    // A satisfying return (Jonny, 7 Nov): more body under the ring, and a sub-bass punch.
+    out.gain.value = 0.4;
+    this.thud(now, out, 120 * pitch, 40, 0.18, 1);
+    this.thud(now, out, 260 * pitch, 90, 0.07, 0.5);
+    this.smack(now, out, 1100 * pitch, 0.05, 0.75);
+    this.plate(now, out, 176 * pitch, 0.7, 0.85);
+  }
+
+  private lastChunk = 0;
+  private lastWall = 0;
+
+  /**
+   * A chunky hit on an orc (Jonny, 7 Nov: "more sound effects that are chunky"): a punchy low body blow, a wet
+   * squelch and a crack of bone or armour. kill: the orc goes down, so heavier; big: an ogre or bigger.
+   */
+  chunk(kill: boolean, big = false) {
+    const ctx = this.ctx;
+    if (!ctx || this.muted) return;
+    const now = ctx.currentTime;
+    if (now - this.lastChunk < (kill ? 0.045 : 0.03)) return;
+    this.lastChunk = now;
+    const out = ctx.createGain();
+    out.gain.value = kill ? (big ? 0.7 : 0.45) : 0.28;
+    out.connect(ctx.destination);
+    const pitch = (big ? 0.6 : 1) * (0.85 + Math.random() * 0.3);
+    this.thud(now, out, 150 * pitch, 42 * pitch, kill ? 0.16 : 0.09, 1);
+    this.smack(now, out, 520 * pitch, kill ? 0.07 : 0.04, 1);
+    if (!kill) return;
+    // The squelch: noise through a band sweeping down, then a crack.
+    const ctx2 = ctx;
+    const n = ctx2.createBufferSource();
+    n.buffer = this.noise(0.18, 1.5);
+    const band = ctx2.createBiquadFilter();
+    band.type = 'bandpass';
+    band.Q.value = 3;
+    band.frequency.setValueAtTime(1400 * pitch, now);
+    band.frequency.exponentialRampToValueAtTime(260 * pitch, now + 0.16);
+    const g = ctx2.createGain();
+    g.gain.value = 0.9;
+    n.connect(band).connect(g).connect(out);
+    n.start(now + 0.01);
+    this.smack(now + 0.02, out, 2600 * pitch, 0.025, 0.6);
+  }
+
+  /** Something hits the wall (Jonny, 7 Nov: make it impactful): a deep stone thud you feel, the crack, and rubble. */
+  wallHit(damage: number) {
+    const ctx = this.ctx;
+    if (!ctx || this.muted) return;
+    const now = ctx.currentTime;
+    if (now - this.lastWall < 0.07) return;
+    this.lastWall = now;
+    const level = Math.min(1, 0.35 + damage / 25);
+    const out = ctx.createGain();
+    out.gain.value = 0.75 * level;
+    out.connect(ctx.destination);
+    this.thud(now, out, 95, 30, 0.35, 1.2);
+    this.thud(now + 0.01, out, 210, 70, 0.12, 0.6);
+    this.smack(now, out, 700, 0.12, 1);
+    this.lastCrunch = 0;
+    this.crunch(damage);
+  }
+
+  /** A countdown tick: a wooden knock and a short note, higher on the last one. */
+  tick(n: number) {
+    const ctx = this.ctx;
+    if (!ctx || this.muted) return;
+    const now = ctx.currentTime;
+    const out = ctx.createGain();
+    out.gain.value = 0.4;
+    out.connect(ctx.destination);
+    this.thud(now, out, 400, 160, 0.06, 0.8);
+    this.smack(now, out, 1800, 0.03, 0.8);
+    this.tone(n === 1 ? 880 : 660, now, 0.18, 0.12, 'triangle');
+  }
+
+  /** A ball shot into an orbit rail: a rising whoosh and the rattle of iron wheels. */
+  railIn() {
+    const ctx = this.ctx;
+    if (!ctx || this.muted) return;
+    const now = ctx.currentTime;
+    const n = ctx.createBufferSource();
+    n.buffer = this.noise(0.6, 1);
+    const band = ctx.createBiquadFilter();
+    band.type = 'bandpass';
+    band.Q.value = 2;
+    band.frequency.setValueAtTime(300, now);
+    band.frequency.exponentialRampToValueAtTime(2400, now + 0.55);
+    const g = ctx.createGain();
+    g.gain.value = 0.35;
+    n.connect(band).connect(g).connect(ctx.destination);
+    n.start(now);
+    for (let i = 0; i < 8; i++) this.tone(900 + i * 60, now + i * 0.06, 0.04, 0.04, 'square');
   }
 
   /** A crunch of stone when something smashes into the wall: louder for bigger hits. */

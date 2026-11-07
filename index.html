@@ -65,9 +65,9 @@
       #effects { margin-left: auto; letter-spacing: 0.02em; }
       #flash { position: fixed; inset: 0; pointer-events: none; opacity: 0; background: radial-gradient(circle at 50% 70%, var(--flash, #fff6c8), transparent 75%); mix-blend-mode: screen; }
       .floater { position: absolute; left: 0; top: 0; font-family: var(--display); font-weight: 800; font-size: 26px; color: var(--gold); text-shadow: 0 2px 0 var(--ink), 0 0 10px rgba(0, 0, 0, 0.5); white-space: nowrap; will-change: transform, opacity; }
-      .floater.c10 { font-size: 32px; color: #ffa040; }
-      .floater.c25 { font-size: 40px; color: #ff7ad9; }
-      .floater.c40 { font-size: 52px; color: #fff6c8; text-shadow: 0 2px 0 var(--ink), 0 0 18px #ffd34a; }
+      .floater.c10 { font-size: 24px; color: #ffa040; }
+      .floater.c25 { font-size: 28px; color: #ff7ad9; }
+      .floater.c40 { font-size: 34px; color: #fff6c8; text-shadow: 0 2px 0 var(--ink), 0 0 18px #ffd34a; }
       .floater.smash { font-size: 30px; color: #fff6c8; }
       .floater.trick { font-size: 22px; color: #ff9ae8; }
       .floater.rebound { font-size: 34px; color: #ffe066; letter-spacing: 0.04em; text-shadow: 0 3px 0 var(--ink), 0 0 16px #ffb43a; }
@@ -149,6 +149,42 @@
       #town .up button:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
       #town .march { font-size: 20px; padding: 10px 22px; background: var(--gold); }
       #town .plot { margin: 14px 0; }
+      #town .screenNav, #map .screenNav { display: flex; justify-content: space-between; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
+      /* The overmap: one act at a time, a road of stage nodes, the picked stage below, and the two town buildings. */
+      #map { overflow-y: auto; align-items: start; padding-top: max(20px, env(safe-area-inset-top, 0px)); padding-bottom: 20px; }
+      #map .scroll { max-width: 1100px; width: 100%; box-sizing: border-box; }
+      #map header { display: flex; justify-content: space-between; align-items: flex-end; gap: 12px; flex-wrap: wrap; }
+      #map .purse { color: #6a3fa0; font-size: 22px; }
+      #map .acts { display: flex; gap: 6px; margin: 10px 0; flex-wrap: wrap; }
+      #map .acts button { font-size: 14px; padding: 4px 12px; }
+      #map .acts button.on { background: var(--gold); }
+      #map .acts button:disabled { opacity: 0.4; cursor: not-allowed; }
+      #map .mapArea { position: relative; aspect-ratio: 1000 / 600; border: 3px solid #4f2e15; border-radius: 10px; overflow: hidden; background: radial-gradient(circle at 30% 30%, #b5cf7a, #7fa04a); }
+      #map .mapArea.act1 { background: radial-gradient(circle at 60% 40%, #a8c070, #6d8a40); }
+      #map .mapArea.act2 { background: radial-gradient(circle at 50% 30%, #a39b78, #5f5a44); }
+      #map .road { position: absolute; inset: 0; width: 100%; height: 100%; }
+      #map .road polyline { fill: none; stroke: #c9a06a; stroke-width: 14; stroke-linecap: round; stroke-linejoin: round; stroke-dasharray: 2 22; opacity: 0.9; }
+      #map .node { position: absolute; transform: translate(-50%, -50%); width: clamp(84px, 13%, 130px); padding: 4px; display: grid; gap: 2px; justify-items: center; background: #f4e6c4; border-radius: 10px; font-size: 12px; line-height: 1.15; }
+      #map .node svg { width: 100%; height: auto; display: block; }
+      #map .node b { font-size: 12px; text-align: center; }
+      #map .node .stars { color: #b07a00; font-size: 13px; letter-spacing: 1px; }
+      #map .node.locked { filter: grayscale(0.9) brightness(0.8); opacity: 0.7; cursor: not-allowed; }
+      #map .node.picked { outline: 4px solid var(--gold); outline-offset: 2px; transform: translate(-50%, -50%) scale(1.08); z-index: 2; }
+      #map .node.boss { background: #f0c8b4; }
+      #map .mapFoot { display: grid; grid-template-columns: 1fr auto; gap: 16px; margin-top: 12px; align-items: start; }
+      #map .pick h2 { margin: 0 0 4px; font-size: 20px; }
+      #map .pick p { margin: 0 0 6px; }
+      #map .pick .meta { font-size: 13px; opacity: 0.8; }
+      #map .march { font-size: 20px; padding: 10px 22px; background: var(--gold); margin-top: 4px; }
+      #map .march:disabled { opacity: 0.45; cursor: not-allowed; }
+      #map .buildings { display: grid; gap: 8px; }
+      #map .buildings button { display: grid; justify-items: start; text-align: left; font-size: 16px; padding: 8px 14px; min-width: 200px; }
+      #map .buildings small { font-size: 12px; opacity: 0.75; font-weight: normal; }
+      .bossTag { display: inline-block; background: #c0261a; color: #fff; font-size: 12px; padding: 1px 8px; border-radius: 8px; vertical-align: middle; }
+      @media (max-width: 640px) {
+        #map .mapFoot { grid-template-columns: 1fr; }
+        #map .node b, #map .node .stars { font-size: 10px; }
+      }
       #town .plot .hand { margin: 4px 0 8px; font-size: 14px; }
       #town .plot .hand button { font-size: 12px; padding: 2px 8px; margin-left: 6px; }
       #town .plotgrid { display: grid; grid-template-columns: repeat(var(--w), 1fr); aspect-ratio: calc(var(--w) / var(--h)); max-width: 760px; background: #6a8a3a; border: 3px solid #4f2e15; border-radius: 6px; overflow: hidden; }
@@ -180,7 +216,7 @@
       .bottom .panel { flex: 1; }
       .hint { font-size: 12px; opacity: 0.85; margin-top: 6px; }
       kbd { font-family: var(--ui); font-size: 11px; background: var(--parchment); color: var(--ink); border-radius: 3px; padding: 0 5px; }
-      #preview { position: absolute; top: 20%; left: 50%; transform: translateX(-50%); text-align: center; pointer-events: auto; max-width: calc(100% - 32px); }
+      #preview { position: absolute; top: 20%; left: 50%; transform: translateX(-50%); text-align: center; pointer-events: none; max-width: calc(100% - 32px); }
       #preview h2 { margin: 0; font-family: var(--display); font-size: 34px; font-weight: 800; line-height: 1.05; text-wrap: balance; }
       #preview p { margin: 6px 0 10px; font-size: 15px; }
       .markers { position: absolute; inset: 0; }
@@ -223,14 +259,29 @@
       .scroll .stats b { display: block; font-family: var(--display); font-size: 32px; }
       .tag { font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; opacity: 0.7; margin-top: 14px; }
       .topright { display: flex; gap: 8px; align-items: flex-start; flex-wrap: wrap; justify-content: flex-end; }
-      #quality, #sound, #bars, #orcStyle { pointer-events: auto; font-size: 12px; padding: 4px 10px; box-shadow: 0 2px 0 var(--ink); }
+      .top { padding-right: 130px; }
+      #gear { position: fixed; z-index: 40; top: max(12px, env(safe-area-inset-top, 0px)); right: max(16px, env(safe-area-inset-right, 0px)); font-size: 14px; padding: 6px 12px; }
+      #settings { position: fixed; z-index: 41; top: max(56px, calc(env(safe-area-inset-top, 0px) + 50px)); right: max(16px, env(safe-area-inset-right, 0px)); width: min(340px, calc(100% - 32px)); max-height: calc(100% - 80px); overflow-y: auto; padding: 10px 12px 12px; box-sizing: border-box; }
+      #settings header { display: flex; justify-content: space-between; align-items: center; }
+      #settings .rows { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 8px; }
+      #settings .rows button { font-size: 13px; padding: 6px 8px; }
+      #settings details { margin-top: 12px; border-top: 2px dashed rgba(0, 0, 0, 0.25); padding-top: 8px; }
+      #settings summary { cursor: pointer; font-weight: 800; }
+      #settings .jump { display: flex; gap: 6px; align-items: center; margin-top: 8px; font-size: 13px; font-weight: 800; }
+      #settings select { flex: 1; min-width: 0; font: inherit; }
+      #fpsMeter { position: fixed; z-index: 39; left: 8px; top: 50%; background: rgba(0, 0, 0, 0.6); color: #9f9; font: 12px monospace; padding: 3px 6px; border-radius: 3px; pointer-events: none; }
+      #countdown { position: absolute; left: 50%; bottom: 22%; transform: translateX(-50%); font-family: var(--display); font-weight: 800; font-size: clamp(64px, 12vw, 140px); color: #fff6c8; text-shadow: 0 6px 0 var(--ink), 0 0 30px #ffb43a; pointer-events: none; animation: tick 0.4s ease-out both; }
+      @keyframes tick { 0% { transform: translateX(-50%) scale(1.8); opacity: 0; } 30% { transform: translateX(-50%) scale(1); opacity: 1; } 100% { transform: translateX(-50%) scale(0.9); opacity: 0.85; } }
       .queen { display: flex; gap: 10px; align-items: flex-start; }
-      .queen img { width: 64px; height: 64px; object-fit: cover; object-position: top; border-radius: 50%; border: 3px solid var(--gold); background: #2a4fb0; flex: none; }
-      .queen p { margin: 0; font-size: 14px; line-height: 1.35; font-style: italic; }
-      .queen p b { display: block; font-style: normal; font-family: var(--display); font-size: 18px; color: #2a4fb0; }
-      #coach, #queen { position: absolute; left: max(16px, env(safe-area-inset-left, 0px)); bottom: max(170px, calc(env(safe-area-inset-bottom, 0px) + 156px)); width: min(340px, calc(100% - 32px)); background: var(--parchment); color: var(--ink); border: 3px solid var(--ink); border-radius: 6px; padding: 10px 12px; box-shadow: 0 5px 0 rgba(0, 0, 0, 0.35); }
+      /* The Queen: a big portrait leaning in from the left with her hint in a speech bubble (Jonny, 7 Nov). */
+      .queen { display: flex; gap: 0; align-items: flex-end; pointer-events: none; }
+      .queen img { width: clamp(150px, 17vw, 240px); height: clamp(190px, 22vw, 300px); object-fit: cover; object-position: top; border-radius: 10px 10px 0 0; border: 4px solid var(--gold); border-bottom: 0; background: linear-gradient(#3a62c8, #1f3a86); flex: none; box-shadow: 0 0 0 3px var(--ink); }
+      .queen p { margin: 0 0 30% -6px; font-size: 16px; line-height: 1.35; font-style: italic; background: var(--parchment); color: var(--ink); border: 3px solid var(--ink); border-radius: 12px; padding: 10px 14px; box-shadow: 0 5px 0 rgba(0, 0, 0, 0.35); position: relative; }
+      .queen p::before { content: ''; position: absolute; left: -14px; bottom: 18px; border: 8px solid transparent; border-right: 12px solid var(--ink); }
+      .queen p b { display: block; font-style: normal; font-family: var(--display); font-size: 22px; color: #2a4fb0; }
+      #coach, #queen { position: absolute; left: max(16px, env(safe-area-inset-left, 0px)); bottom: max(120px, calc(env(safe-area-inset-bottom, 0px) + 110px)); width: min(600px, calc(100% - 380px)); min-width: 300px; }
       @media (max-width: 720px) { #tray { bottom: auto; top: 76px; } }
-      @media (max-width: 560px) { #callEarly { bottom: 150px; } .wave { font-size: 24px; }  #preview h2 { font-size: 26px; } .hint { display: none; } #queen { display: none; } #coach { bottom: 150px; font-size: 13px; } }
+      @media (max-width: 560px) { #callEarly { bottom: 150px; } .wave { font-size: 24px; }  #preview h2 { font-size: 26px; } .hint { display: none; } #queen { display: none; } #coach { bottom: 150px; font-size: 13px; width: calc(100% - 32px); min-width: 0; } #coach img { display: none; } }
       @media (prefers-reduced-motion: reduce) { .bar > i { transition: none; } .seg.warn .bar { animation: none; } .btag.ready { animation: none; } }
     </style>
   </head>
@@ -246,11 +297,6 @@
         <div class="panel wave"><span id="waveLabel">Wave 1</span><small id="phaseLabel">Get ready</small></div>
         <div class="topright">
           <div class="panel purse"><span class="g"><img class="ico" data-icon="gold" alt="" /><span id="gold">0 gold</span></span><span><img class="ico" data-icon="renown" alt="" /><span id="renown">0 Renown</span></span><span id="kills">0 slain</span><span id="score">Score 0</span></div>
-          <button id="sound" type="button">Sound: On</button>
-          <button id="shake" type="button" title="Camera shake on impacts">Shake: On</button>
-          <button id="quality" type="button" title="Graphics detail: lower it if the game stutters">Detail: Medium</button>
-          <button id="bars" type="button" title="Health bars over the wall sections">Wall bars: Off</button>
-          <button id="orcStyle" type="button" title="Draw the orcs as voxel models or as painted sprites">Orcs: Voxel</button>
         </div>
       </div>
       <div class="panel" id="boss" hidden>
@@ -265,8 +311,8 @@
       <div class="panel" id="preview" hidden>
         <h2 id="previewTitle">Wave 1 marches in 6</h2>
         <p id="previewText">8 grunts</p>
-        <button id="startNow" type="button">Ready <kbd>Enter</kbd></button>
       </div>
+      <div id="countdown" hidden></div>
       <div class="queen" id="coach" hidden><img data-queen alt="The Queen" /><p><b>The Queen</b><span id="coachText"></span></p></div>
       <div class="queen" id="queen" hidden><img data-queen alt="The Queen" /><p><b>The Queen</b><span id="queenText"></span></p></div>
       <div class="bottom" id="bottom">
@@ -290,7 +336,7 @@
           <li>Chain hits without touching the shield for a <b>combo</b> gold multiplier. Hits behind the lines pay double, the towers make bank shots and barrel orcs blow up their friends. Catch falling capsules, but not the red ones.</li>
           <li>Every ball or boulder you miss hits the wall. If any one stretch of wall falls, the castle is breached.</li>
           <li>Before each level, spend your war chest on defenders and put them anywhere on the castle. Each one covers only part of the field. Click a defender to aim or upgrade it, stack towers on the wall for reach, and scroll up to look at the horde. Between waves, click a wall&rsquo;s Repair tag to patch it.</li>
-          <li>Three levels of five waves. Lose one and you are back in the town, where Renown buys upgrades that last for ever. Then the next run starts again from level 1.</li>
+          <li>Three acts of four stages each, picked on the map. Lose a stage and that act starts again from its first stage; Renown buys upgrades in the Throne Room that last for ever.</li>
         </ul>
         <button id="play" type="button">Hold the wall!</button>
         <p class="tag">Breakout build · work in progress</p>
@@ -322,6 +368,27 @@
     </div>
 
     <div class="overlay" id="town" hidden></div>
+    <div class="overlay" id="map" hidden></div>
+
+    <button id="gear" type="button" title="Settings (and debug tools)">&#9881; Settings</button>
+    <div class="card" id="settings" hidden>
+      <header><h3>Settings</h3><button type="button" data-set="close">Close</button></header>
+      <div class="rows">
+        <button id="sound" type="button" data-set="sound">Sound: On</button>
+        <button id="shake" type="button" data-set="shake" title="Camera shake on impacts">Shake: On</button>
+        <button id="quality" type="button" data-set="quality" title="Graphics detail: lower it if the game stutters">Detail: Medium</button>
+        <button id="bars" type="button" data-set="bars" title="Health bars over the wall sections">Wall bars: Off</button>
+        <button id="orcStyle" type="button" data-set="orcStyle" title="Draw the orcs as voxel models or as painted sprites">Orcs: Voxel</button>
+        <button id="gore" type="button" data-set="gore" title="Green orc blood and flying bits when orcs die">Gore: On</button>
+        <button id="fps" type="button" data-set="fps" title="Show the frame rate in the corner">Frame rate: Off</button>
+      </div>
+      <details id="debug">
+        <summary>Debug tools (for testing)</summary>
+        <div class="rows" id="debugRows"></div>
+        <label class="jump">Jump to stage <select id="debugStage"></select> <button type="button" data-dbg="jump">Go</button></label>
+      </details>
+    </div>
+    <div id="fpsMeter" hidden></div>
     <div id="flash"></div>
     <script type="module" src="/src/main.ts"></script>
   </body>

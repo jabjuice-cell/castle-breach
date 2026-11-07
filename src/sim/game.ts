@@ -9,6 +9,7 @@ import { Rng } from './rng';
 import { type Choices, applyChoices } from './town';
 import { BRICK_SPACING, type EnemyKind, type Shape, type WavePlan, brickHelmet, formation, planSize, planWave } from './waves';
 import type { Move } from './waves';
+import { type Rail, buildRails, railAt } from './rails';
 
 /**
  * The whole run simulation. It has no rendering or DOM code, so it runs
@@ -257,6 +258,8 @@ export interface Ball {
   spin: number;
   /** Flying over a ramp: ignores orcs and scenery until it passes landY (or the time runs out). */
   air?: { fromY: number; landY: number; until: number };
+  /** Riding an orbit rail: which one, how far along, and how fast. */
+  rail?: { index: number; s: number; speed: number };
   /** Hits left at double damage after smashing a supply-camp target (Breakthrough). */
   breakHits: number;
 }
@@ -343,6 +346,12 @@ export type GameEvent =
   /** A whole set of bells rang: the castle looses a free volley from the wall at x. */
   | { type: 'bellVolley'; x: number; y: number; arrows: number }
   | { type: 'rampLaunch'; x: number; y: number; index: number }
+  /** A ball shot into an orbit rail's mouth, and dropping out of its far end. */
+  | { type: 'railIn'; x: number; y: number; index: number }
+  | { type: 'railOut'; x: number; y: number; index: number }
+  /** A drop target knocked flat; a whole bank down (jackpot gold, and a bonus ball). */
+  | { type: 'target'; x: number; y: number; index: number; down: number; of: number }
+  | { type: 'jackpot'; x: number; y: number; gold: number }
   /** A ball dropped off a ramp: hits orcs were struck within radius. */
   | { type: 'rampLand'; x: number; y: number; radius: number; hits: number }
   /** A ball smashed one of the trees on the field (obstacle index). */
@@ -467,6 +476,8 @@ export class Game {
   /** The level being played (0-based); it is waves firstWave to lastWave. */
   readonly level: number;
   phaseTimer = 0;
+  /** Set by the UI while the player is placing, aiming or upgrading between waves: the countdown holds. */
+  holdCountdown = false;
   /** The wave in progress (or the last one fought). 0 before the first. */
   wave = 0;
   /** The highest wave fully beaten back. */
@@ -562,7 +573,10 @@ export class Game {
   shapeVersion = 0;
   private routeCache: { key: string; routes: RoutePreview[] } | null = null;
   /** When each bell was rung (-1: not ringing), by contraption index, and when each ringing set resets (by group). */
+  /** Bells: when each was rung (-1 not rung). Drop targets: when each was knocked down (-1 standing). */
   readonly bellRung: number[] = [];
+  /** The field's orbit rails (fixed for the level). */
+  readonly rails: Rail[];
   private bellReset = new Map<number, number>();
   /** When each bumper was last hit, by contraption index, so the render can squash it. */
   readonly bumperHit: number[] = [];
@@ -586,7 +600,10 @@ export class Game {
     // Copies: trees come down during the level, and the next level starts with its own.
     const fixed = (cfg.obstacles.levels[Math.min(level, cfg.obstacles.levels.length - 1)] ?? []).map((o) => ({ ...o }));
     const pinned = this.fixedLayout().map((c) => footprint(c, cfg.contraptions));
-    this.obstacles = [...fixed, ...plantTrees(cfg.fieldTrees, level, cfg.field.halfWidth, seed, [...fixed, ...pinned])];
+    this.rails = buildRails(cfg.rails, cfg.field.halfWidth, cfg.field.topY);
+    // Trees keep clear of the rail mouths.
+    const mouths = this.railMouths();
+    this.obstacles = [...fixed, ...plantTrees(cfg.fieldTrees, level, cfg.field.halfWidth, seed, [...fixed, ...pinned, ...mouths])];
     this.wave = this.cleared = this.firstWave - 1;
     this.plan = planWave(this.firstWave, seed, cfg);
     this.relayout(false);
@@ -621,6 +638,8 @@ export class Game {
         routes: this.plannedRoutes(),
         solid: [...this.obstacles.filter((o) => !o.removed), ...traps],
         radius: k,
+        target: k.target,
+        avoid: this.railMouths(),
       });
     }
     this.contraptions.splice(0, this.contraptions.length, ...next);
@@ -676,7 +695,17 @@ export class Game {
   }
 
   get firstWave(): number {
-    return this.level * this.cfg.levels.waves + 1;
+    return this.cfg.levels.firstWave || this.level * this.cfg.levels.waves + 1;
+  }
+
+  /** The level's tier for gold rewards: a campaign stage's act + 1, or the level + 1. */
+  get tier(): number {
+    return this.cfg.levels.tier || this.level + 1;
+  }
+
+  /** The rail mouths as round shapes, for the layout to keep clear of. */
+  railMouths(): Obstacle[] {
+    return this.rails.map((r) => ({ look: 'stone' as const, x: r.pts[0].x, y: r.pts[0].y, r: this.cfg.rails.mouth + 1 }));
   }
 
   get lastWave(): number {
@@ -865,6 +894,21 @@ export class Game {
     return Math.round(Math.round(this.secondsSkipped() * Math.max(1, next / 5)) * this.cfg.economy.earlyGoldMult);
   }
 
+  /** Dev aid (the debug menu): everything on the field falls at once, and the rest of the wave never comes. */
+  debugClearField(): void {
+    if (this.phase === 'setup') this.endSetup();
+    if (this.phase === 'preview') this.skipPreview();
+    for (const e of this.enemies) e.hp = 0;
+    this.nextGroup = this.plan.groups.length;
+    this.tower = null;
+  }
+
+  /** Dev aid (the debug menu): the level is won as soon as the field is clear. */
+  debugWin(): void {
+    this.debugClearField();
+    this.wave = this.lastWave;
+  }
+
   /**
    * Calls the next wave now: during the preview, or once the current wave is
    * nearly dead. Pays gold and Renown in proportion to the time skipped.
@@ -1022,7 +1066,7 @@ export class Game {
   canMoveContraption(index: number, x: number, y: number): boolean {
     const c = this.contraptions[index];
     const s = this.cfg.shaping;
-    if (!s.enabled || !this.shopOpen || !c || c.kind === 'bell' || Math.abs(x) < s.keepClearX) return false;
+    if (!s.enabled || !this.shopOpen || !c || c.kind === 'bell' || c.kind === 'target' || Math.abs(x) < s.keepClearX) return false;
     return this.shapeFits({ ...this.shapes[index], x, y }, index);
   }
 
@@ -1537,7 +1581,8 @@ export class Game {
     this.updateShield(dt);
 
     if (this.phase === 'preview') {
-      this.phaseTimer -= dt;
+      // The countdown waits while the player is busy placing or upgrading (never below a last few seconds' grace).
+      if (!this.holdCountdown || this.phaseTimer > this.cfg.waves.holdFloor) this.phaseTimer -= dt;
       if (this.phaseTimer <= 0) this.startWave();
     } else {
       this.phaseTimer += dt;
@@ -2773,6 +2818,11 @@ export class Game {
     if (this.phase === 'battle' && !this.balls.some((b) => b.primary) && this.time >= this.royalDue) this.serveRoyal();
 
     for (const b of this.balls) {
+      if (b.rail) {
+        this.rideRail(b, dt);
+        keep.push(b);
+        continue;
+      }
       if (b.stuck) {
         b.x = this.shield.x + b.stuckOffset;
         b.y = sy;
@@ -2845,6 +2895,7 @@ export class Game {
           alive = false;
           break;
         }
+        if (this.rails.length && !b.air && this.ballVsRails(b)) break;
         if (b.air) {
           // Over the ramp: nothing on the ground touches it until it drops.
           if (b.y >= b.air.landY || b.vy <= 0 || this.time >= b.air.until) this.rampLand(b);
@@ -2882,7 +2933,7 @@ export class Game {
   /** Balls knock into each other: an equal-mass elastic bounce, with a hit size a touch smaller than they look. */
   private ballVsBalls(): void {
     const min = this.cfg.balls.radius * 2;
-    const free = this.balls.filter((b) => !b.stuck && !b.air);
+    const free = this.balls.filter((b) => !b.stuck && !b.air && !b.rail);
     for (let i = 0; i < free.length; i++) {
       for (let j = i + 1; j < free.length; j++) {
         const a = free[i];
@@ -2979,7 +3030,9 @@ export class Game {
     const k = this.cfg.contraptions;
     this.contraptions.forEach((c, index) => {
       const o = this.shapes[index];
-      if (b.air) return;
+      if (b.air || b.rail) return;
+      // A knocked-down target lies flat: the ball rolls over it.
+      if (c.kind === 'target' && this.bellRung[index] >= 0) return;
       if (c.kind === 'ramp') {
         if (b.vy > 0 && nearestOn(o, b.x, b.y).inside) {
           const landY = Math.min(b.y + k.ramp.distance, this.cfg.field.topY - r);
@@ -3003,10 +3056,67 @@ export class Game {
         this.bumperHit[index] = this.time;
         this.addCombo(b, k.bumper.combo);
         this.events.push({ type: 'bumper', x: c.x, y: c.y, index });
+      } else if (c.kind === 'target') {
+        this.knockTarget(b, index);
       } else if (this.bellRung[index] < 0) {
         this.ringBell(b, index);
       }
     });
+  }
+
+  /** A drop target goes flat; the last of its bank pays the jackpot and fires a bonus Royal Ball up the field. */
+  private knockTarget(b: Ball, index: number): void {
+    const t = this.cfg.contraptions.target;
+    const c = this.contraptions[index];
+    this.bellRung[index] = this.time;
+    this.addCombo(b, t.combo);
+    const bank = this.contraptions.flatMap((o, i) => (o.kind === 'target' && o.group === c.group ? [i] : []));
+    const down = bank.filter((i) => this.bellRung[i] >= 0).length;
+    this.events.push({ type: 'target', x: c.x, y: c.y, index, down, of: bank.length });
+    if (down < bank.length) return;
+    const gold = t.jackpot * this.tier;
+    this.addGold(gold);
+    const x = bank.reduce((n, i) => n + this.contraptions[i].x, 0) / bank.length;
+    this.events.push({ type: 'jackpot', x, y: c.y, gold });
+    // Multiball: a bonus Royal Ball bursts out of the bank toward the orcs.
+    const nb = this.addBall('royal', x, c.y + 1, 0, 0);
+    this.launch(nb, this.rng.range(-0.5, 0.5), this.cfg.balls.speed * 1.2);
+    nb.y = c.y + 1;
+    nb.vy = -Math.abs(nb.vy);
+    this.bellReset.set(c.group ?? 0, this.time + t.resetSeconds);
+  }
+
+  /** Shoots a ball into a rail mouth it is crossing (going up the field); true if it went in. */
+  private ballVsRails(b: Ball): boolean {
+    if (b.vy <= 0) return false;
+    const k = this.cfg.rails;
+    for (let i = 0; i < this.rails.length; i++) {
+      const m = this.rails[i].pts[0];
+      if (Math.hypot(b.x - m.x, b.y - m.y) > k.mouth) continue;
+      b.rail = { index: i, s: 0, speed: Math.max(k.speed, Math.hypot(b.vx, b.vy)) };
+      b.passing = null;
+      this.events.push({ type: 'railIn', x: m.x, y: m.y, index: i });
+      return true;
+    }
+    return false;
+  }
+
+  /** A ball riding a rail runs along it; off the far end it drops back in, heading down at the orcs' backs. */
+  private rideRail(b: Ball, dt: number): void {
+    const ride = b.rail!;
+    const rail = this.rails[ride.index];
+    ride.s += ride.speed * dt;
+    const p = railAt(rail, ride.s);
+    b.x = p.x;
+    b.y = p.y;
+    if (ride.s < rail.length) return;
+    b.rail = undefined;
+    b.vx = p.dx * ride.speed;
+    b.vy = p.dy * ride.speed;
+    if (b.vy > 0) b.vy = -b.vy;
+    b.behind = true;
+    this.addCombo(b, this.cfg.rails.combo);
+    this.events.push({ type: 'railOut', x: b.x, y: b.y, index: ride.index });
   }
 
   /** Spike traps are round posts to the ball: it glances off, counts as a bank, and the trap stays. */
@@ -3064,7 +3174,7 @@ export class Game {
       if (this.time < at) continue;
       this.bellReset.delete(group);
       this.contraptions.forEach((c, i) => {
-        if (c.kind === 'bell' && (c.group ?? 0) === group) this.bellRung[i] = -1;
+        if ((c.kind === 'bell' || c.kind === 'target') && (c.group ?? 0) === group) this.bellRung[i] = -1;
       });
     }
   }
@@ -3875,7 +3985,7 @@ export class Game {
       const prevY = k.y;
       k.y -= c.fallSpeed * dt;
       if (prevY >= sy && k.y < sy && Math.abs(k.x - this.shield.x) <= this.shieldHalfWidth() + c.radius) {
-        const gold = c.gold * (this.level + 1) * (k.big ? c.bigMult : 1);
+        const gold = c.gold * this.tier * (k.big ? c.bigMult : 1);
         this.addGold(gold);
         this.coinsCaught++;
         this.events.push({ type: 'coin', x: k.x, y: sy, gold, big: k.big });
@@ -3896,7 +4006,7 @@ export class Game {
       return;
     }
     this.brickRows.delete(id);
-    const gold = this.cfg.brickWall.rowGold * (this.level + 1);
+    const gold = this.cfg.brickWall.rowGold * this.tier;
     this.addGold(gold);
     this.rowClears++;
     this.events.push({ type: 'rowClear', x: e.x, y: e.y, gold });

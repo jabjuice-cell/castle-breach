@@ -413,6 +413,45 @@ export class GroundCanvas {
     this.dirty = true;
   }
 
+  /**
+   * A brown mud hole (Jonny, 7 Nov: craters should be brown mud holes, not grey): a ring of thrown-up
+   * clods, a dark wet bowl, and a glint of standing water in the bottom.
+   */
+  mud(x: number, z: number, radius: number) {
+    const { ctx } = this;
+    const { px, py, pr } = this.toCanvas(x, z, radius);
+    if (pr < 1) return;
+    // Thrown-up clods round the rim.
+    for (let i = 0; i < 18; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const d = pr * (0.85 + Math.random() * 0.6);
+      ctx.fillStyle = Math.random() < 0.5 ? 'rgba(122,84,46,0.85)' : 'rgba(96,64,34,0.85)';
+      ctx.beginPath();
+      ctx.ellipse(px + Math.cos(a) * d, py + Math.sin(a) * d, pr * (0.06 + Math.random() * 0.1), pr * (0.05 + Math.random() * 0.08), a, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    // The bowl: light dry rim to dark wet middle.
+    const g = ctx.createRadialGradient(px, py, 0, px, py, pr);
+    g.addColorStop(0, 'rgba(48,30,16,0.95)');
+    g.addColorStop(0.55, 'rgba(78,52,28,0.92)');
+    g.addColorStop(0.85, 'rgba(120,84,48,0.85)');
+    g.addColorStop(1, 'rgba(120,84,48,0)');
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.ellipse(px, py, pr, pr * 0.9, Math.random() * 3, 0, Math.PI * 2);
+    ctx.fill();
+    // A puddle with a glint of sky.
+    ctx.fillStyle = 'rgba(70,58,44,0.9)';
+    ctx.beginPath();
+    ctx.ellipse(px, py, pr * 0.35, pr * 0.25, Math.random() * 3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = 'rgba(190,200,190,0.35)';
+    ctx.beginPath();
+    ctx.ellipse(px - pr * 0.08, py - pr * 0.06, pr * 0.14, pr * 0.06, -0.4, 0, Math.PI * 2);
+    ctx.fill();
+    this.dirty = true;
+  }
+
   /** Stamps a decal image (a crater or scorch mark) centred at a world position. */
   decal(x: number, z: number, radius: number, img: HTMLImageElement, alpha = 1) {
     if (!img.complete || !img.naturalWidth) return;

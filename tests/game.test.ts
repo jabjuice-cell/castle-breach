@@ -1505,10 +1505,13 @@ describe('pinball contraptions', () => {
     const centre = cs.filter((c) => c.x === 0);
     // One centre piece per kind at most; everything else has its mirror twin.
     expect(new Set(centre.map((c) => c.kind)).size).toBe(centre.length);
+    // Mostly mirrored: a lone piece stands in only for a centre piece (or a pair) the orc routes left no room for.
+    const lone: Record<string, number> = {};
     for (const c of cs) {
       if (c.x === 0) continue;
-      expect(cs.some((o) => o.kind === c.kind && Math.abs(o.x + c.x) < 1e-9 && Math.abs(o.y - c.y) < 1e-9)).toBe(true);
+      if (!cs.some((o) => o.kind === c.kind && Math.abs(o.x + c.x) < 1e-9 && Math.abs(o.y - c.y) < 1e-9)) lone[c.kind] = (lone[c.kind] ?? 0) + 1;
     }
+    for (const [kind, n] of Object.entries(lone)) expect(n, kind).toBeLessThanOrEqual(kind === 'target' ? 6 : 2);
     cs.forEach((c, i) => {
       const a = footprint(c, k);
       expect(Math.abs(a.x) + bound(a)).toBeLessThanOrEqual(hw);
@@ -1527,7 +1530,7 @@ describe('pinball contraptions', () => {
     });
   }
 
-  it('50 seeds give mirrored layouts at the back of the field, clear of the routes', () => {
+  it('50 seeds give (mostly) mirrored layouts at the back of the field, clear of the routes', () => {
     for (const level of [0, 1, 2]) {
       for (let seed = 1; seed <= 50; seed++) {
         const game = new Game(seed, applyMeta({}, level), level);
@@ -2686,5 +2689,101 @@ describe('shield teams and the armoured warlord (31 Oct)', () => {
     ball(game, { x: lord.x, y: lord.y + game.cfg.warlord.radius + 0.6, vx: 0, vy: -20 });
     run(game, 0.05);
     expect(before - lord.hp).toBeCloseTo(game.cfg.balls.damage * game.cfg.warlord.backMult * (1 + game.cfg.balls.comboStep), 5);
+  });
+});
+
+describe('campaign (overmap acts and stages)', async () => {
+  const { ACTS, STAGES, applyStage, loseStage, nextStage, stageOpen, stagesOfAct } = await import('../src/sim/campaign');
+  it('has three acts of four stages, the last of each a boss', () => {
+    expect(ACTS.length).toBe(3);
+    for (let a = 0; a < 3; a++) {
+      const st = stagesOfAct(a);
+      expect(st.length).toBe(4);
+      expect(st[3].boss).toBeTruthy();
+    }
+    expect(new Set(STAGES.map((s) => s.id)).size).toBe(STAGES.length);
+  });
+  it('no two stages share a battlefield: features, obstacles or width differ', () => {
+    const keys = STAGES.map((s) => JSON.stringify([s.features, s.obstacles, s.halfWidth, s.trees]));
+    expect(new Set(keys).size).toBe(STAGES.length);
+  });
+  it('bells are not on every stage', () => {
+    expect(STAGES.filter((s) => s.features.bell).length).toBeLessThan(STAGES.length / 2);
+  });
+  it('opens stages in order and points at the first uncleared one', () => {
+    expect(stageOpen({}, STAGES[0])).toBe(true);
+    expect(stageOpen({}, STAGES[1])).toBe(false);
+    expect(stageOpen({ [STAGES[0].id]: 2 }, STAGES[1])).toBe(true);
+    expect(nextStage({ [STAGES[0].id]: 2 }).id).toBe(STAGES[1].id);
+  });
+  it('losing a stage clears only that act; losing a replay costs nothing', () => {
+    const cleared = { '1-1': 3, '1-2': 2, '1-3': 1, '1-4': 2, '2-1': 2 };
+    const after = loseStage(cleared, STAGES.find((s) => s.id === '2-2')!);
+    expect(after).toEqual({ '1-1': 3, '1-2': 2, '1-3': 1, '1-4': 2 });
+    expect(loseStage(cleared, STAGES.find((s) => s.id === '2-1')!)).toBe(cleared);
+  });
+  it('every stage builds and plays a few seconds without errors', () => {
+    for (const s of STAGES) {
+      const game = new RealGame(7, applyStage(s));
+      for (let t = 0; t < 5; t += 1 / 60) game.step();
+      expect(game.rails.length).toBe(s.features.rail);
+    }
+  });
+});
+
+describe('orbit rails and drop targets', async () => {
+  const { buildRails, railAt } = await import('../src/sim/rails');
+  it('a rail runs out past the field edge and comes back in on the far side', () => {
+    const cfg = makeConfig();
+    const [r] = buildRails({ ...cfg.rails, count: 1 }, 18, 70);
+    expect(r.length).toBeGreaterThan(60);
+    const xs = r.pts.map((p) => p.x);
+    expect(Math.min(...xs)).toBeLessThan(-18);
+    expect(Math.max(...xs)).toBeGreaterThan(18);
+    const end = railAt(r, r.length);
+    expect(Math.sign(end.x)).toBe(1);
+  });
+  it('a ball shot into the rail mouth rides it and comes out heading down the field', () => {
+    const cfg = quiet();
+    cfg.rails.count = 1;
+    const game = battle(5, cfg);
+    const m = game.rails[0].pts[0];
+    const b = ball(game, { kind: 'royal', x: m.x, y: m.y - 0.3, vx: 0, vy: 30 });
+    let inRail = false;
+    for (let i = 0; i < 600 && !(inRail && !b.rail); i++) {
+      game.step();
+      if (b.rail) inRail = true;
+    }
+    expect(inRail).toBe(true);
+    expect(b.rail).toBeFalsy();
+    expect(b.vy).toBeLessThan(0);
+  });
+  it('knocking down a whole bank of targets pays the jackpot and adds a ball', () => {
+    const cfg = quiet();
+    cfg.contraptions = makeConfig().contraptions;
+    cfg.contraptions.layout.counts = [{ bumper: 0, bell: 0, ramp: 0, target: 1 }];
+    const game = battle(5, cfg);
+    const bank = game.contraptions.map((c, i) => [c, i] as const).filter(([c]) => c.kind === 'target');
+    expect(bank.length).toBe(cfg.contraptions.target.count);
+    const gold = game.gold;
+    const balls = game.balls.length;
+    for (const [c] of bank) {
+      const b = ball(game, { kind: 'royal', x: c.x, y: c.y - 2, vx: 0, vy: 25 });
+      for (let i = 0; i < 20; i++) game.step();
+      b.y = -50;
+    }
+    expect(bank.every(([, i]) => game.bellRung[i] >= 0) || game.gold > gold).toBe(true);
+    expect(game.gold).toBeGreaterThan(gold);
+    expect(game.balls.length).toBeGreaterThan(balls);
+  });
+});
+
+describe('attack patterns', async () => {
+  const { wavePattern } = await import('../src/sim/waves');
+  it('wave 1 is staggered and no pattern repeats back to back', () => {
+    for (let seed = 1; seed < 30; seed++) {
+      expect(wavePattern(1, seed)).toBe('staggered');
+      for (let n = 2; n < 15; n++) expect(wavePattern(n, seed)).not.toBe(wavePattern(n - 1, seed));
+    }
   });
 });

@@ -29,6 +29,7 @@ import { contact } from './sim/obstacles';
 import { Tutorial } from './sim/tutorial';
 import { META_GROUPS, META_UPGRADES, type MetaGroup, type Progress, applyMeta, buyMeta, metaCost, metaDepth, metaLocked, metaUpgrade, newProgress } from './sim/meta';
 import { ENEMY_KINDS, type EnemyKind } from './sim/waves';
+import { ACTS, STAGES, type StageDef, applyStage, loseStage, nextStage, stageById, stageOpen, stagesOfAct } from './sim/campaign';
 import { KEEP_CELLS, PIECES, PLOT_H, PLOT_W, type PieceId, type Placed, activePairs, autoPack, canPlace, effectiveMeta, landBounds, pieceCells, sanitizePlot, yard } from './sim/plot';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -56,11 +57,11 @@ function saveSetting(key: string, value: string) {
   }
 }
 
-/** The best score per level, cached so the HUD doesn't read storage every frame. */
-const bestScores = new Map<number, number>();
-function bestScore(level: number): number {
-  if (!bestScores.has(level)) bestScores.set(level, Number(loadSetting(`best-${level}`)) || 0);
-  return bestScores.get(level)!;
+/** The best score per stage, cached so the HUD doesn't read storage every frame. */
+const bestScores = new Map<string, number>();
+function bestScore(id: string): number {
+  if (!bestScores.has(id)) bestScores.set(id, Number(loadSetting(`best-stage-${id}`)) || 0);
+  return bestScores.get(id)!;
 }
 
 const QUALITY_NAMES: Record<Quality, string> = { low: 'Low', medium: 'Medium', high: 'High' };
@@ -142,6 +143,57 @@ $('orcStyle').addEventListener('click', () => {
 });
 showOrcStyle();
 
+// The settings menu: one gear button opens the card with every toggle, plus the debug tools.
+$('gear').addEventListener('click', () => {
+  const card = $('settings');
+  card.hidden = !card.hidden;
+  if (!card.hidden) fillDebug();
+});
+$('settings').addEventListener('click', (e) => {
+  const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('button');
+  if (btn?.dataset.set === 'close') $('settings').hidden = true;
+  if (btn?.dataset.dbg) debugAction(btn.dataset.dbg);
+});
+
+// Gore: green blood and flying bits when orcs die (on unless turned off).
+function showGore() {
+  $('gore').textContent = view.gore ? 'Gore: On' : 'Gore: Off';
+}
+view.gore = loadSetting('gore') !== '0';
+$('gore').addEventListener('click', () => {
+  view.gore = !view.gore;
+  saveSetting('gore', view.gore ? '1' : '0');
+  showGore();
+});
+showGore();
+
+// A frame-rate meter in the corner, for checking performance.
+let fpsOn = loadSetting('fps') === '1';
+let fpsFrames = 0;
+let fpsSince = performance.now();
+let fpsWorst = 0;
+function showFps() {
+  $('fps').textContent = fpsOn ? 'Frame rate: On' : 'Frame rate: Off';
+  $('fpsMeter').hidden = !fpsOn;
+}
+$('fps').addEventListener('click', () => {
+  fpsOn = !fpsOn;
+  saveSetting('fps', fpsOn ? '1' : '0');
+  showFps();
+});
+showFps();
+function tickFps(now: number, dtMs: number) {
+  if (!fpsOn) return;
+  fpsFrames++;
+  fpsWorst = Math.max(fpsWorst, dtMs);
+  if (now - fpsSince < 500) return;
+  const fps = (fpsFrames * 1000) / (now - fpsSince);
+  $('fpsMeter').textContent = `${fps.toFixed(0)} fps · worst ${fpsWorst.toFixed(0)} ms · ${view.drawCalls} draws`;
+  fpsFrames = 0;
+  fpsSince = now;
+  fpsWorst = 0;
+}
+
 let running = false;
 
 // Dev aid: ?debug exposes the live game to the console and browser tests; ?debug&auto plays the shield by itself.
@@ -187,7 +239,7 @@ function rotateShape(dir: number) {
 function fixtureAt(x: number, y: number): number {
   if (!game.shopOpen) return -1;
   const bumper = game.cfg.contraptions.bumper.radius;
-  return game.contraptions.findIndex((c) => c.kind !== 'bell' && !!contact(
+  return game.contraptions.findIndex((c) => c.kind !== 'bell' && c.kind !== 'target' && !!contact(
     c.kind === 'bumper' ? { look: 'stone', x: c.x, y: c.y, r: bumper } : { look: 'ruin', x: c.x, y: c.y, hw: c.hw ?? 2, hh: c.hh ?? 1.5, angle: c.angle ?? 0 }, x, y, 0.2));
 }
 
@@ -202,6 +254,9 @@ let bannerT = 0;
 
 /** True while the player is choosing where to build a tower storey. */
 let building = false;
+/** When the last defender or storey went down: the start buttons ignore clicks just after, so a double click can't start a wave. */
+let lastPlaced = -1e9;
+const startGuarded = () => performance.now() - lastPlaced < 700;
 
 /** The defender being aimed with the mouse, and its aim before, to put back on cancel. */
 let aiming: { id: number; before: number | null } | null = null;
@@ -236,8 +291,10 @@ function pointerToSim(e: PointerEvent | MouseEvent) {
 /** Places the defender being bought exactly where the mouse is on the castle. */
 function tryPlace(kind: PlacedKind) {
   if (game.place(kind, input.x, input.y)) {
-    placing = null;
-    toast(`${DEFENDER_INFO[kind].name} in position`);
+    // Keep placing the same kind until the gold runs out or the player cancels (Jonny, 7 Nov).
+    if (game.gold < game.defenderCost(kind)) placing = null;
+    toast(`${DEFENDER_INFO[kind].name} in position${placing ? ': click to place another, right click to stop' : ''}`);
+    lastPlaced = performance.now();
     trayKey = '';
     return;
   }
@@ -319,7 +376,8 @@ canvas.addEventListener('pointerdown', (e) => {
   if (building) {
     const plan = game.towerPlan(input.x, input.y);
     if (game.buildTower(input.x, input.y)) {
-      building = false;
+      // Stay in building mode, so several storeys go up without going back to the load-out (Jonny, 7 Nov).
+      lastPlaced = performance.now();
       sounds.thunk();
       toast(plan.ok && plan.stack ? `Tower raised to ${plan.stack.storeys} storeys` : 'Tower built');
     } else {
@@ -437,9 +495,10 @@ window.addEventListener('keydown', (e) => {
     trayKey = '';
   }
   if (e.code === 'KeyR' && shaping === 'barricade' && !e.repeat) rotateShape(e.shiftKey ? -1 : 1);
-  if (e.code === 'Enter' && running) {
+  if (e.code === 'Enter' && running && !e.repeat) {
     e.preventDefault();
     if (intro) endIntro();
+    else if (placing || building || shaping || aiming) return;
     else if (game.phase === 'setup') startBattle();
     else game.callEarly();
   }
@@ -448,20 +507,15 @@ window.addEventListener('keydown', (e) => {
 $('play').addEventListener('click', () => {
   sounds.unlock();
   $('intro').hidden = true;
-  // A brand-new player goes straight to the first level; anyone with Renown or a run under way sees the town first.
-  const fresh = progress.renown < 1 && progress.levelsBeaten === 0 && Object.keys(progress.meta).length === 0;
+  // A brand-new player goes straight to the first stage; anyone who has played sees the overmap first.
+  const fresh = progress.renown < 1 && Object.keys(progress.cleared).length === 0 && Object.keys(progress.meta).length === 0;
   if (fresh) {
     running = true;
     startTour();
-  } else showTown();
-});
-$('startNow').addEventListener('click', () => {
-  if (intro) endIntro();
-  else if (game.phase === 'setup') startBattle();
-  else game.callEarly();
+  } else showMap();
 });
 $('callEarly').addEventListener('click', () => game.callEarly());
-$('again').addEventListener('click', () => showTown());
+$('again').addEventListener('click', () => showMap());
 
 // ---- looking up the field at the coming horde -------------------------------
 
@@ -520,6 +574,17 @@ window.addEventListener('pointerdown', () => {
   if (tour >= 0) tour = -1;
   ready = false;
 }, { capture: true });
+
+/** The re-serve countdown: 3, 2, 1, then GO! over the shield. */
+function showCountdown(n: number) {
+  const el = $('countdown');
+  el.textContent = n > 0 ? String(n) : 'GO!';
+  el.style.animation = 'none';
+  void el.offsetWidth;
+  el.style.animation = '';
+  el.hidden = false;
+  countdownT = n > 0 ? 0.6 : 0.45;
+}
 
 /** The big BATTLE READY! banner: shown for setupFx.bannerSeconds, then hidden. */
 function showBanner(text: string) {
@@ -617,7 +682,6 @@ const hud = {
   preview: $('preview'),
   previewTitle: $('previewTitle'),
   previewText: $('previewText'),
-  startNow: $('startNow'),
   callEarly: $<HTMLButtonElement>('callEarly'),
   boss: $('boss'),
   bossName: $('bossName'),
@@ -767,21 +831,20 @@ function toast(text: string) {
 const BAR_HOLD = 0.45;
 const BAR_DRAIN = 0.5;
 let wallLag: { frac: number; hold: number }[] = [];
-let lastStartHtml = '';
 let lastEarlyHtml = '';
 
 function updateHud(dt: number) {
   const c = game.cfg;
-  hud.wave.textContent = `Level ${game.level + 1} · Wave ${game.levelWave} of ${c.levels.waves}`;
+  hud.wave.textContent = `${stage.name} · Wave ${game.levelWave} of ${c.levels.waves}`;
   hud.phase.textContent =
-    game.phase === 'setup' ? `${c.levels.names[game.level]}: setting up`
+    game.phase === 'setup' ? `Stage ${stage.act + 1}-${stage.index + 1}: setting up`
     : game.phase === 'preview' ? 'Incoming'
     : game.phase === 'battle' ? `${game.enemies.length} orcs on the field`
     : game.phase === 'won' ? 'Victory'
     : 'Breached';
   hud.gold.textContent = `${Math.floor(game.gold)} gold`;
   hud.kills.textContent = `${game.kills} slain`;
-  const scoreText = `Score ${game.score.toLocaleString()} · Best ${Math.max(bestScore(game.level), game.score).toLocaleString()}`;
+  const scoreText = `Score ${game.score.toLocaleString()} · Best ${Math.max(bestScore(stage.id), game.score).toLocaleString()}`;
   if (hud.score.textContent !== scoreText) hud.score.textContent = scoreText;
   hud.renown.textContent = `${game.renownEarned} Renown`;
 
@@ -849,7 +912,8 @@ function updateHud(dt: number) {
   if (previewing) {
     const setup = game.phase === 'setup';
     const wave = `${game.plan.boss ? 'Boss wave! ' : ''}Wave ${game.levelWave}`;
-    hud.previewTitle.textContent = setup ? `Level ${game.level + 1}: ${c.levels.names[game.level]}` : `${wave} marches in ${Math.ceil(game.phaseTimer)}`;
+    const waiting = game.holdCountdown && game.phaseTimer <= game.cfg.waves.holdFloor + 0.05;
+    hud.previewTitle.textContent = setup ? `${ACTS[stage.act].name.split(':')[0]}, stage ${stage.index + 1}: ${stage.name}` : waiting ? `${wave} waits while you place` : `${wave} marches in ${Math.ceil(game.phaseTimer)}`;
     // At the level's start the panel is just the title and the button.
     hud.previewText.hidden = setup;
     if (!setup) hud.previewText.textContent = `${planText()}, down ${laneText()}. ${trickText()}${game.levelWave === 1 ? ' Scroll up to look at them.' : ''}`;
@@ -857,8 +921,6 @@ function updateHud(dt: number) {
     const face = queenCross(game) ? queenAngryUrl : queenUrl;
     const portrait = hud.queen.querySelector('img')!;
     if (!portrait.src.endsWith(face)) portrait.src = face;
-    const startHtml = setup ? 'To battle! <kbd>Enter</kbd>' : `${icon('call')}Ready, +${game.earlyCallGold()} gold <kbd>Enter</kbd>`;
-    if (startHtml !== lastStartHtml) hud.startNow.innerHTML = lastStartHtml = startHtml;
   }
 
   // Over each town building: its name and perk, once built.
@@ -978,7 +1040,7 @@ function trayHtml(): string {
     <div class="buy">${buy}${tower}${shape}</div>${again}
     <p class="tip">${shaping ? `Click the field to place ${shaping === 'barricade' ? 'a barricade (R or the mouse wheel turns it)' : 'rubble'}. Right click or Esc to cancel.` : tip}</p>
     <p class="tip">Gold: covered by your defenders.${game.cfg.shaping.enabled ? ' Drag bumpers and ramps to move them. Click a placed barricade or rubble pile to take it back.' : ''}</p>${choices}
-    ${setup ? '<button type="button" class="go" data-action="go">To battle! <kbd>Enter</kbd></button>' : ''}`;
+    ${setup ? '<button type="button" class="go" data-action="go">To battle! <kbd>Enter</kbd></button>' : `<button type="button" class="go" data-action="ready">${icon('call')}Ready: send wave ${game.plan.number - game.firstWave + 1} now, +${game.earlyCallGold()} gold <kbd>Enter</kbd></button>`}`;
 }
 
 /** The card over a clicked defender: its kind's upgrades, and selling it. */
@@ -1118,7 +1180,7 @@ function updateShop() {
   hud.tray.hidden = !open;
   if (open) {
     // Re-render only when something it shows has changed, so the buttons stay clickable.
-    const key = [game.phase, Math.floor(game.gold), placing, building, shaping, game.shapeLeft('barricade'), game.shapeLeft('rubble'), game.defenders.length, progress.lastLoadout.length, JSON.stringify(game.choices)].join('|');
+    const key = [game.phase, Math.floor(game.gold), game.earlyCallGold(), placing, building, shaping, game.shapeLeft('barricade'), game.shapeLeft('rubble'), game.defenders.length, progress.lastLoadout.length, JSON.stringify(game.choices)].join('|');
     if (key !== trayKey) {
       trayKey = key;
       hud.tray.innerHTML = trayHtml();
@@ -1180,8 +1242,11 @@ function shopAction(action: string) {
   } else if (verb === 'again') {
     const n = game.restoreLoadout(progress.lastLoadout);
     toast(n < progress.lastLoadout.length ? `${n} of ${progress.lastLoadout.length} put back: the war chest ran out` : 'Defenders back in position');
-  } else if (verb === 'go') {
-    startBattle();
+  } else if (verb === 'go' || verb === 'ready') {
+    // Not straight after putting something down: a quick second click on the field must not start the battle.
+    if (startGuarded() || placing || building || shaping) return;
+    if (verb === 'go') startBattle();
+    else game.callEarly();
   }
   trayKey = '';
   hud.defPop.dataset.key = '';
@@ -1215,7 +1280,8 @@ for (const el of [hud.tray, hud.defPop, hud.wallBars]) {
 function loadProgress(): Progress {
   const p = newProgress();
   try {
-    const saved = localStorage.getItem('castle-breach:progress');
+    // The campaign (7 Nov) started a fresh save: archers and catapults first, no buildings (Jonny's call).
+    const saved = localStorage.getItem('castle-breach:campaign');
     // A save from before the tutorial belongs to someone who has already played.
     if (saved) {
       const parsed = JSON.parse(saved);
@@ -1230,15 +1296,13 @@ function loadProgress(): Progress {
       }
       return loaded;
     }
-    // Renown banked before the town existed carries over.
-    p.renown = Number(localStorage.getItem('castle-breach:renown') ?? 0) || 0;
   } catch {
     // No storage: a fresh start every visit.
   }
   return p;
 }
 function saveProgress() {
-  saveSetting('progress', JSON.stringify(progress));
+  saveSetting('campaign', JSON.stringify(progress));
 }
 
 /** The meta-upgrades whose buildings actually stand on the plot (one in the builders' yard does nothing). */
@@ -1246,10 +1310,14 @@ function townMeta() {
   return effectiveMeta(progress.meta, progress.plot);
 }
 
+/** The stage being played (or about to be). */
+let stage: StageDef = stageById(progress.stage) ?? STAGES[0];
+
 function newLevel(): Game {
-  const level = progress.levelsBeaten;
-  const g = new Game(Math.floor(Math.random() * 1e9), applyMeta(progress.meta, level, undefined, progress.plot), level, sanitizeChoices(townMeta(), progress.choices));
-  tutorial = !progress.tutorialDone && level === 0 ? Tutorial.begin(g) : null;
+  stage = stageById(progress.stage) ?? STAGES[0];
+  const cfg = applyMeta(progress.meta, 0, applyStage(stage), progress.plot);
+  const g = new Game(Math.floor(Math.random() * 1e9), cfg, stage.act, sanitizeChoices(townMeta(), progress.choices));
+  tutorial = !progress.tutorialDone && stage === STAGES[0] ? Tutorial.begin(g) : null;
   return g;
 }
 
@@ -1280,6 +1348,7 @@ function startLevel() {
   view.setGame(game);
   buildHud();
   $('town').hidden = true;
+  $('map').hidden = true;
   $('lost').hidden = true;
   running = true;
   startTour();
@@ -1287,12 +1356,11 @@ function startLevel() {
 
 const GROUP_NAMES: Record<MetaGroup, string> = { defence: 'Defence', wall: 'The wall', shield: 'The royal shield', town: 'The town' };
 
-function townHtml(): string {
-  const names = game.cfg.levels.names;
-  const next = progress.levelsBeaten;
-  const levels = names
-    .map((n, i) => `<span class="${i < next ? 'done' : i === next ? 'next' : ''}">${i + 1}. ${n}</span>`)
-    .join('');
+/** Which screen the #town overlay shows: the upgrades (the Throne Room) or the town plot. */
+let screen: 'throne' | 'plot' = 'throne';
+
+/** The Throne Room: the Queen grants the permanent upgrades for Renown. */
+function throneHtml(): string {
   const groups = META_GROUPS.map((g) => {
     // Roots first, each branch indented under what it grows from.
     const ups = META_UPGRADES.filter((u) => u.group === g)
@@ -1313,26 +1381,141 @@ function townHtml(): string {
       .join('');
     return `<section><h2>${GROUP_NAMES[g]}</h2>${ups}</section>`;
   }).join('');
-  const fresh = next === 0;
-  return `<div class="scroll">
-    <header><div><h1>The Town</h1><p class="sub">${fresh ? 'Spend Renown on upgrades that last for ever, then march out. A run is three levels; lose one and it starts again from the first.' : `Level ${next} held! Spend your Renown, then march on to level ${next + 1}.`}</p></div>
+  return `<div class="scroll wide">
+    <header><div><h1>The Throne Room</h1><p class="sub">The Queen grants upgrades that last for ever, for Renown. A new building goes to the builders' yard: put it on the Town Plot to make it work.</p></div>
     <span class="purse">${icon('renown')}${Math.floor(progress.renown)} Renown</span></header>
-    <div class="levels">${levels}</div>
-    <div id="plotBox" class="plot">${plotHtml()}</div>
     <div class="groups">${groups}</div>
-    <button type="button" class="march" data-march>March to ${names[next]}!</button>
-    <p class="tag">Between levels: spend Renown here, lay out the town plot, then click the war room, barracks, blacksmith and watchtower in the town before the battle.</p>
+    <div class="screenNav"><button type="button" data-go="map">Back to the map</button><button type="button" data-go="plot">The Town Plot</button></div>
   </div>`;
 }
 
-function showTown() {
+/** The Town Plot: lay the town's buildings out like Tetris pieces, for the neighbour bonuses. */
+function plotScreenHtml(): string {
+  return `<div class="scroll wide">
+    <header><div><h1>The Town Plot</h1><p class="sub">Buildings only work while they stand on the plot. Put related ones side by side for bonuses.</p></div>
+    <span class="purse">${icon('renown')}${Math.floor(progress.renown)} Renown</span></header>
+    <div id="plotBox" class="plot">${plotHtml()}</div>
+    <div class="screenNav"><button type="button" data-go="map">Back to the map</button><button type="button" data-go="throne">The Throne Room</button></div>
+  </div>`;
+}
+
+function showTown(which: 'throne' | 'plot' = screen) {
+  screen = which;
   running = false;
   $('lost').hidden = true;
   $('intro').hidden = true;
+  $('map').hidden = true;
   const town = $('town');
-  town.innerHTML = townHtml();
+  town.innerHTML = which === 'throne' ? throneHtml() : plotScreenHtml();
   town.hidden = false;
 }
+
+// ---- the overmap ----------------------------------------------------------------
+
+/** The act shown on the overmap. */
+let mapAct = 0;
+
+/** A stage's icon: a little drawing of its battlefield (structures, trees, features), until the painted icons arrive. */
+function stageIcon(s: StageDef): string {
+  const W = 100;
+  const H = 120;
+  const sx = (x: number) => W / 2 + (x / s.halfWidth) * (W / 2 - 8);
+  const sy = (y: number) => H - 10 - (y / 70) * (H - 18);
+  const parts: string[] = [];
+  for (const o of s.obstacles) {
+    const col = o.look === 'mill' ? '#9a6a3a' : o.look === 'ruin' || o.look === 'stone' ? '#6d6a64' : o.look === 'spikes' ? '#4a3a2a' : o.look === 'fence' ? '#8a5a2e' : '#8f8a80';
+    if (o.r !== undefined) parts.push(`<circle cx="${sx(o.x)}" cy="${sy(o.y)}" r="${Math.max(2.5, o.r * 2.2)}" fill="${col}"/>`);
+    else parts.push(`<rect x="${sx(o.x) - (o.hw ?? 1) * 2}" y="${sy(o.y) - 2}" width="${(o.hw ?? 1) * 4}" height="4" fill="${col}" transform="rotate(${(-(o.angle ?? 0) * 180) / Math.PI} ${sx(o.x)} ${sy(o.y)})"/>`);
+  }
+  const f = s.features;
+  const marks: string[] = [];
+  if (f.bumper) marks.push(...Array.from({ length: f.bumper }, (_, i) => `<circle cx="${30 + i * 20}" cy="30" r="5" fill="#3a62c8" stroke="#f2c230" stroke-width="2"/>`));
+  if (f.bell) marks.push(...[0, 1, 2, 3].map((i) => `<path d="M${22 + i * 18} 48 q5 -10 10 0 z" fill="#f2c230" stroke="#7a5a10"/>`));
+  if (f.target) marks.push(...[0, 1, 2].map((i) => `<rect x="${40 + i * 7}" y="62" width="5" height="9" fill="#e2c25a" stroke="#7a5a34"/>`));
+  if (f.ramp) marks.push('<path d="M38 88 l24 0 l-4 -10 l-16 0 z" fill="#8a5a2e"/>');
+  if (f.rail) marks.push(`<path d="M${f.rail > 1 ? 4 : 12} 70 C 0 20, 20 4, 50 4 C 80 4, 100 20, ${f.rail > 1 ? 96 : 88} 40" fill="none" stroke="#c9d0d6" stroke-width="3" stroke-dasharray="4 2"/>`);
+  return `<svg viewBox="0 0 ${W} ${H}" aria-hidden="true"><rect x="0" y="0" width="${W}" height="${H}" rx="10" fill="${s.act === 2 ? '#7d7a63' : s.act === 1 ? '#8fb060' : '#9cc068'}"/>
+    <rect x="${W / 2 - 7}" y="0" width="14" height="${H}" fill="rgba(160,120,70,0.45)"/>${parts.join('')}${marks.join('')}
+    <rect x="0" y="${H - 9}" width="${W}" height="9" fill="#9a968e"/>${s.boss ? `<text x="${W / 2}" y="${H / 2 + 12}" text-anchor="middle" font-size="40">${s.boss === 'warlord' ? '👹' : '🗼'}</text>` : ''}</svg>`;
+}
+
+function mapHtml(): string {
+  const stages = stagesOfAct(mapAct);
+  const pick = stageById(progress.stage) ?? nextStage(progress.cleared);
+  const actOpen = (a: number) => stageOpen(progress.cleared, stagesOfAct(a)[0]);
+  const tabs = ACTS.map((a, i) => `<button type="button" data-act="${i}" class="${i === mapAct ? 'on' : ''}" ${actOpen(i) ? '' : 'disabled'}>${a.name.split(':')[0]}</button>`).join('');
+  // The road between the stages, then each stage's node.
+  const pts = stages.map((st) => `${st.map.x * 1000},${st.map.y * 600}`).join(' ');
+  const nodes = stages.map((st) => {
+    const open = stageOpen(progress.cleared, st);
+    const stars = progress.cleared[st.id];
+    const cls = ['node', open ? 'open' : 'locked', st.id === pick.id ? 'picked' : '', stars !== undefined ? 'done' : '', st.boss ? 'boss' : ''].join(' ');
+    return `<button type="button" class="${cls}" data-stage="${st.id}" style="left:${st.map.x * 100}%;top:${st.map.y * 100}%" ${open ? '' : 'disabled'} title="${st.name}">
+      ${stageIcon(st)}<b>${st.act + 1}-${st.index + 1} ${st.name}</b><span class="stars">${stars !== undefined ? '★'.repeat(stars) + '☆'.repeat(3 - stars) : open ? 'New' : 'Locked'}</span></button>`;
+  }).join('');
+  const f = pick.features;
+  const feats = [f.bumper && `${f.bumper} bumpers`, f.bell && 'bells', f.ramp && `${f.ramp === 1 ? 'a ramp' : `${f.ramp} ramps`}`, f.rail && `${f.rail === 1 ? 'an orbit rail' : 'two orbit rails'}`, f.target && `${f.target === 1 ? 'a bank' : `${f.target} banks`} of drop targets`].filter(Boolean).join(', ');
+  const canPlay = stageOpen(progress.cleared, pick);
+  return `<div class="scroll map">
+    <header><div><h1>${ACTS[mapAct].name}</h1><p class="sub">${ACTS[mapAct].blurb}</p></div>
+    <span class="purse">${icon('renown')}${Math.floor(progress.renown)} Renown</span></header>
+    <nav class="acts">${tabs}</nav>
+    <div class="mapArea act${mapAct}"><svg class="road" viewBox="0 0 1000 600" preserveAspectRatio="none"><polyline points="${pts}"/></svg>${nodes}</div>
+    <div class="mapFoot">
+      <div class="pick"><h2>${pick.act + 1}-${pick.index + 1} ${pick.name}${pick.boss ? ' <span class="bossTag">Boss</span>' : ''}</h2>
+        <p>${pick.blurb}</p><p class="meta">${pick.waves} waves · war chest ${pick.warChest} gold · ${pick.renown} Renown for clearing it${feats ? ` · ${feats}` : ''}</p>
+        <button type="button" class="march" data-march ${canPlay ? '' : 'disabled'}>March to ${pick.name}!</button></div>
+      <div class="buildings"><button type="button" data-go="throne">${icon('renown')}The Throne Room<small>Upgrades for Renown</small></button><button type="button" data-go="plot">🏘 The Town Plot<small>Lay out the town</small></button></div>
+    </div>
+  </div>`;
+}
+
+function showMap() {
+  running = false;
+  held = null;
+  $('lost').hidden = true;
+  $('intro').hidden = true;
+  $('town').hidden = true;
+  const pick = stageById(progress.stage);
+  if (!pick || !stageOpen(progress.cleared, pick)) progress.stage = nextStage(progress.cleared).id;
+  mapAct = stageById(progress.stage)!.act;
+  renderMap();
+  $('map').hidden = false;
+}
+
+function renderMap() {
+  $('map').innerHTML = mapHtml();
+}
+
+$('map').addEventListener('click', (e) => {
+  const el = e.target as HTMLElement;
+  const node = el.closest<HTMLButtonElement>('button[data-stage]');
+  if (node && !node.disabled) {
+    progress.stage = node.dataset.stage!;
+    saveProgress();
+    sounds.thunk();
+    renderMap();
+    return;
+  }
+  const act = el.closest<HTMLButtonElement>('button[data-act]');
+  if (act && !act.disabled) {
+    mapAct = Number(act.dataset.act);
+    const first = stagesOfAct(mapAct).filter((st) => stageOpen(progress.cleared, st));
+    if (first.length) progress.stage = first[first.length - 1].id;
+    renderMap();
+    return;
+  }
+  const go = el.closest<HTMLElement>('[data-go]');
+  if (go) {
+    showTown(go.dataset.go as 'throne' | 'plot');
+    return;
+  }
+  if (el.closest('button[data-march]')) {
+    const waiting = yard(progress.meta, progress.plot);
+    if (waiting.length) toast(`Still in the builders' yard, doing nothing: ${waiting.map((w) => PIECES[w].name).join(', ')}.`);
+    startLevel();
+  }
+});
 
 $('town').addEventListener('click', (e) => {
   const el = e.target as HTMLElement;
@@ -1344,10 +1527,12 @@ $('town').addEventListener('click', (e) => {
     if (buyMeta(progress, id)) {
       saveProgress();
       sounds.chime(1);
-      // A new building goes straight into your hand, ready to put down.
-      if (isPiece) held = { p: { id: id as PieceId, x: 0, y: 0, rot: 0 }, dx: 0, dy: 0 };
-      showTown();
-      if (isPiece) $('plotBox').scrollIntoView({ behavior: 'smooth', block: 'center' });
+      // A new building goes straight into your hand on the Town Plot, ready to put down.
+      if (isPiece) {
+        held = { p: { id: id as PieceId, x: 0, y: 0, rot: 0 }, dx: 0, dy: 0 };
+        showTown('plot');
+        toast(`${PIECES[id as PieceId].name}: put it on the plot`);
+      } else showTown();
       if (id === 'land') view.setPlot(progress.plot, progress.meta.land ?? 0);
     }
     return;
@@ -1368,11 +1553,11 @@ $('town').addEventListener('click', (e) => {
     clickPlot(Number(cell.dataset.x), Number(cell.dataset.y));
     return;
   }
-  if (el.closest('button[data-march]')) {
+  const go = el.closest<HTMLElement>('[data-go]');
+  if (go) {
     held = null;
-    const waiting = yard(progress.meta, progress.plot);
-    if (waiting.length) toast(`Still in the builders' yard, doing nothing: ${waiting.map((w) => PIECES[w].name).join(', ')}.`);
-    startLevel();
+    if (go.dataset.go === 'map') showMap();
+    else showTown(go.dataset.go as 'throne' | 'plot');
   }
 });
 
@@ -1519,23 +1704,27 @@ window.addEventListener('keydown', (e) => {
 });
 
 function showEnd(won: boolean, segment = 0) {
-  const names = game.cfg.levels.names;
   progress.renown += game.renownEarned;
-  const finale = won && game.level >= names.length - 1;
+  const finale = won && stage === STAGES[STAGES.length - 1];
+  const next = STAGES[STAGES.indexOf(stage) + 1];
   if (won) {
     progress.lastLoadout = game.loadout();
-    progress.levelsBeaten = finale ? 0 : game.level + 1;
+    progress.cleared = { ...progress.cleared, [stage.id]: Math.max(progress.cleared[stage.id] ?? 0, game.stars) };
+    if (next) progress.stage = next.id;
   } else {
-    progress.levelsBeaten = 0;
+    // Losing a new stage sends you back to the start of its act (losing a replay costs nothing).
+    const replay = stage.id in progress.cleared;
+    progress.cleared = loseStage(progress.cleared, stage);
+    if (!replay) progress.stage = stagesOfAct(stage.act)[0].id;
   }
   saveProgress();
-  // The level's best score, kept whether it was won or lost.
-  const newBest = game.score > bestScore(game.level);
+  // The stage's best score, kept whether it was won or lost.
+  const newBest = game.score > bestScore(stage.id);
   if (newBest) {
-    bestScores.set(game.level, game.score);
-    saveSetting(`best-${game.level}`, String(game.score));
+    bestScores.set(stage.id, game.score);
+    saveSetting(`best-stage-${stage.id}`, String(game.score));
   }
-  $('lostScore').textContent = `Score ${game.score.toLocaleString()} · Best ${bestScore(game.level).toLocaleString()}${newBest ? ' · New best!' : ''}`;
+  $('lostScore').textContent = `Score ${game.score.toLocaleString()} · Best ${bestScore(stage.id).toLocaleString()}${newBest ? ' · New best!' : ''}`;
   $('lostStars').textContent = won ? '★'.repeat(game.stars) + '☆'.repeat(3 - game.stars) : '';
   $('lostStars').hidden = !won;
   $('lostExtras').textContent = `${game.perfectWaves} perfect waves · ${game.rowClears} rows cleared · ${game.breakthroughs} breakthroughs · ${game.coinsCaught} coins caught`;
@@ -1547,15 +1736,78 @@ function showEnd(won: boolean, segment = 0) {
   $('lostPerfects').textContent = String(game.perfects);
   $('lostGold').textContent = String(Math.round(game.goldEarned));
   $('lostQueen').textContent = queenVerdict(game, won);
-  $('endTitle').textContent = finale ? 'The wall holds!' : won ? `${names[game.level]} held!` : 'Breached!';
+  $('endTitle').textContent = finale ? 'The wall holds!' : won ? `${stage.name} held!` : 'Breached!';
+  const actStart = stagesOfAct(stage.act)[0];
   $('lostText').textContent = finale
-    ? 'All three levels beaten back. The orcs are already planning something stupider. A new run starts from level 1, with every upgrade you bought.'
+    ? 'The Warlord is beaten and the orcs have gone home to sulk. Every stage stays open to replay for a better score.'
     : won
-      ? `All ${game.cfg.levels.waves} waves of level ${game.level + 1} beaten back. On to ${names[game.level + 1]}, once you have been to the town.`
-      : `The orcs broke through the ${LANES[segment] ?? ''} wall during wave ${game.levelWave} of level ${game.level + 1}. Back to the town: spend your Renown, then the next run starts from level 1.`;
-  $('bank').textContent = `${Math.floor(progress.renown)} Renown to spend in the town.`;
+      ? `All ${game.cfg.levels.waves} waves beaten back.${next ? ` ${next.name} is open on the map${next.act !== stage.act ? `: ${ACTS[next.act].name}` : ''}.` : ''}`
+      : stage.id in progress.cleared
+        ? `The orcs broke through the ${LANES[segment] ?? ''} wall during wave ${game.levelWave}. It was a replay, so nothing is lost: try it again from the map.`
+        : `The orcs broke through the ${LANES[segment] ?? ''} wall during wave ${game.levelWave}. ${ACTS[stage.act].name.split(':')[0]} starts again from ${actStart.name}. Spend your Renown in the Throne Room first.`;
+  $('bank').textContent = `${Math.floor(progress.renown)} Renown to spend in the Throne Room.`;
+  $('again').textContent = 'To the map';
   $('lost').hidden = false;
   running = false;
+}
+
+// ---- debug tools (in the settings menu) -----------------------------------------
+
+/** Fills the debug card: what each button does depends on whether a battle is running. */
+function fillDebug() {
+  const b = (id: string, label: string) => `<button type="button" data-dbg="${id}">${label}</button>`;
+  $('debugRows').innerHTML = [
+    b('renown', '+1000 Renown'),
+    b('unlockAll', 'Unlock every upgrade'),
+    b('stages', 'Open every stage'),
+    b('reset', 'Reset all progress'),
+    ...(running ? [b('gold', '+500 gold'), b('clear', 'Clear the field'), b('win', 'Win this stage'), b('wall', game.forgiving ? 'Wall can fall' : "Wall can't fall")] : []),
+  ].join('');
+  const sel = $<HTMLSelectElement>('debugStage');
+  sel.innerHTML = STAGES.map((st) => `<option value="${st.id}" ${st.id === stage.id ? 'selected' : ''}>${st.act + 1}-${st.index + 1} ${st.name}</option>`).join('');
+}
+
+function debugAction(id: string) {
+  if (id === 'renown') {
+    progress.renown += 1000;
+    toast('+1000 Renown');
+  } else if (id === 'unlockAll') {
+    for (const u of META_UPGRADES) progress.meta[u.id] = u.costs.length;
+    const packed = autoPack(progress.meta);
+    progress.plot = packed.layout;
+    progress.meta.land = Math.max(progress.meta.land ?? 0, packed.land);
+    view.setPlot(progress.plot, progress.meta.land ?? 0);
+    toast('Every upgrade bought and the town laid out');
+  } else if (id === 'stages') {
+    for (const st of STAGES) progress.cleared[st.id] ??= 1;
+    toast('Every stage open');
+  } else if (id === 'reset') {
+    if (!confirm('Wipe all progress: Renown, upgrades, town and stages?')) return;
+    Object.assign(progress, newProgress());
+    bestScores.clear();
+    view.setPlot(progress.plot, 0);
+    toast('Progress wiped');
+  } else if (id === 'gold' && running) {
+    game.gold += 500;
+  } else if (id === 'clear' && running) {
+    game.debugClearField();
+  } else if (id === 'win' && running) {
+    game.debugWin();
+  } else if (id === 'wall' && running) {
+    game.forgiving = !game.forgiving;
+  } else if (id === 'jump') {
+    progress.stage = $<HTMLSelectElement>('debugStage').value;
+    // Opening it means everything before it counts as cleared.
+    for (const st of STAGES.slice(0, STAGES.findIndex((x) => x.id === progress.stage))) progress.cleared[st.id] ??= 1;
+    saveProgress();
+    $('settings').hidden = true;
+    startLevel();
+    return;
+  }
+  saveProgress();
+  fillDebug();
+  if (!$('map').hidden) renderMap();
+  if (!$('town').hidden) showTown();
 }
 
 function buildHud() {
@@ -1674,31 +1926,19 @@ function updateGhost() {
 
 let last = performance.now();
 let acc = 0;
-let hitStop = 0;
-/**
- * A slight impact pause (seconds the action freezes) on the spectacular moments, so they land.
- * Bowling pauses grow with each orc that joins the chain; combo pauses with the milestone.
- */
-const IMPACT_PAUSE = {
-  bowl: [0, 0, 0.05, 0.07, 0.09],
-  combo: { 10: 0.06, 25: 0.08, 40: 0.1 } as Record<number, number>,
-  bellVolley: 0.08,
-  rampLand: 0.06,
-  bossKilled: 0.2,
-  /** A shield team's shield splinters; a row of the warlord's armour comes off (the brief's 0.3 s set piece). */
-  shieldBreak: 0.06,
-  lordStage: 0.3,
-  roar: 0.12,
-};
+/** The big 3, 2, 1 over the shield while the Royal Ball waits to be re-served. */
+let countdownT = 0;
 function frame(now: number) {
+  tickFps(now, now - last);
   const dt = Math.min(0.1, (now - last) / 1000);
   last = now;
   if (running) {
     if (autoplay) autoShield();
     game.setShield(input.shieldX);
-    // Hit-stop: the action freezes for a few frames on a big hit, so it lands with weight.
-    if (hitStop > 0) hitStop -= dt;
-    else acc += dt;
+    // The lull's countdown holds while the player is busy placing, aiming or upgrading (Jonny, 7 Nov).
+    game.holdCountdown = !!(placing || building || shaping || aiming || dragging !== null || selected !== null || townOpen);
+    // No hit-stop any more: the little freezes on big moments read as stutters (Jonny, 7 Nov).
+    acc += dt;
     let steps = 0;
     while (acc >= STEP && steps < 6) {
       game.step(STEP);
@@ -1718,10 +1958,8 @@ function frame(now: number) {
         case 'deflect':
           // A light clink for a bounce; the full clang for a heave or a trick shot off the rim.
           // No hit-stop on a Perfect Return: freezing the sim would make the other balls harder to track.
-          if (ev.parry && !ev.perfect) hitStop = Math.max(hitStop, 0.04);
           if (ev.parry || ev.trick) sounds.clang(ev.parry);
           else sounds.clink();
-          if (ev.trick) floater('Trick shot!', ev.x, game.cfg.shield.y, 'trick', 0.9);
           break;
         case 'perfect':
           // Heave timed just right: a second, heavier clang layered over the parry's.
@@ -1730,7 +1968,6 @@ function frame(now: number) {
           break;
         case 'bowl':
           if (ev.count < 2) break;
-          hitStop = Math.max(hitStop, IMPACT_PAUSE.bowl[Math.min(ev.count, IMPACT_PAUSE.bowl.length - 1)]);
           {
             const text = BOWL_WORDS[Math.min(ev.count, BOWL_WORDS.length - 1)];
             const pop = bowlPopups.get(ev.chain);
@@ -1764,25 +2001,42 @@ function frame(now: number) {
           }
           break;
         case 'rebound':
-          floater('REBOUND!', ev.x, ev.y - 3, 'rebound', 1.1);
           sounds.clink();
           break;
         case 'bank':
-          floater('BANK!', ev.x, ev.y + 1, 'bank', 0.8);
           break;
         case 'kill':
-          // A heaved ball felling an orc stops the action for a beat: longer for an ogre or boss.
-          if (ev.heaved) hitStop = Math.max(hitStop, ev.kind === 'ogre' || ev.kind === 'warlord' ? 0.08 : 0.04);
+          // A meaty crunch, heavier for an ogre, catapult or boss (no hit-stop any more: Jonny, 7 Nov).
+          sounds.chunk(true, ev.kind === 'ogre' || ev.kind === 'orcCatapult' || ev.kind === 'warlord' || ev.heaved === true);
           break;
         case 'hit':
           if (ev.combo !== undefined) sounds.hitNote(ev.combo);
-          // The running combo pops off each hit; the milestones get their own big banner.
-          if (ev.combo !== undefined && ev.combo >= 3 && !game.cfg.balls.comboMilestones.includes(ev.combo)) {
-            floater(`${ev.combo} COMBO`, ev.x, ev.y, ev.combo >= 10 ? 'chain hot' : 'chain', 0.7);
-          }
+          sounds.chunk(false);
+          // No running combo text any more (Jonny, 7 Nov): the rising notes and the HUD count carry it.
           break;
         case 'wallHit':
-          if (ev.damage >= 3) sounds.crunch(ev.damage);
+          // Every hit on the wall is heard: a stone thud, heavier with the damage (Jonny, 7 Nov).
+          sounds.wallHit(ev.damage);
+          break;
+        case 'countdown':
+          showCountdown(ev.n);
+          if (ev.n > 0) sounds.tick(ev.n);
+          else sounds.horn();
+          break;
+        case 'railIn':
+          sounds.railIn();
+          break;
+        case 'railOut':
+          sounds.chime(1);
+          floater('ORBIT!', ev.x, ev.y, 'smash', 1);
+          break;
+        case 'target':
+          sounds.woodThunk(false);
+          break;
+        case 'jackpot':
+          sounds.chime(3);
+          showBanner('JACKPOT!');
+          floater(`+${ev.gold}`, ev.x, ev.y, 'smash', 1.3);
           break;
         case 'segmentDestroyed':
           floater('BREACH!', -game.cfg.field.halfWidth + (ev.segment + 0.5) * game.segmentWidth(), 2, 'breach', 1.6);
@@ -1792,19 +2046,16 @@ function frame(now: number) {
           // The shield bash: a heavy clang, and a callout when it flattens a crowd at the wall.
           if (ev.hits > 0) {
             sounds.clang(false);
-            hitStop = Math.max(hitStop, 0.05);
-            if (ev.hits >= 3) floater(`SLAM! ×${ev.hits}`, ev.x, game.cfg.shield.y + 1, 'smash', 0.9);
+            if (ev.hits >= 3) floater('SLAM!', ev.x, game.cfg.shield.y + 1, 'smash', 0.9);
           }
           break;
         case 'clang':
           if (ev.team === undefined) sounds.clang(false);
           else {
             sounds.woodThunk(false);
-            floater('THUNK!', ev.x, ev.y + 1.2, 'bank', 0.6);
           }
           break;
         case 'shieldBreak':
-          hitStop = Math.max(hitStop, IMPACT_PAUSE.shieldBreak);
           sounds.woodThunk(true);
           floater('SHIELD SMASHED!', ev.x, ev.y + 1.5, 'smash', 1);
           break;
@@ -1815,25 +2066,21 @@ function frame(now: number) {
           sounds.clang(false);
           break;
         case 'lordStage':
-          hitStop = Math.max(hitStop, IMPACT_PAUSE.lordStage);
           sounds.crunch(40);
           floater(ev.row === 0 ? 'HIS BELT SNAPPED!' : 'ARMOUR CRACKED OPEN!', ev.x, ev.y + 3, 'smash', 1.6);
           break;
         case 'coreHit':
-          floater(`-${Math.round(ev.damage)}`, ev.x, ev.y + 1.5, 'chain hot', 0.7);
           break;
         case 'club':
           sounds.thunk();
           floater('CLUB!', ev.x, ev.y + 3, 'trick', 0.8);
           break;
         case 'roar':
-          hitStop = Math.max(hitStop, IMPACT_PAUSE.roar);
           sounds.roar();
           floater('ROAAAR!', ev.x, ev.y + 3.5, 'smash', 1.6);
           break;
         case 'debrisHit':
           sounds.clink();
-          floater('CLANK!', ev.x, ev.y + 1.2, 'bank', 0.6);
           break;
         case 'formationBreak':
           sounds.thunk();
@@ -1841,14 +2088,11 @@ function frame(now: number) {
           break;
         case 'bumper':
           sounds.clang(false);
-          floater('BUMP!', ev.x, ev.y + 1.5, 'bank', 0.8);
           break;
         case 'bell':
           sounds.bell(ev.rung);
-          floater('DING!', ev.x, ev.y + 1.5, 'trick', 0.8);
           break;
         case 'bellVolley':
-          hitStop = Math.max(hitStop, IMPACT_PAUSE.bellVolley);
           sounds.chime(2);
           floater('VOLLEY!', ev.x, ev.y + 4, 'smash', 1.2);
           break;
@@ -1856,7 +2100,6 @@ function frame(now: number) {
           sounds.thunk();
           break;
         case 'rampLand':
-          hitStop = Math.max(hitStop, IMPACT_PAUSE.rampLand);
           sounds.boom();
           floater('DROP!', ev.x, ev.y + 1, 'smash', 1);
           break;
@@ -1908,7 +2151,6 @@ function frame(now: number) {
           showBanner('BREAKTHROUGH!');
           floater(`+${ev.gold}`, ev.x, ev.y, 'smash', 1.3);
           sounds.boom();
-          hitStop = Math.max(hitStop, 0.06);
           break;
         case 'mason':
           floater('Wall patched', ev.x, 2, 'good', 1.2);
@@ -1928,24 +2170,18 @@ function frame(now: number) {
           tour = -1;
           break;
         case 'line':
-          hitStop = Math.max(hitStop, 0.06);
-          floater('SMASH!', (ev.x0 + ev.x1) / 2, ev.y, 'smash', 0.9);
+          sounds.crunch(10);
           break;
         case 'combo':
-          hitStop = Math.max(hitStop, IMPACT_PAUSE.combo[ev.combo] ?? 0);
-          floater(`×${ev.combo} COMBO!`, ev.x, ev.y, `c${ev.combo}`, 1.4);
+          floater(`×${ev.combo}`, ev.x, ev.y, `c${ev.combo}`, 1.1);
           sounds.chime(ev.combo >= 40 ? 3 : ev.combo >= 25 ? 2 : 1);
           break;
         case 'pinned':
-          if (game.time - lastPinned >= 0.5 || game.time < lastPinned) {
-            lastPinned = game.time;
-            floater('Pinned', ev.x, ev.y + 1, 'bad', 0.7);
-          }
+          if (game.time - lastPinned >= 0.5 || game.time < lastPinned) lastPinned = game.time;
           break;
         case 'powderBlast':
         case 'blast':
         case 'floorDown':
-          hitStop = Math.max(hitStop, 0.05);
           sounds.boom();
           break;
         case 'caught':
@@ -1956,7 +2192,6 @@ function frame(now: number) {
           toast(`Salvo! ${ev.size} boulders incoming`);
           break;
         case 'ballLost':
-          if (ev.kind === 'royal') toast('The Royal Ball hit the wall! Click to serve it again');
           break;
         case 'waveCleared':
           toast(`Wave ${ev.wave} beaten back, +${ev.gold} gold`);
@@ -1977,7 +2212,6 @@ function frame(now: number) {
           toast(`Early call! +${ev.gold} gold`);
           break;
         case 'bossKilled':
-          hitStop = Math.max(hitStop, IMPACT_PAUSE.bossKilled);
           toast(`${game.plan.tower ? 'The siege tower falls!' : 'The Warlord falls!'} +${game.cfg.renown.bossKill} Renown`);
           break;
         default:
@@ -1988,6 +2222,7 @@ function frame(now: number) {
   }
   updateLook(dt);
   if (bannerT > 0 && (bannerT -= dt) <= 0) $('banner').hidden = true;
+  if (countdownT > 0 && (countdownT -= dt) <= 0) $('countdown').hidden = true;
   updateGhost();
   sounds.scrape(running && game.phase === 'battle' ? Math.abs(game.shield.vx) / game.cfg.shield.speed : 0);
   // The horde swells with the crowd on the field (and mutters while it waits up the far end).
