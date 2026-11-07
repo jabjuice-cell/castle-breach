@@ -24,9 +24,9 @@ export interface MetaUpgrade {
 
 export const META_UPGRADES: MetaUpgrade[] = [
   // Defence: new defenders, then everyone hits harder and shoots faster.
-  { id: 'archers', group: 'defence', name: 'Archery butts', blurb: 'Unlocks archers: thirty bowmen who shoot boulders out of the sky.', costs: [20] },
+  { id: 'crossbow', group: 'defence', name: 'Crossbow loft', blurb: 'Unlocks the giant crossbow: bolts that pierce a whole column and hunt catapults.', costs: [20] },
   { id: 'soldiers', group: 'defence', name: 'Barracks', blurb: 'Unlocks soldier companies to hold the foot of the wall.', costs: [30] },
-  { id: 'catapult', group: 'defence', name: 'Siege workshop', blurb: 'Unlocks the castle catapult, which lobs extra Royal Balls.', costs: [60] },
+  { id: 'catapult', group: 'defence', name: 'Siege workshop', blurb: 'Castle catapults reload 25% faster.', costs: [60] },
   { id: 'mage', group: 'defence', name: 'Mage college', blurb: 'Unlocks mage towers: blast the thickest crowd from a tower top.', costs: [70] },
   { id: 'ballista', group: 'defence', name: 'Ballista works', blurb: 'Unlocks the ballista: one huge bolt that skewers a whole lane.', costs: [80] },
   { id: 'oil', group: 'defence', name: 'Oil cauldrons', blurb: 'Unlocks boiling oil to pour on orcs climbing the wall.', costs: [60] },
@@ -64,9 +64,9 @@ export const META_UPGRADES: MetaUpgrade[] = [
  * Upgrades with no entry are roots. Owned levels are never taken away, so these only gate buying.
  */
 const PREREQS: Record<string, [id: string, level: number][]> = {
-  catapult: [['archers', 1]],
-  fletching: [['archers', 1]],
-  mage: [['archers', 1]],
+  catapult: [['crossbow', 1]],
+  fletching: [['crossbow', 1]],
+  mage: [['fletching', 1]],
   ballista: [['fletching', 1]],
   oil: [['masonry', 1]],
   spiketrap: [['soldiers', 1]],
@@ -123,8 +123,11 @@ export function metaCost(meta: MetaLevels, id: string): number {
 export interface Progress {
   renown: number;
   meta: MetaLevels;
-  /** Levels beaten so far; the next one to play is this (0-based). */
+  /** Levels beaten so far in the old three-level run (the balance sim still plays it that way). */
   levelsBeaten: number;
+  /** The campaign (campaign.ts): best stars on each stage cleared, and the stage picked on the overmap. */
+  cleared: Record<string, number>;
+  stage: string;
   /** The last level's defenders, so the setup can put them back in one click. */
   lastLoadout: { kind: DefenderKind; x: number; y: number }[];
   /** True once the guided first wave has been played (or skipped by an older save). */
@@ -136,7 +139,7 @@ export interface Progress {
 }
 
 export function newProgress(): Progress {
-  return { renown: 0, meta: {}, levelsBeaten: 0, lastLoadout: [], tutorialDone: false, choices: defaultChoices(), plot: [] };
+  return { renown: 0, meta: {}, levelsBeaten: 0, cleared: {}, stage: '1-1', lastLoadout: [], tutorialDone: false, choices: defaultChoices(), plot: [] };
 }
 
 /** Spends Renown on the next level of an upgrade. */
@@ -159,7 +162,9 @@ export function applyMeta(full: MetaLevels, level: number, base: Config = makeCo
   const cfg = structuredClone(base);
   const meta = plot ? effectiveMeta(full, plot) : full;
   const lv = (id: string) => meta[id] ?? 0;
-  cfg.unlocks.defenders = ['crossbow', 'soldiers', ...(['archers', 'catapult', 'mage', 'ballista', 'oil', 'spiketrap'] as const).filter((k) => lv(k) > 0)];
+  // Archers and the castle catapult from the start (Jonny, 7 Nov); the rest are bought in the town.
+  cfg.unlocks.defenders = ['archers', 'catapult', ...(['crossbow', 'soldiers', 'mage', 'ballista', 'oil', 'spiketrap'] as const).filter((k) => lv(k) > 0)];
+  cfg.catapult.interval *= 1 - 0.25 * lv('catapult');
   cfg.unlocks.buildings = ['keep', ...(['tavern', 'alchemist', 'blacksmith', 'chapel', 'forge', 'warroom', 'watchtower'] as const).filter((k) => lv(k) > 0), ...(lv('soldiers') >= 1 ? (['barracks'] as const) : [])];
   cfg.bonuses.damage *= 1 + 0.15 * lv('fletching');
   cfg.bonuses.rate *= 1 + 0.12 * lv('drill');
@@ -183,7 +188,7 @@ function applyPairs(cfg: Config, plot: Layout) {
   const b = cfg.plot.bonuses;
   const c = cfg.plot.clashes;
   if (on.has('blacksmithSoldiers')) cfg.soldiers.cost *= b.blacksmithSoldiers.soldierCost;
-  if (on.has('fletchingArchers')) cfg.archers.damage *= b.fletchingArchers.archerDamage;
+  if (on.has('fletchingCrossbow')) cfg.crossbow.damage *= b.fletchingCrossbow.crossbowDamage;
   if (on.has('drillSoldiers')) cfg.soldiers.hp *= b.drillSoldiers.soldierHp;
   if (on.has('tavernSoldiers')) cfg.soldiers.count += b.tavernSoldiers.soldierCount;
   if (on.has('workshopForge')) cfg.catapult.interval *= b.workshopForge.catapultInterval;
@@ -193,7 +198,7 @@ function applyPairs(cfg: Config, plot: Layout) {
   if (on.has('spiketrapMasonry')) cfg.spiketrap.cost *= b.spiketrapMasonry.spikeTrapCost;
   if (on.has('alchemistOil')) cfg.oil.burnSeconds += b.alchemistOil.oilBurnSeconds;
   if (on.has('alchemistMage')) { cfg.mage.radius *= b.alchemistMage.mageRadius; cfg.mage.radiusPerLevel *= b.alchemistMage.mageRadius; }
-  if (on.has('watchtowerArchers')) cfg.coverage.archerReach *= b.watchtowerArchers.archerReach;
+  if (on.has('watchtowerCrossbow')) cfg.coverage.archerReach *= b.watchtowerCrossbow.archerReach;
   if (on.has('marketTreasury')) cfg.economy.warChest += b.marketTreasury.warChest;
   if (on.has('marketGuild')) cfg.bonuses.killGold *= b.marketGuild.killGold;
   if (on.has('tavernMarket')) cfg.economy.earlyGoldMult *= b.tavernMarket.earlyGold;

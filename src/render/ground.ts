@@ -110,6 +110,31 @@ export function paintGround(ctx: CanvasRenderingContext2D, w: number, h: number,
   ctx.fillStyle = '#b8966a';
   ctx.fillRect(0, pz(baseZ - 0.2), w, h - pz(baseZ - 0.2));
   for (let i = 0; i < 500; i++) blot(wx(rnd() * w), baseZ + rnd() * (a.minZ + a.worldH - baseZ), 0.5 + rnd() * 2, rnd() < 0.5 ? 'rgba(150,118,80,0.35)' : 'rgba(205,176,130,0.35)');
+  // A lived-in town floor (Jonny, 7 Nov: improve the ground under the town): trodden paths, grit, straw,
+  // grass tufts along the walls, and a few dark puddles, instead of flat sand.
+  const townDepth = a.minZ + a.worldH - baseZ;
+  for (let i = 0; i < 14000; i++) {
+    const v = 110 + Math.floor(rnd() * 80);
+    ctx.fillStyle = `rgba(${v},${Math.floor(v * 0.8)},${Math.floor(v * 0.55)},0.5)`;
+    ctx.fillRect(rnd() * w, pz(baseZ) + rnd() * townDepth * ppu, 1 + rnd() * 2, 1 + rnd() * 2);
+  }
+  for (let i = 0; i < 900; i++) {
+    ctx.strokeStyle = rnd() < 0.5 ? 'rgba(220,190,110,0.7)' : 'rgba(180,150,80,0.6)';
+    ctx.lineWidth = 1;
+    const x = rnd() * w;
+    const y = pz(baseZ) + rnd() * townDepth * ppu;
+    const ang = rnd() * Math.PI;
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(x + Math.cos(ang) * (3 + rnd() * 4), y + Math.sin(ang) * (3 + rnd() * 4));
+    ctx.stroke();
+  }
+  for (let i = 0; i < 260; i++) {
+    const side = rnd() < 0.5 ? -1 : 1;
+    blot(side * (a.worldW / 2 - rnd() * 10), baseZ + rnd() * townDepth, 0.4 + rnd() * 1.2, 'rgba(96,140,52,0.55)');
+  }
+  for (let i = 0; i < 70; i++) blot(wx(rnd() * w), baseZ + 0.5 + rnd() * townDepth, 1.2 + rnd() * 2.5, 'rgba(120,92,60,0.35)');
+  for (let i = 0; i < 9; i++) blot(wx(rnd() * w), baseZ + 1 + rnd() * (townDepth - 2), 0.5 + rnd() * 0.7, 'rgba(70,58,46,0.6)');
   const cobble = (x0: number, z0: number, x1: number, z1: number) => {
     const size = 0.5;
     for (let z = z0; z < z1; z += size * 0.8) {
@@ -165,15 +190,22 @@ export function paintGround(ctx: CanvasRenderingContext2D, w: number, h: number,
     ctx.fillStyle = light ? 'rgba(160,205,90,0.6)' : 'rgba(60,105,35,0.55)';
     ctx.fillRect(x, y, 1, 2 + rnd() * 3);
   }
-  const flowers = ['#ffffff', '#8ab4ff'];
-  for (let i = 0; i < 2600; i++) {
-    const x = rnd() * w;
-    const y = rnd() * pz(baseZ);
-    const z = wz(y);
+  // Flowers grow in small clumps of one colour, not sprinkled everywhere (Jonny, 7 Nov: fewer, in groups).
+  const flowers = ['#ffffff', '#8ab4ff', '#ffe36a', '#e88ab8'];
+  for (let c = 0; c < 46; c++) {
+    const cx = rnd() * w;
+    const cy = rnd() * pz(baseZ);
+    const z = wz(cy);
     const r = roadAt(z);
-    if (Math.abs(wx(x) - r.x) < r.half + 0.5) continue;
+    if (Math.abs(wx(cx) - r.x) < r.half + 1.5) continue;
     ctx.fillStyle = flowers[Math.floor(rnd() * flowers.length)];
-    ctx.fillRect(x, y, 2, 2);
+    const spread = (0.5 + rnd() * 0.9) * ppu;
+    const n = 8 + Math.floor(rnd() * 14);
+    for (let i = 0; i < n; i++) {
+      const a = rnd() * Math.PI * 2;
+      const d = Math.sqrt(rnd()) * spread;
+      ctx.fillRect(cx + Math.cos(a) * d, cy + Math.sin(a) * d, 2, 2);
+    }
   }
   // Leaf litter under the trees.
   for (let i = 0; i < 6000; i++) {

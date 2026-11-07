@@ -8,11 +8,11 @@ import type { MetaLevels } from './meta';
  */
 
 export type PieceId =
-  | 'archers' | 'soldiers' | 'catapult' | 'mage' | 'ballista' | 'oil' | 'spiketrap' | 'fletching' | 'drill' | 'masonry'
+  | 'crossbow' | 'soldiers' | 'catapult' | 'mage' | 'ballista' | 'oil' | 'spiketrap' | 'fletching' | 'drill' | 'masonry'
   | 'tavern' | 'alchemist' | 'blacksmith' | 'chapel' | 'forge' | 'warroom' | 'watchtower' | 'treasury' | 'market' | 'guild';
 
 export const PIECE_IDS: PieceId[] = [
-  'archers', 'soldiers', 'catapult', 'mage', 'ballista', 'oil', 'spiketrap', 'fletching', 'drill', 'masonry',
+  'crossbow', 'soldiers', 'catapult', 'mage', 'ballista', 'oil', 'spiketrap', 'fletching', 'drill', 'masonry',
   'tavern', 'alchemist', 'blacksmith', 'chapel', 'forge', 'warroom', 'watchtower', 'treasury', 'market', 'guild',
 ];
 
@@ -32,7 +32,7 @@ function shape(id: PieceId, name: string, rows: string[]): PieceInfo {
 }
 
 export const PIECES: Record<PieceId, PieceInfo> = {
-  archers: shape('archers', 'Archery butts', ['####']),
+  crossbow: shape('crossbow', 'Crossbow loft', ['####']),
   soldiers: shape('soldiers', 'Barracks', ['#.', '#.', '#.', '##']),
   catapult: shape('catapult', 'Siege workshop', ['###', '.#.']),
   mage: shape('mage', 'Mage college', ['.#.', '###', '.#.']),
@@ -101,7 +101,7 @@ const clash = (id: string, a: PairDef['a'], b: PairDef['b'], text: string): Pair
 /** Ids match the keys of config.plot.bonuses and config.plot.clashes. */
 const PAIR_DEFS: PairDef[] = [
   bonus('blacksmithSoldiers', 'blacksmith', 'soldiers', 'Soldier companies cost 20% less gold'),
-  bonus('fletchingArchers', 'fletching', 'archers', 'Archers +15% damage'),
+  bonus('fletchingCrossbow', 'fletching', 'crossbow', 'Crossbows +15% damage'),
   bonus('drillSoldiers', 'drill', 'soldiers', 'Soldiers +20% toughness'),
   bonus('tavernSoldiers', 'tavern', 'soldiers', 'Companies muster 3 more men'),
   bonus('workshopForge', 'catapult', 'forge', 'Castle catapult reloads 15% faster'),
@@ -111,7 +111,7 @@ const PAIR_DEFS: PairDef[] = [
   bonus('spiketrapMasonry', 'spiketrap', 'masonry', 'Spike traps cost 25% less'),
   bonus('alchemistOil', 'alchemist', 'oil', 'Boiling oil burns 2 s longer'),
   bonus('alchemistMage', 'alchemist', 'mage', 'Mage blasts 15% wider'),
-  bonus('watchtowerArchers', 'watchtower', 'archers', 'Archers +10% range'),
+  bonus('watchtowerCrossbow', 'watchtower', 'crossbow', 'Archers +10% range'),
   bonus('marketTreasury', 'market', 'treasury', "+40 gold in each level's war chest"),
   bonus('marketGuild', 'market', 'guild', 'Kills pay +10% gold'),
   bonus('tavernMarket', 'tavern', 'market', 'Calling a wave early pays +25% gold'),

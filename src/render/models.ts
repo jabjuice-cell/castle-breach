@@ -754,6 +754,38 @@ export function bumperShieldModel(r: number): Vox {
   return v;
 }
 
+/**
+ * A drop target: a straw-stuffed orc dummy nailed to a plank, a red bullseye on its belly and a bucket for a helmet.
+ * Standing on y = 0 (its hinge), facing -z (up the field toward the orcs' side is +z... the ball comes from the castle side).
+ */
+export function targetModel(): Vox {
+  const v = new Vox();
+  const STRAW = '#e2c25a';
+  const STRAW_DARK = '#b8952e';
+  // The hinge board and the plank it is nailed to.
+  v.box(-3, 0, -1, 3, 0, 1, PAL.woodDark);
+  v.box(-1, 1, 0, 1, 10, 0, PAL.wood);
+  // Straw body with a burlap belt and a painted bullseye.
+  v.box(-3, 2, -1, 3, 7, -1, (x, y) => ((x + y) % 3 ? STRAW : STRAW_DARK));
+  v.box(-3, 4, -1, 3, 4, -1, '#7a5a34');
+  v.box(-1, 5, -2, 1, 7, -2, '#d03a2a');
+  v.set(0, 6, -2, '#f4ecd8');
+  // A green sackcloth orc head with button eyes, tusks and a bucket helmet.
+  v.box(-2, 8, -1, 2, 11, -1, '#7ab83a');
+  v.set(-1, 10, -2, '#1a1a1a');
+  v.set(1, 10, -2, '#1a1a1a');
+  v.set(-1, 8, -2, '#f4ecd8');
+  v.set(1, 8, -2, '#f4ecd8');
+  v.box(-2, 12, -1, 2, 13, -1, '#8a8f96');
+  v.box(-3, 12, -1, -3, 12, -1, '#6a6f76');
+  // Straw sticking out of the arms.
+  v.box(-5, 6, -1, -4, 6, -1, STRAW);
+  v.box(4, 6, -1, 5, 6, -1, STRAW);
+  v.set(-6, 7, -1, STRAW_DARK);
+  v.set(6, 5, -1, STRAW_DARK);
+  return v;
+}
+
 /** A small wooden bell frame: two braced posts on sills, a crossbeam at y = 10 with a little roof, the bell hangs from the middle. */
 export function bellPostModel(): Vox {
   const v = new Vox();
@@ -1179,7 +1211,7 @@ const glowCap = (v: Vox, x: number, y: number, z: number, c: string) => {
 
 /** How each town building looks as a plot piece (placeholders until the piece art exists). */
 const PIECE_LOOKS: Record<string, PieceLook> = {
-  archers: { wall: '#6fae4a', roof: '#6fae4a', h: 0, accent: (v, x, z) => { for (let i = -2; i <= 2; i += 2) v.box(x + i * 3, 1, z, x + i * 3 + 1, 4, z, (_, y) => (y === 3 ? '#e03a2a' : '#e8d070')); } },
+  crossbow: { wall: '#6fae4a', roof: '#6fae4a', h: 0, accent: (v, x, z) => { for (let i = -2; i <= 2; i += 2) v.box(x + i * 3, 1, z, x + i * 3 + 1, 4, z, (_, y) => (y === 3 ? '#e03a2a' : '#e8d070')); } },
   soldiers: { wall: PAL.stone, roof: PAL.slate, h: 8, accent: (v, x, z, t) => { v.box(x, t, z, x, t + 6, z, PAL.wood); v.box(x + 1, t + 3, z, x + 3, t + 6, z, '#c8322a'); } },
   catapult: { wall: PAL.wood, roof: PAL.timber, h: 5, accent: (v, x, z, t) => { v.box(x - 3, t, z, x + 3, t, z, PAL.woodDark); v.box(x + 3, t + 1, z, x + 3, t + 4, z, PAL.woodDark); } },
   mage: { wall: '#7a5ab8', roof: '#4a2f80', h: 10, accent: (v, x, z, t) => { v.cone(x, z, 3, t, 9, '#4a2f80'); glowCap(v, x + 1, t + 9, z + 1, '#c08aff'); } },

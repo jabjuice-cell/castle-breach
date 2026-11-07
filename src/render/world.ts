@@ -12,7 +12,7 @@ import { BUILDING_KINDS, type BuildingKind, type Game } from '../sim/game';
 import { KEEP_CELLS, type Layout, PLOT_W, type PieceId, landBounds, pieceCells } from '../sim/plot';
 import { roadAt } from './ground';
 import {
-  LEAF, PIECE_TILE, type RoofKind, type TreeKind, bellModel, bellPostModel, bumperShieldModel, bumperSpringModel, rampModel, campfireModel, clutterModel, cottageModel, keepModel, obstacleModel,
+  LEAF, PIECE_TILE, type RoofKind, type TreeKind, bellModel, bellPostModel, targetModel, bumperShieldModel, bumperSpringModel, rampModel, campfireModel, clutterModel, cottageModel, keepModel, obstacleModel,
   palisadeModel, pieceModel, scatterModel, tentModel, totemModel, treeModel, wellModel,
 } from './models';
 import { type SpriteArt, imageSprite } from './textures';
@@ -137,7 +137,7 @@ export class World {
   private drag: { index: number; ok: boolean } | null = null;
   /** Placed pieces a ball just hit: seconds of shake left, by obstacle index. */
   private shaking = new Map<number, number>();
-  private fixtureParts: { kind: 'bumper' | 'bell' | 'ramp'; spring?: THREE.Object3D; pivot?: THREE.Object3D; counter?: THREE.Sprite; shown?: number; phase: number }[] = [];
+  private fixtureParts: { kind: 'bumper' | 'bell' | 'ramp' | 'target'; spring?: THREE.Object3D; pivot?: THREE.Object3D; counter?: THREE.Sprite; shown?: number; phase: number }[] = [];
   /** The sink-and-rise when the layout changes in a wave break: seconds since it began, and whether the new set is up. */
   private swap: { t: number; rebuilt: boolean } | null = null;
   /** The bell counters' textures, by "rung/total". */
@@ -529,6 +529,7 @@ export class World {
     }
     this.fieldTrees.clear();
     this.buildFixtures();
+    this.buildRails();
     const r = seeded(4100 + this.game.level * 17 + this.game.seed % 1000);
     const kinds: TreeKind[] = ['oak', 'oak', 'pine', 'birch', 'oak', 'pine'];
     this.shaking.clear();
@@ -701,6 +702,69 @@ export class World {
     return tex;
   }
 
+  /**
+   * The orbit rails: a raised wooden track with two iron rails, on posts, running out round the tree line and behind
+   * the orc camp; a gilded arch over the mouth. Fixed for the level (part of the props).
+   */
+  private buildRails(): void {
+    const wood = new THREE.MeshLambertMaterial({ color: '#8a5a2e' });
+    const dark = new THREE.MeshLambertMaterial({ color: '#5a3a1e' });
+    const iron = new THREE.MeshLambertMaterial({ color: '#c9d0d6', emissive: '#223' });
+    const gold = new THREE.MeshLambertMaterial({ color: '#f2c230', emissive: '#4a3000' });
+    for (const rail of this.game.rails) {
+      const h = rail.height;
+      const pts = rail.pts.map((p) => new THREE.Vector3(p.x, h, -p.y));
+      const curve = new THREE.CatmullRomCurve3(pts);
+      const grp = new THREE.Group();
+      const n = Math.ceil(rail.length * 2);
+      // Two iron rails either side of the centre line.
+      for (const off of [-0.45, 0.45]) {
+        const side = curve.getSpacedPoints(n).map((p, k, arr) => {
+          const q = arr[Math.min(arr.length - 1, k + 1)];
+          const r = arr[Math.max(0, k - 1)];
+          const d = new THREE.Vector3().subVectors(q, r).setY(0).normalize();
+          return p.clone().add(new THREE.Vector3(-d.z, 0.25, d.x).multiplyScalar(off).setY(0.25));
+        });
+        grp.add(new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(side), n, 0.09, 5, false), iron));
+      }
+      // Sleepers across the track, and posts down to the ground every few sleepers.
+      const sleeper = new THREE.BoxGeometry(1.25, 0.14, 0.32);
+      const post = new THREE.BoxGeometry(0.28, h, 0.28);
+      const steps = Math.floor(rail.length / 0.9);
+      for (let k = 0; k <= steps; k++) {
+        const t = k / steps;
+        const p = curve.getPointAt(t);
+        const d = curve.getTangentAt(t);
+        const m = new THREE.Mesh(sleeper, k % 2 ? wood : dark);
+        m.position.copy(p);
+        m.rotation.y = Math.atan2(d.x, d.z) + Math.PI / 2;
+        grp.add(m);
+        if (k % 4 === 0) {
+          const pm = new THREE.Mesh(post, dark);
+          pm.position.set(p.x, h / 2, p.z);
+          grp.add(pm);
+        }
+      }
+      // The mouth: a gilded arch the ball is shot through.
+      const m0 = pts[0];
+      const arch = new THREE.Group();
+      arch.position.set(m0.x, 0, m0.z);
+      for (const dx of [-1.3, 1.3]) {
+        const leg = new THREE.Mesh(new THREE.BoxGeometry(0.35, h + 1.6, 0.35), dark);
+        leg.position.set(dx, (h + 1.6) / 2, 0);
+        arch.add(leg);
+      }
+      const top = new THREE.Mesh(new THREE.BoxGeometry(3, 0.5, 0.5), gold);
+      top.position.y = h + 1.6;
+      arch.add(top);
+      const cap = new THREE.Mesh(new THREE.ConeGeometry(0.45, 0.9, 4), gold);
+      cap.position.y = h + 2.3;
+      arch.add(cap);
+      grp.add(arch);
+      this.props.add(grp);
+    }
+  }
+
   /** The bumpers, bells and ramps of this level (rebuilt with the props and on each layout swap). */
   private buildFixtures(): void {
     for (const c of [...this.fixtures.children]) {
@@ -747,6 +811,12 @@ export class World {
         counter.visible = false;
         g.add(counter);
         this.fixtureParts[i] = { kind: 'bell', pivot, counter, shown: -1, phase: i * 1.7 };
+      } else if (c.kind === 'target') {
+        // Hinged at its foot so it can fall flat on its back when struck.
+        const pivot = new THREE.Group();
+        pivot.add(one(targetModel, 0.16));
+        g.add(pivot);
+        this.fixtureParts[i] = { kind: 'target', pivot, phase: i * 0.9 };
       } else {
         const size = 0.3;
         g.add(new VoxBatch().add(atRes(this.res, () => rampModel(size, c.hw ?? 2, c.hh ?? 1.5, 90 + i)), size, new THREE.Vector3(), c.angle ?? 0).build());
@@ -778,6 +848,12 @@ export class World {
         p.spring.traverse((o) => {
           if (o instanceof THREE.Mesh && o.material instanceof THREE.MeshLambertMaterial) o.material.emissive.setRGB(k * 0.5, k * 0.4, k * 0.1);
         });
+      } else if (p.kind === 'target' && p.pivot) {
+        // Knocked flat (tipping back up the field), then springing up again when the bank resets; it wobbles while it stands.
+        const at = g.bellRung[i];
+        const want = at >= 0 ? Math.PI / 2 - 0.08 : 0;
+        p.pivot.rotation.x += (want - p.pivot.rotation.x) * (at >= 0 ? 0.35 : 0.12);
+        if (at < 0) p.pivot.rotation.z = 0.04 * Math.sin(g.time * 2.5 + p.phase);
       } else if (p.kind === 'bell' && p.pivot) {
         const at = g.bellRung[i];
         const amp = at < 0 ? 0 : 0.25 + 0.5 * Math.exp(-(g.time - at) * 1.2);

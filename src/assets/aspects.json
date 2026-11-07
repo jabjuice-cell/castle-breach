@@ -100,5 +100,11 @@
   "town-alchemist": 0.8646,
   "town-blacksmith": 1.1797,
   "town-chapel": 0.9036,
-  "town-forge": 1.0364
+  "town-forge": 1.0364,
+  "team-shield": 2.676,
+  "team-shield-cracked": 2.676,
+  "team-shield-broken-soon": 2.676,
+  "lord-plate-0": 1.536,
+  "lord-plate-1": 1.3241,
+  "lord-plate-2": 1.4656
 }

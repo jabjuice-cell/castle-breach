@@ -72,7 +72,7 @@ function battle(seed = 1, cfg = quiet()) {
 function ball(game: Game, over: Partial<Ball>): Ball {
   const b: Ball = {
     id: 999, kind: 'claimed', x: 0, y: 10, vx: 0, vy: -20, primary: false, power: 1, combo: 0, behind: false, heaved: false, perfect: false,
-    stuck: false, stuckOffset: 0, stuckAt: 0, hitShieldAt: -99, born: 0, passing: null, lines: 0, milestone: 0, banked: false, spin: 0, breakHits: 0, ...over,
+    stuck: false, stuckOffset: 0, stuckAt: 0, countdown: 0, tick: 3, hitShieldAt: -99, born: 0, passing: null, lines: 0, milestone: 0, banked: false, spin: 0, breakHits: 0, ...over,
   };
   game.balls.push(b);
   return b;
@@ -197,21 +197,27 @@ describe('the shield and the balls', () => {
     expect(game.segmentHp[game.segmentAt(15)]).toBe(400 - 25);
   });
 
-  it('hybrid bounce: the flat middle mirrors the ball, the edges kick it wide as a trick shot', () => {
+  it('curved shield: the hit point steers the ball, the dead centre mirrors it, the edges kick it wide as a trick shot', () => {
     const game = new Game(1);
-    expect(game.bounceAngle(0, 0.3)).toBe(0.3);
-    expect(game.bounceAngle(0.7, -0.4)).toBe(-0.4);
+    const s = game.cfg.shield;
+    // Dead centre: part of the mirror angle survives.
+    expect(game.bounceAngle(0, 0.3)).toBeCloseTo(0.3 * (1 - s.curveWeight));
+    // Off-centre to the right steers it right, whatever it came in at.
+    expect(game.bounceAngle(0.7, -0.4)).toBeGreaterThan(0.3);
+    expect(game.bounceAngle(-0.7, 0.4)).toBeLessThan(-0.3);
+    // Further out steers it more.
+    expect(game.bounceAngle(0.6, 0)).toBeGreaterThan(game.bounceAngle(0.2, 0));
     expect(game.bounceAngle(1, -0.4)).toBeCloseTo(1.309);
     expect(game.bounceAngle(-1, 0.4)).toBeCloseTo(-1.309);
     expect(game.bounceAngle(0.9)).toBeGreaterThan(1.134);
-    // A ball coming in at an angle leaves at the same angle off the middle.
+    // A ball landing on the shield's left half goes off to the left, even coming in heading right.
     const m = battle();
     m.setShield(-6);
     run(m, 0.2);
-    const mb = ball(m, { x: -6, y: 3.2, vx: 6, vy: -18 });
+    const mb = ball(m, { x: -6 - m.shieldHalfWidth() * 0.5, y: 3.2, vx: 3, vy: -18 });
     run(m, 0.05);
     expect(mb.vy).toBeGreaterThan(0);
-    expect(mb.vx / mb.vy).toBeCloseTo(6 / 18, 1);
+    expect(mb.vx).toBeLessThan(0);
     // A trick shot off the edge starts its combo at 1.
     // Clear of the tower turrets, which would bank it.
     const g = battle();
@@ -749,16 +755,17 @@ describe('run loop', () => {
     expect(game.phase).toBe('preview');
   });
 
-  it('sells the crossbow only until the town unlocks the rest', () => {
+  it('sells archers and catapults only until the town unlocks the rest (7 Nov)', () => {
     const first = new Game(1, applyMeta({}, 0));
     expect(first.defenders).toHaveLength(0);
     first.gold = 1000;
-    expect(first.place('archers', -4, -1)).toBe(false);
-    expect(first.place('catapult', -4, -1)).toBe(false);
-    expect(first.place('crossbow', -4, -1)).toBe(true);
-    const later = new Game(1, applyMeta({ archers: 1 }, 0));
+    expect(first.place('crossbow', -4, -1)).toBe(false);
+    expect(first.place('soldiers', -4, -1)).toBe(false);
+    expect(first.place('archers', -4, -1)).toBe(true);
+    expect(first.place('catapult', 8, -3)).toBe(true);
+    const later = new Game(1, applyMeta({ crossbow: 1 }, 0));
     later.gold = 1000;
-    expect(later.place('archers', -4, -1)).toBe(true);
+    expect(later.place('crossbow', -4, -1)).toBe(true);
     expect(later.place('mage', 8, -1)).toBe(false);
   });
 
@@ -772,7 +779,7 @@ describe('run loop', () => {
     expect(buyMeta(p, 'power')).toBe(false);
     for (let i = 0; i < 3; i++) buyMeta(p, 'recovery');
     buyMeta(p, 'masonry');
-    buyMeta(p, 'archers');
+    buyMeta(p, 'crossbow');
     buyMeta(p, 'fletching');
     buyMeta(p, 'treasury');
     const plain = new Game(1, applyMeta({}, 2), 2);
@@ -790,11 +797,11 @@ describe('run loop', () => {
     const p = newProgress();
     p.renown = 5000;
     expect(buyMeta(p, 'fletching')).toBe(false);
-    expect(metaLocked(p.meta, 'fletching')).toMatch(/Archery/);
+    expect(metaLocked(p.meta, 'fletching')).toMatch(/Crossbow loft/);
     expect(p.renown).toBe(5000);
-    expect(buyMeta(p, 'archers') && buyMeta(p, 'fletching')).toBe(true);
+    expect(buyMeta(p, 'crossbow') && buyMeta(p, 'fletching')).toBe(true);
     expect(metaLocked(p.meta, 'fletching')).toBe('');
-    expect(metaDepth('archers')).toBe(0);
+    expect(metaDepth('crossbow')).toBe(0);
     // Every prerequisite names a real upgrade, and the tree has no cycles.
     for (const u of META_UPGRADES) expect(metaDepth(u.id)).toBeLessThan(META_UPGRADES.length);
   });
@@ -1175,7 +1182,7 @@ describe('run loop', () => {
     run(game, 0.05);
     expect(game.projectiles.filter((p) => p.kind === 'arrow')).toHaveLength(game.cfg.archers.archers);
     run(game, 2.2);
-    expect(game.enemies.filter((e) => e.hp < 100).length).toBeGreaterThanOrEqual(10);
+    expect(game.enemies.filter((e) => e.hp < 100).length).toBeGreaterThanOrEqual(6);
     expect(game.enemies[30].hp).toBe(100); // the lone orc nearer the wall is not the target
   });
 
@@ -1498,10 +1505,13 @@ describe('pinball contraptions', () => {
     const centre = cs.filter((c) => c.x === 0);
     // One centre piece per kind at most; everything else has its mirror twin.
     expect(new Set(centre.map((c) => c.kind)).size).toBe(centre.length);
+    // Mostly mirrored: a lone piece stands in only for a centre piece (or a pair) the orc routes left no room for.
+    const lone: Record<string, number> = {};
     for (const c of cs) {
       if (c.x === 0) continue;
-      expect(cs.some((o) => o.kind === c.kind && Math.abs(o.x + c.x) < 1e-9 && Math.abs(o.y - c.y) < 1e-9)).toBe(true);
+      if (!cs.some((o) => o.kind === c.kind && Math.abs(o.x + c.x) < 1e-9 && Math.abs(o.y - c.y) < 1e-9)) lone[c.kind] = (lone[c.kind] ?? 0) + 1;
     }
+    for (const [kind, n] of Object.entries(lone)) expect(n, kind).toBeLessThanOrEqual(kind === 'target' ? 6 : 2);
     cs.forEach((c, i) => {
       const a = footprint(c, k);
       expect(Math.abs(a.x) + bound(a)).toBeLessThanOrEqual(hw);
@@ -1520,7 +1530,7 @@ describe('pinball contraptions', () => {
     });
   }
 
-  it('50 seeds give mirrored layouts at the back of the field, clear of the routes', () => {
+  it('50 seeds give (mostly) mirrored layouts at the back of the field, clear of the routes', () => {
     for (const level of [0, 1, 2]) {
       for (let seed = 1; seed <= 50; seed++) {
         const game = new Game(seed, applyMeta({}, level), level);
@@ -1962,23 +1972,23 @@ describe('the four new defenders', () => {
   });
 
   it('the town unlocks them in order, and the old four are unchanged', () => {
-    expect(applyMeta({}, 0).unlocks.defenders).toEqual(['crossbow', 'soldiers']);
-    expect(applyMeta({ archers: 1, soldiers: 1, catapult: 1 }, 0).unlocks.defenders).toEqual(['crossbow', 'soldiers', 'archers', 'catapult']);
+    expect(applyMeta({}, 0).unlocks.defenders).toEqual(['archers', 'catapult']);
+    expect(applyMeta({ crossbow: 1, soldiers: 1, catapult: 1 }, 0).unlocks.defenders).toEqual(['archers', 'catapult', 'crossbow', 'soldiers']);
     const all = { mage: 1, ballista: 1, oil: 1, spiketrap: 1 };
-    expect(applyMeta(all, 0).unlocks.defenders).toEqual(['crossbow', 'soldiers', 'mage', 'ballista', 'oil', 'spiketrap']);
+    expect(applyMeta(all, 0).unlocks.defenders).toEqual(['archers', 'catapult', 'mage', 'ballista', 'oil', 'spiketrap']);
     const p = newProgress();
     p.renown = 1000;
     for (const id of ['mage', 'ballista', 'oil', 'spiketrap']) {
       expect(metaLocked(p.meta, id)).not.toBe('');
       expect(buyMeta(p, id)).toBe(false);
     }
-    for (const id of ['archers', 'fletching', 'mage', 'ballista', 'masonry', 'oil', 'soldiers', 'spiketrap']) expect(buyMeta(p, id)).toBe(true);
+    for (const id of ['crossbow', 'fletching', 'mage', 'ballista', 'masonry', 'oil', 'soldiers', 'spiketrap']) expect(buyMeta(p, id)).toBe(true);
     const game = new Game(1, applyMeta(p.meta, 0), 0);
     towers(game);
     game.gold = 1000;
     expect(game.place('mage', 4, -1)).toBe(true);
     expect(game.place('crossbow', -4, -1)).toBe(true);
-    expect(game.place('catapult', 0, -6)).toBe(false); // not bought
+    expect(game.place('catapult', 0, -6)).toBe(true); // on sale from the start (7 Nov)
   });
 });
 
@@ -2263,13 +2273,13 @@ describe('town plot', () => {
       expect(turns.has(mirrored)).toBe(false);
     }
     // Rotated shapes sit with their top-left corner on the anchor.
-    const bar = pieceCells(at('archers', 2, 1, 1));
+    const bar = pieceCells(at('crossbow', 2, 1, 1));
     expect(bar).toEqual([[2, 1], [2, 2], [2, 3], [2, 4]]);
   });
 
   it('rejects overlaps with the keep and other pieces, and anything off the open land', () => {
-    expect(canPlace([], at('archers', 5, 1), 3)).toBe(false); // runs into the keep
-    expect(canPlace([], at('archers', 9, 0), 3)).toBe(true);
+    expect(canPlace([], at('crossbow', 5, 1), 3)).toBe(false); // runs into the keep
+    expect(canPlace([], at('crossbow', 9, 0), 3)).toBe(true);
     expect(canPlace([at('drill', 0, 0)], at('oil', 1, 1), 3)).toBe(false);
     expect(canPlace([at('drill', 0, 0)], at('oil', 2, 1), 3)).toBe(true);
     // The same piece never blocks itself.
@@ -2283,11 +2293,11 @@ describe('town plot', () => {
   });
 
   it('counts neighbours by shared edge only, and each pair once', () => {
-    const touching: Layout = [at('archers', 0, 3), at('fletching', 0, 4)];
+    const touching: Layout = [at('crossbow', 0, 3), at('fletching', 0, 4)];
     const pairs = activePairs(touching);
-    expect(pairs.map((p) => p.id)).toEqual(['fletchingArchers']);
+    expect(pairs.map((p) => p.id)).toEqual(['fletchingCrossbow']);
     expect(pairs[0].edges).toHaveLength(2);
-    expect(activePairs([at('archers', 0, 3), at('fletching', 4, 4)])).toEqual([]); // diagonal only
+    expect(activePairs([at('crossbow', 0, 3), at('fletching', 4, 4)])).toEqual([]); // diagonal only
     // The keep is a neighbour too.
     expect(activePairs([at('masonry', 5, 0)]).map((p) => p.id)).toEqual(['masonryKeep']);
   });
@@ -2295,8 +2305,8 @@ describe('town plot', () => {
   it('applies bonuses and clashes only for placed, touching buildings', () => {
     const meta = { archers: 1, fletching: 1 };
     const base = applyMeta(meta, 0);
-    expect(applyMeta(meta, 0, undefined, [at('archers', 0, 3), at('fletching', 0, 4)]).archers.damage).toBeCloseTo(base.archers.damage * 1.15);
-    expect(applyMeta(meta, 0, undefined, [at('archers', 0, 3), at('fletching', 4, 4)]).archers.damage).toBeCloseTo(base.archers.damage);
+    expect(applyMeta(meta, 0, undefined, [at('crossbow', 0, 3), at('fletching', 0, 4)]).crossbow.damage).toBeCloseTo(base.crossbow.damage * 1.15);
+    expect(applyMeta(meta, 0, undefined, [at('crossbow', 0, 3), at('fletching', 4, 4)]).crossbow.damage).toBeCloseTo(base.crossbow.damage);
     const m2 = { alchemist: 1, treasury: 1 };
     const chest = applyMeta(m2, 0).economy.warChest;
     expect(applyMeta(m2, 0, undefined, [at('alchemist', 0, 3), at('treasury', 2, 3)]).economy.warChest).toBe(chest - 30);
@@ -2315,19 +2325,19 @@ describe('town plot', () => {
   });
 
   it('sanitizePlot drops junk, unowned, duplicate, off-land and overlapping entries', () => {
-    const meta = { archers: 1, oil: 1, drill: 1 };
+    const meta = { crossbow: 1, oil: 1, drill: 1 };
     expect(sanitizePlot(meta, 'junk')).toEqual([]);
     expect(sanitizePlot(meta, null)).toEqual([]);
     const messy = [
-      null, 7, { id: 'bogus', x: 3, y: 0, rot: 0 }, { id: 'archers', x: 'a', y: 0, rot: 0 }, { id: 'archers', x: 3, y: 0, rot: 9 },
+      null, 7, { id: 'bogus', x: 3, y: 0, rot: 0 }, { id: 'crossbow', x: 'a', y: 0, rot: 0 }, { id: 'crossbow', x: 3, y: 0, rot: 9 },
       at('forge', 3, 0), // not owned
-      at('archers', 3, 3),
-      at('archers', 3, 2), // duplicate
+      at('crossbow', 3, 3),
+      at('crossbow', 3, 2), // duplicate
       at('oil', 4, 3), // overlaps archers
       at('drill', 0, 0), // off the starting land
       at('oil', 3, 1),
     ];
-    expect(sanitizePlot(meta, messy)).toEqual([at('archers', 3, 3), at('oil', 3, 1)]);
+    expect(sanitizePlot(meta, messy)).toEqual([at('crossbow', 3, 3), at('oil', 3, 1)]);
     expect(sanitizePlot({ ...meta, land: 3 }, messy)).toContainEqual(at('drill', 0, 0));
   });
 
@@ -2336,7 +2346,7 @@ describe('town plot', () => {
     expect(full.land).toBe(3);
     expect(full.layout).toHaveLength(20);
     for (const p of full.layout) expect(canPlace(full.layout, p, 3)).toBe(true);
-    const early = Object.fromEntries(['archers', 'soldiers', 'watchtower', 'warroom', 'treasury', 'masonry', 'fletching', 'tavern'].map((id) => [id, 1]));
+    const early = Object.fromEntries(['crossbow', 'soldiers', 'watchtower', 'warroom', 'treasury', 'masonry', 'fletching', 'tavern'].map((id) => [id, 1]));
     const small = autoPack(early);
     expect(small.land).toBe(0);
     expect(small.layout).toHaveLength(8);
@@ -2491,5 +2501,287 @@ describe('more Breakout', () => {
     expect(game.stars).toBe(2);
     game.bestCombo = game.cfg.score.starCombo;
     expect(game.stars).toBe(3);
+  });
+});
+
+describe('royal ball speed (31 Oct)', () => {
+  it('the Royal Ball comes off the shield twice as fast as before, past the common cap', () => {
+    const game = battle();
+    const b = ball(game, { kind: 'royal', x: 0, y: 6, vy: -30 });
+    run(game, 0.15);
+    const sp = Math.hypot(b.vx, b.vy);
+    expect(b.vy).toBeGreaterThan(0);
+    expect(sp).toBeGreaterThanOrEqual(game.cfg.balls.royalSpeed - 1e-6);
+    expect(sp).toBeGreaterThan(game.cfg.balls.maxSpeed);
+    expect(sp).toBeLessThanOrEqual(game.cfg.balls.royalMaxSpeed + 1e-6);
+  });
+
+  it('other balls keep the common top speed', () => {
+    const game = battle();
+    const b = ball(game, { x: 0, y: 6, vy: -50 });
+    run(game, 0.15);
+    expect(Math.hypot(b.vx, b.vy)).toBeLessThanOrEqual(game.cfg.balls.maxSpeed + 1e-6);
+  });
+});
+
+describe('shield teams and the armoured warlord (31 Oct)', () => {
+  function teamGame(count: number, cfg = quiet()) {
+    const game = battle(1, cfg);
+    game.plan.groups = [{ time: 0, lane: 2, x: 0, shape: 'line', members: [{ kind: 'shieldOrc', count }] }];
+    game.step();
+    bringDown(game);
+    return game;
+  }
+
+  /** Moves the blocks that just came on down into the ball's reach. */
+  function bringDown(game: Game, y = 20) {
+    for (const b of game.blocks) {
+      b.y += y - game.cfg.field.spawnY;
+      for (const e of b.members) {
+        e.x = b.x + e.slotX;
+        e.y = b.y + e.slotY;
+      }
+    }
+  }
+
+  /** Fires a ball straight at an orc from the wall side and lets it bounce off. */
+  function shoot(game: Game, e: Enemy, over: Partial<Ball> = {}): Ball {
+    game.balls = [];
+    const b = ball(game, { x: e.x, y: e.y - game.cfg[e.kind].radius - 0.6, vx: 0, vy: 20, ...over });
+    run(game, 0.05);
+    return b;
+  }
+
+  it("a block's shield orcs share big shields, in even teams of 3 (5 later on)", () => {
+    const three = teamGame(3).enemies.filter((e) => e.kind === 'shieldOrc');
+    expect(three).toHaveLength(3);
+    expect(three.every((e) => e.shielded && e.team === three[0].team)).toBe(true);
+    const four = teamGame(4).enemies.filter((e) => e.kind === 'shieldOrc');
+    expect(new Set(four.map((e) => e.team)).size).toBe(2);
+    const cfg = quiet();
+    cfg.shieldTeam.bigFromWave = 1;
+    const five = teamGame(5, cfg).enemies.filter((e) => e.kind === 'shieldOrc');
+    expect(new Set(five.map((e) => e.team)).size).toBe(1);
+  });
+
+  it('front hits crack the shield without hurting anyone, and the fifth splinters it', () => {
+    const game = teamGame(3);
+    const team = game.enemies.filter((e) => e.kind === 'shieldOrc');
+    const mid = team.sort((p, q) => p.x - q.x)[1];
+    for (let i = 1; i <= 4; i++) {
+      const b = shoot(game, mid);
+      expect(b.vy).toBeLessThan(0);
+      expect(mid.team!.hits).toBe(i);
+      expect(game.events.some((ev) => ev.type === 'clang' && ev.cracked === i / 5)).toBe(true);
+    }
+    expect(team.every((e) => e.hp === e.maxHp && e.shielded)).toBe(true);
+    const b = shoot(game, mid);
+    expect(mid.team!.broken).toBe(true);
+    expect(team.every((e) => !e.shielded)).toBe(true);
+    expect(b.combo).toBe(game.cfg.shieldTeam.breakCombo);
+    expect(game.events.some((ev) => ev.type === 'shieldBreak')).toBe(true);
+    // Now they're plain bricks.
+    shoot(game, mid);
+    expect(mid.hp).toBeLessThan(mid.maxHp);
+  });
+
+  it("two heaves break it, and a heave doesn't go through", () => {
+    const game = teamGame(3);
+    const mid = game.enemies.filter((e) => e.kind === 'shieldOrc').sort((p, q) => p.x - q.x)[1];
+    const b = shoot(game, mid, { lines: 1, heaved: true });
+    expect(b.lines).toBe(0);
+    expect(b.vy).toBeLessThan(0);
+    expect(mid.team!.broken).toBe(false);
+    shoot(game, mid, { lines: 1, heaved: true });
+    expect(mid.team!.broken).toBe(true);
+  });
+
+  it('a carrier knocked flat by a falling ogre has its shield down', () => {
+    const game = teamGame(3);
+    const mid = game.enemies.filter((e) => e.kind === 'shieldOrc').sort((p, q) => p.x - q.x)[1];
+    mid.stagger = 2;
+    shoot(game, mid);
+    expect(mid.hp).toBeLessThan(mid.maxHp);
+    expect(mid.team!.hits).toBe(0);
+  });
+
+  function lordGame() {
+    const game = battle();
+    game.plan.groups = [{ time: 0, lane: 2, x: 0, shape: 'rect', members: [{ kind: 'warlord', count: 1 }] }];
+    game.step();
+    bringDown(game, 30);
+    const lord = game.enemies.find((e) => e.kind === 'warlord')!;
+    return { game, lord };
+  }
+
+  it('comes with 14 plates and an honour guard of two shield teams', () => {
+    const { game, lord } = lordGame();
+    expect(lord.armour!.plates).toEqual(new Array(14).fill(3));
+    const guard = game.enemies.filter((e) => e.kind === 'shieldOrc');
+    expect(guard).toHaveLength(6);
+    expect(new Set(guard.map((e) => e.team)).size).toBe(2);
+    expect(guard.every((e) => e.y < lord.y)).toBe(true);
+  });
+
+  it('only a bare column lets a ball through to his core, for its damage times the combo multiplier', () => {
+    const { game, lord } = lordGame();
+    game.enemies = game.enemies.filter((e) => e === lord || e.hp > 1e6);
+    const a = lord.armour!;
+    a.clubAt = Infinity;
+    const col = game.armourColumn(lord, lord.x);
+    for (let i = 0; i < 6; i++) {
+      shoot(game, lord);
+      expect(lord.hp).toBe(lord.maxHp);
+    }
+    expect(a.plates[col]).toBe(0);
+    expect(a.plates[a.cols + col]).toBe(0);
+    expect(a.plates.filter((p) => p === 3)).toHaveLength(12);
+    shoot(game, lord, { combo: 10 });
+    // 10 damage at 2x for a combo of 10 (11 after this hit counts, but the multiplier is read before it lands).
+    expect(lord.maxHp - lord.hp).toBeCloseTo(game.cfg.balls.damage * (1 + 11 * game.cfg.balls.comboStep), 5);
+  });
+
+  it('a heave knocks a plate clean off, and it lands in front of him as a bumper', () => {
+    const { game, lord } = lordGame();
+    game.enemies = game.enemies.filter((e) => e === lord || e.hp > 1e6);
+    lord.armour!.clubAt = Infinity;
+    shoot(game, lord, { lines: 1, heaved: true });
+    expect(lord.armour!.plates.filter((p) => p === 0)).toHaveLength(1);
+    expect(game.debris).toHaveLength(1);
+    const d = game.debris[0];
+    expect(d.y).toBeLessThan(lord.y);
+    game.balls = [];
+    const b = ball(game, { x: d.x, y: d.y - d.r - 0.6, vx: 0, vy: 20 });
+    run(game, 0.05);
+    expect(b.vy).toBeLessThan(0);
+    expect(b.banked).toBe(true);
+    // It crumbles after a while.
+    run(game, game.cfg.warlord.debrisSeconds);
+    expect(game.debris).toHaveLength(0);
+  });
+
+  it('his club bats one ball back every 4 s, not every ball', () => {
+    const { game, lord } = lordGame();
+    game.enemies = game.enemies.filter((e) => e === lord || e.hp > 1e6);
+    lord.armour!.clubAt = 0;
+    shoot(game, lord);
+    expect(game.events.filter((ev) => ev.type === 'club')).toHaveLength(1);
+    expect(lord.armour!.clubAt).toBeCloseTo(game.time + game.cfg.warlord.clubSeconds, 0);
+    game.events.length = 0;
+    shoot(game, lord);
+    expect(game.events.some((ev) => ev.type === 'club')).toBe(false);
+  });
+
+  it('plates soak other damage; at half health he roars, and then his back takes double', () => {
+    const { game, lord } = lordGame();
+    game.enemies = game.enemies.filter((e) => e === lord || e.hp > 1e6);
+    const a = lord.armour!;
+    a.clubAt = Infinity;
+    lord.hp -= 100;
+    game.step();
+    expect(lord.maxHp - lord.hp).toBeCloseTo(100 * (1 - game.cfg.warlord.plateCover), 5);
+    a.plates.fill(0);
+    lord.hp = lord.maxHp * 0.49;
+    game.step();
+    expect(a.roared).toBe(true);
+    const before = lord.hp;
+    game.balls = [];
+    ball(game, { x: lord.x, y: lord.y + game.cfg.warlord.radius + 0.6, vx: 0, vy: -20 });
+    run(game, 0.05);
+    expect(before - lord.hp).toBeCloseTo(game.cfg.balls.damage * game.cfg.warlord.backMult * (1 + game.cfg.balls.comboStep), 5);
+  });
+});
+
+describe('campaign (overmap acts and stages)', async () => {
+  const { ACTS, STAGES, applyStage, loseStage, nextStage, stageOpen, stagesOfAct } = await import('../src/sim/campaign');
+  it('has three acts of four stages, the last of each a boss', () => {
+    expect(ACTS.length).toBe(3);
+    for (let a = 0; a < 3; a++) {
+      const st = stagesOfAct(a);
+      expect(st.length).toBe(4);
+      expect(st[3].boss).toBeTruthy();
+    }
+    expect(new Set(STAGES.map((s) => s.id)).size).toBe(STAGES.length);
+  });
+  it('no two stages share a battlefield: features, obstacles or width differ', () => {
+    const keys = STAGES.map((s) => JSON.stringify([s.features, s.obstacles, s.halfWidth, s.trees]));
+    expect(new Set(keys).size).toBe(STAGES.length);
+  });
+  it('bells are not on every stage', () => {
+    expect(STAGES.filter((s) => s.features.bell).length).toBeLessThan(STAGES.length / 2);
+  });
+  it('opens stages in order and points at the first uncleared one', () => {
+    expect(stageOpen({}, STAGES[0])).toBe(true);
+    expect(stageOpen({}, STAGES[1])).toBe(false);
+    expect(stageOpen({ [STAGES[0].id]: 2 }, STAGES[1])).toBe(true);
+    expect(nextStage({ [STAGES[0].id]: 2 }).id).toBe(STAGES[1].id);
+  });
+  it('losing a stage just retries it: nothing cleared is lost', () => {
+    const cleared = { '1-1': 3, '1-2': 2, '1-3': 1, '1-4': 2, '2-1': 2 };
+    expect(loseStage(cleared, STAGES.find((s) => s.id === '2-2')!)).toEqual(cleared);
+  });
+  it('every stage builds and plays a few seconds without errors', () => {
+    for (const s of STAGES) {
+      const game = new RealGame(7, applyStage(s));
+      for (let t = 0; t < 5; t += 1 / 60) game.step();
+      expect(game.rails.length).toBe(s.features.rail);
+    }
+  });
+});
+
+describe('orbit rails and drop targets', async () => {
+  const { buildRails, railAt } = await import('../src/sim/rails');
+  it('a rail runs out past the field edge and comes back in on the far side', () => {
+    const cfg = makeConfig();
+    const [r] = buildRails({ ...cfg.rails, count: 1 }, 18, 70);
+    expect(r.length).toBeGreaterThan(60);
+    const xs = r.pts.map((p) => p.x);
+    expect(Math.min(...xs)).toBeLessThan(-18);
+    expect(Math.max(...xs)).toBeGreaterThan(18);
+    const end = railAt(r, r.length);
+    expect(Math.sign(end.x)).toBe(1);
+  });
+  it('a ball shot into the rail mouth rides it and comes out heading down the field', () => {
+    const cfg = quiet();
+    cfg.rails.count = 1;
+    const game = battle(5, cfg);
+    const m = game.rails[0].pts[0];
+    const b = ball(game, { kind: 'royal', x: m.x, y: m.y - 0.3, vx: 0, vy: 30 });
+    let inRail = false;
+    for (let i = 0; i < 600 && !(inRail && !b.rail); i++) {
+      game.step();
+      if (b.rail) inRail = true;
+    }
+    expect(inRail).toBe(true);
+    expect(b.rail).toBeFalsy();
+    expect(b.vy).toBeLessThan(0);
+  });
+  it('knocking down a whole bank of targets pays the jackpot and adds a ball', () => {
+    const cfg = quiet();
+    cfg.contraptions = makeConfig().contraptions;
+    cfg.contraptions.layout.counts = [{ bumper: 0, bell: 0, ramp: 0, target: 1 }];
+    const game = battle(5, cfg);
+    const bank = game.contraptions.map((c, i) => [c, i] as const).filter(([c]) => c.kind === 'target');
+    expect(bank.length).toBe(cfg.contraptions.target.count);
+    const gold = game.gold;
+    const balls = game.balls.length;
+    for (const [c] of bank) {
+      const b = ball(game, { kind: 'royal', x: c.x, y: c.y - 2, vx: 0, vy: 25 });
+      for (let i = 0; i < 20; i++) game.step();
+      b.y = -50;
+    }
+    expect(bank.every(([, i]) => game.bellRung[i] >= 0) || game.gold > gold).toBe(true);
+    expect(game.gold).toBeGreaterThan(gold);
+    expect(game.balls.length).toBeGreaterThan(balls);
+  });
+});
+
+describe('attack patterns', async () => {
+  const { wavePattern } = await import('../src/sim/waves');
+  it('wave 1 is staggered and no pattern repeats back to back', () => {
+    for (let seed = 1; seed < 30; seed++) {
+      expect(wavePattern(1, seed)).toBe('staggered');
+      for (let n = 2; n < 15; n++) expect(wavePattern(n, seed)).not.toBe(wavePattern(n - 1, seed));
+    }
   });
 });

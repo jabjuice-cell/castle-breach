@@ -5,8 +5,25 @@ export const ENEMY_KINDS = ['grunt', 'chucker', 'barrel', 'runner', 'rider', 'or
 export type EnemyKind = (typeof ENEMY_KINDS)[number];
 
 /** The outline a block of orcs keeps as it marches: the bricks of the Breakout wall. */
-export const SHAPES = ['rect', 'wedge', 'column', 'line', 'pins', 'bricks'] as const;
+export const SHAPES = ['rect', 'wedge', 'column', 'line', 'pins', 'bricks', 'diamond', 'vee', 'checker'] as const;
 export type Shape = (typeof SHAPES)[number];
+
+/**
+ * How a block moves down the field (Jonny, 7 Nov: attack patterns like Space Invaders groups).
+ * march: straight down. invader: sweeps side to side and steps down at each end. weave: snakes
+ * from side to side as it marches. surge: rushes forward, stops, rushes again.
+ */
+export const MOVES = ['march', 'invader', 'weave', 'surge'] as const;
+export type Move = (typeof MOVES)[number];
+
+/**
+ * A wave's attack pattern, picked per wave so no two feel the same.
+ * staggered: blocks arrive one by one down the lanes. fleet: the blocks line up side by side and sweep
+ * across together like an invader fleet. snakes: narrow columns weave down. rush: the blocks surge in bursts.
+ * pincer: two blocks come down the sides while the rest follow up the middle.
+ */
+export const PATTERNS = ['staggered', 'fleet', 'snakes', 'rush', 'pincer'] as const;
+export type Pattern = (typeof PATTERNS)[number];
 
 /** One marching block: a formation of orcs that arrives together and keeps its shape. */
 export interface SpawnGroup {
@@ -19,6 +36,10 @@ export interface SpawnGroup {
   members: { kind: EnemyKind; count: number }[];
   /** A brick wall: orcs per row (its rows are count / cols). */
   cols?: number;
+  /** How it moves (march when left out). */
+  move?: Move;
+  /** An invader or weave block swings this far either side of where it came in. */
+  sweep?: number;
 }
 
 export interface WavePlan {
@@ -28,6 +49,18 @@ export interface WavePlan {
   boss: boolean;
   /** A siege tower rolls down the middle this wave. */
   tower: boolean;
+  /** The wave's attack pattern. */
+  pattern: Pattern;
+}
+
+/** The attack pattern of wave n: wave 1 is always staggered; after that each wave picks a fresh one. */
+export function wavePattern(n: number, seed: number): Pattern {
+  if (n <= 1) return 'staggered';
+  const rng = new Rng(seed * 4513 + n * 6151 + 11);
+  // Never the same pattern twice in a row.
+  const prev = n > 2 ? wavePattern(n - 1, seed) : 'staggered';
+  const options = PATTERNS.filter((p) => p !== prev);
+  return options[rng.int(0, options.length - 1)];
 }
 
 /** The wave's threat budget in grunt-equivalents. */
@@ -86,6 +119,37 @@ export function formation(shape: Shape, n: number, spacing: number, cols = 0): {
     }
     return out;
   }
+  if (shape === 'diamond') {
+    // Widening to the middle row, then narrowing again.
+    const mid = Math.max(1, Math.ceil(Math.sqrt(n)));
+    for (let r = 0; out.length < n; r++) {
+      const want = r < mid ? 2 * r + 1 : Math.max(1, 2 * (2 * mid - 2 - r) + 1);
+      const inRow = Math.min(want, n - out.length);
+      for (let i = 0; i < inRow; i++) out.push({ dx: (i - (inRow - 1) / 2) * spacing, dy: r * spacing * 0.8 });
+    }
+    return out;
+  }
+  if (shape === 'vee') {
+    // Two arms reaching forward, the middle hanging back: a ball gets into the pocket.
+    const arm = Math.ceil(n / 2);
+    for (let i = 0; i < n; i++) {
+      const k = Math.floor(i / 2);
+      const side = i % 2 ? 1 : -1;
+      out.push({ dx: side * (k + 0.5) * spacing * 0.9, dy: (arm - k) * spacing * 0.7 });
+    }
+    return out;
+  }
+  if (shape === 'checker') {
+    // A chequerboard: every other slot empty, so balls rattle through the gaps.
+    const across = Math.max(3, Math.ceil(Math.sqrt(n * 2)));
+    for (let i = 0; out.length < n; i++) {
+      const row = Math.floor(i / across);
+      const col = i % across;
+      if ((row + col) % 2) continue;
+      out.push({ dx: (col - (across - 1) / 2) * spacing, dy: row * spacing * 0.9 });
+    }
+    return out;
+  }
   const across = shape === 'column'
     ? Math.max(2, Math.ceil(Math.sqrt(n / 2.5)))
     : shape === 'line'
@@ -141,6 +205,9 @@ export function planWave(n: number, seed: number, cfg: Config): WavePlan {
 
   const duration = Math.min(w.spawnMax, w.spawnBase + w.spawnPerWave * n);
   const groups: SpawnGroup[] = [];
+  const pattern = wavePattern(n, seed);
+  // The pattern's own stream, so the rest of the plan is the same whatever pattern it gets.
+  const prng = new Rng(seed * 613 + n * 7393 + 3);
   // A brick-wall wave: a wide wall of grunts leads, made from the wave's grunts plus a few extra.
   // The rest of the blocks keep at least a handful each. Its own rng stream, so other waves are unchanged.
   if (isBrickWave(n, cfg)) {
@@ -190,10 +257,10 @@ export function planWave(n: number, seed: number, cfg: Config): WavePlan {
     ].filter((m) => m.count > 0);
     if (members.length === 0) continue;
     const picked = (['rect', 'wedge', 'column'] as const)[rng.int(0, 2)];
-    const shape: Shape = pins[i] ? 'pins' : picked;
     const time = i === 0 && groups.length === 0 ? 0 : rng.range(i === 0 ? 3 : 0, duration);
-    groups.push({ time, lane: lanes[i], x: laneX(lanes[i]) + rng.range(-1.5, 1.5), shape, members });
+    groups.push({ time, lane: lanes[i], x: laneX(lanes[i]) + rng.range(-1.5, 1.5), shape: pins[i] ? 'pins' : picked, members });
   }
+  shapeWave(pattern, groups.filter((g) => g.shape !== 'bricks' && g.shape !== 'pins'), cfg, prng, duration);
   // Goblin runners sprint down the side lanes in small loose packs.
   let runners = totals.runner;
   while (runners > 0) {
@@ -218,7 +285,54 @@ export function planWave(n: number, seed: number, cfg: Config): WavePlan {
   if (totals.warlord && !tower) groups.push({ time: duration * 0.4, lane: Math.floor(segs / 2), x: 0, shape: 'rect', members: [{ kind: 'warlord', count: 1 }] });
   groups.sort((a, b) => a.time - b.time);
   totals.grunt = groups.reduce((s, g) => s + g.members.reduce((t, m) => t + (m.kind === 'grunt' ? m.count : 0), 0), 0);
-  return { number: n, groups, totals, boss, tower };
+  return { number: n, groups, totals, boss, tower, pattern };
+}
+
+/** Reshapes the wave's foot blocks for its attack pattern. */
+function shapeWave(pattern: Pattern, blocks: SpawnGroup[], cfg: Config, rng: Rng, duration: number): void {
+  if (!blocks.length) return;
+  const hw = cfg.field.halfWidth;
+  if (pattern === 'fleet') {
+    // Side by side across the field, arriving together, sweeping across and stepping down in step.
+    // A big wave sends its fleet in two ranks.
+    const ranks = blocks.length > 3 ? 2 : 1;
+    const per = Math.ceil(blocks.length / ranks);
+    const t0 = rng.range(0, 2);
+    blocks.forEach((g, i) => {
+      const rank = Math.floor(i / per);
+      const inRank = Math.min(per, blocks.length - rank * per);
+      const col = i - rank * per;
+      g.x = ((col + 0.5) / inRank - 0.5) * hw * 1.3;
+      g.time = t0 + rank * duration * 0.35;
+      g.shape = (['rect', 'checker', 'diamond'] as const)[rng.int(0, 2)];
+      g.move = 'invader';
+      g.sweep = Math.min(6, hw * 0.35 / inRank + 2);
+    });
+  } else if (pattern === 'snakes') {
+    for (const g of blocks) {
+      g.shape = 'column';
+      g.move = 'weave';
+      g.sweep = rng.range(3, 6);
+    }
+  } else if (pattern === 'rush') {
+    for (const g of blocks) {
+      g.shape = (['wedge', 'vee', 'diamond'] as const)[rng.int(0, 2)];
+      g.move = 'surge';
+    }
+  } else if (pattern === 'pincer') {
+    // The first two blocks come down the flanks together; the rest follow up the middle a little later.
+    blocks.forEach((g, i) => {
+      if (i < 2) {
+        g.x = (i ? 1 : -1) * hw * 0.62;
+        g.time = 0;
+        g.shape = 'column';
+      } else {
+        g.x = rng.range(-3, 3);
+        g.time = Math.max(g.time, 6);
+        g.shape = (['vee', 'wedge'] as const)[rng.int(0, 1)];
+      }
+    });
+  }
 }
 
 /** Enemies the wave sends (a siege tower counts as one, plus the orcs on its floors). */

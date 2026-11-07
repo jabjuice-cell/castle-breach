@@ -38,10 +38,10 @@ const RULES: Rule[] = [
     ];
   },
   (g) => (g.phase === 'setup' && g.defenders.length === 0 ? [
-    "Put a crossbow on a tower top. It shoots straight up its lane and angles across to the next one. The towers are taller, so they see further. Like me.",
+    "Put a squad of archers on the wall, darling, and a catapult behind them. Each covers only its part of the field, so spread them out. Taller towers see further. Like me.",
   ] : null),
   (g) => (g.phase === 'setup' && g.unlocked('archers') && !g.owns('archers') ? [
-    "Have you thought about archers? Thirty of them, for a pittance. They shoot boulders out of the sky before they reach you. Science!",
+    "Have you thought about archers? A whole squad, for a pittance. They shoot boulders out of the sky before they reach you. Science!",
   ] : null),
   (g) => (g.plan.totals.barrel > 0 ? [
     "Some of them carry barrels. Of what, I couldn't say, but a ball in the right place and the whole block goes up. Do aim for the barrels.",

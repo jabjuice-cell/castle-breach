@@ -28,7 +28,7 @@ export const defaultConfig = {
      * routeClear beyond their radius off any orc route. Ramps go between rampMinY and rampMaxY.
      */
     layout: {
-      counts: [{ bumper: 2, bell: 4, ramp: 0 }, { bumper: 2, bell: 4, ramp: 1 }, { bumper: 3, bell: 4, ramp: 1 }],
+      counts: [{ bumper: 2, bell: 4, ramp: 0, target: 0 }, { bumper: 2, bell: 4, ramp: 1, target: 0 }, { bumper: 3, bell: 4, ramp: 1, target: 0 }],
       minY: 40, maxY: 62, apart: 4, routeClear: 1.5, edge: 0.5, rampMinY: 18, rampMaxY: 28, ramp: { hw: 2.2, hh: 1.6 }, tries: 400,
     } as LayoutRules,
     /** The sink-and-rise when the layout changes in the wave break (seconds each way; visual only). */
@@ -42,7 +42,20 @@ export const defaultConfig = {
     bell: { radius: 1.1, count: 4, resetSeconds: 6, combo: 1, arrows: 30, damage: 10, spread: 2.6, flightTime: 1.7 },
     /** A ball entering a ramp flies distance up the field, then drops, hurting orcs within splashRadius. */
     ramp: { distance: 14, splashRadius: 3.5, damage: 30, knockback: 12, combo: 1 },
+    /**
+     * Drop targets: a bank of count straw orc dummies side by side (each hw x hh), placed like bells. A hit knocks one
+     * flat (combo); knock the whole bank down for jackpot gold (times the tier) and a bonus Royal Ball fired up the field
+     * from the bank (multiball). The bank stands again after resetSeconds.
+     */
+    target: { count: 3, hw: 0.55, hh: 0.3, gap: 1.35, combo: 1, jackpot: 25, resetSeconds: 8 },
   },
+  /**
+   * Orbit rails (pinball): a raised track that runs out over the tree line, up the outside of the field, across behind
+   * the orc camp and back in on the far side. A ball going up the field into its mouth (mouth radius, entry at entryY,
+   * inset from the tree line) rides it at speed or better, then drops back in behind the orc lines heading down, with
+   * combo added. count per stage (campaign.ts): 1 enters on the left, 2 also on the right.
+   */
+  rails: { count: 0, mouth: 1.3, entryY: 30, inset: 2.4, outside: 2.6, speed: 34, combo: 3, height: 2.6 },
   /**
    * War Council shaping: between waves the player places barricades and rubble (limits per level) and
    * moves bumpers and ramps anywhere between minY and maxY. Pieces keep edge off the side trees and
@@ -68,23 +81,30 @@ export const defaultConfig = {
    * hit (it still bounces off); orcs go round them. They keep off the road down the middle.
    */
   fieldTrees: { counts: [7, 9, 10], radius: 0.75, minY: 14, maxY: 56, roadHalf: 6, apart: 4 },
-  /** The run is lost when any one segment reaches 0 HP. */
-  wall: { segments: 5, segmentHp: 400, depth: 2, warnBelow: 0.25 },
+  /** The run is lost when any one segment reaches 0 HP. depth: the wall walk is 3 deep (7 Nov), room to place defenders on it. */
+  wall: { segments: 5, segmentHp: 400, depth: 3, warnBelow: 0.25 },
 
   // ---- enemies (the bricks) ---------------------------------------------------
   // mass divides knockback; climbSeconds 0 means it smashes the wall without climbing.
   // wallDps is damage per second once it has climbed. Speeds are for loose orcs; blocks march at march.speed.
   grunt: { hp: 10, speed: 1.8, radius: 0.45, mass: 1, wallDps: 1, meleeDps: 2, climbSeconds: 3, gold: 1, threat: 1 },
-  /** Shielded from the front while its block's drummer lives; hit it from the sides or back. */
+  /** Carries a block's big shared shield (shieldTeam); hit it from the sides or back. */
   shieldOrc: { hp: 14, speed: 1.8, radius: 0.55, mass: 2, wallDps: 1.5, meleeDps: 3, climbSeconds: 3, gold: 2, threat: 1, shieldArc: 0.35 },
+  /**
+   * Shield teams (Jonny's twist, item 15): a block's shield orcs carry one huge shield between size of them
+   * (bigSize from bigFromWave). Front hits bounce off and crack it; it splinters after hits ball hits, a heave
+   * counting heaveHits (so 2 heaves). Then the carriers stumble back (stumble: knock speed) as plain bricks,
+   * and the ball that broke it gets breakCombo. A staggered carrier has its shield down; the drummer's fall drops them all.
+   */
+  shieldTeam: { size: 3, bigSize: 5, bigFromWave: 6, hits: 5, heaveHits: 2.5, stumble: 10, breakCombo: 2 },
   /** Beats the drum that holds a block's shields up: kill it and the formation breaks. */
   drummer: { hp: 8, speed: 1.8, radius: 0.5, mass: 1.5, wallDps: 0.5, meleeDps: 1, climbSeconds: 3, gold: 6, threat: 1 },
   /** A brick that shoots back: throws pebbles at the wall as its block marches, or (boltShare of them) fires fast bolts. */
   chucker: { hp: 10, speed: 1.8, radius: 0.5, mass: 1, wallDps: 1, meleeDps: 2, climbSeconds: 3, gold: 2, threat: 2, throwFromY: 44, throwInterval: 4, boltShare: 0.5 },
   /** Goblin runners: small, quick and fragile, sprinting down the side lanes in loose packs. */
-  runner: { hp: 6, speed: 3.6, radius: 0.4, mass: 0.8, wallDps: 1, meleeDps: 2, climbSeconds: 2, gold: 1, threat: 1 },
+  runner: { hp: 6, speed: 2.1, radius: 0.4, mass: 0.8, wallDps: 1, meleeDps: 2, climbSeconds: 2, gold: 1, threat: 1 },
   /** Riders zig-zag across the field in a skirmish line. */
-  rider: { hp: 8, speed: 2.6, radius: 0.55, mass: 1.2, wallDps: 1, meleeDps: 3, climbSeconds: 2, gold: 2, threat: 2, zigSpeed: 4, zigRate: 1.6 },
+  rider: { hp: 8, speed: 1.7, radius: 0.55, mass: 1.2, wallDps: 1, meleeDps: 3, climbSeconds: 2, gold: 2, threat: 2, zigSpeed: 2.4, zigRate: 1.1 },
   /** The ball source: marches at the back of a block, then parks and lobs boulders at the wall. */
   orcCatapult: {
     hp: 60, speed: 1.2, radius: 1, mass: 6, wallDps: 5, meleeDps: 5, climbSeconds: 0, gold: 15, threat: 0,
@@ -105,10 +125,21 @@ export const defaultConfig = {
     /** 6 tiles either side, within a row's depth. */
     staggerRadius: 10, staggerSeconds: 2, staggerDamage: 5, staggerKnock: 0.83, killCombo: 3,
   },
-  /** Boss on the last wave, riding the siege tower. Speeds up orcs around it and bats balls back down. */
+  /**
+   * Boss on the last wave, riding the siege tower (item 17). hp is his core. His armour is a Breakout pattern of
+   * plateRows x plateCols plates across his front, each taking plateHits (a heave breaks one outright); a ball only
+   * reaches the core through a bare column, for its damage times the ball's combo multiplier. While plates stand they
+   * soak plateCover of other damage (bolts, arrows, splash) in step with how many are left. His club bats a ball
+   * straight back at the wall every clubSeconds. At roarAt of his core he roars: orcs within auraRadius march
+   * auraSpeed faster, and hits from behind do backMult. With the belt row (row 0) gone he waddles at waddle speed.
+   * Each broken plate lands in front of him as a bumper (debrisRadius) for debrisSeconds, at most debrisMax at once.
+   * guard: shield teams of 3 marching ahead of him.
+   */
   warlord: {
-    hp: 2000, speed: 0.6, radius: 1.6, mass: 10, wallDps: 25, meleeDps: 60, climbSeconds: 0, gold: 100, threat: 0,
+    hp: 450, speed: 0.6, radius: 1.6, mass: 10, wallDps: 25, meleeDps: 60, climbSeconds: 0, gold: 100, threat: 0,
     auraRadius: 7, auraSpeed: 1.3,
+    plateCols: 7, plateRows: 2, plateHits: 3, plateCover: 0.8, clubSeconds: 4, roarAt: 0.5, backMult: 2, waddle: 0.5,
+    debrisSeconds: 10, debrisRadius: 0.8, debrisMax: 4, guard: 2,
   },
   /** Blocks march down the field like Space Invaders, faster as they shrink. */
   march: {
@@ -127,6 +158,15 @@ export const defaultConfig = {
     regroupSeconds: 0.5,
     /** Distance between slots in a block: wide enough that each voxel orc reads on its own. */
     spacing: 2.1,
+    /** Attack patterns (waves.ts): an invader block sweeps sideways at invaderSide x its march speed, then steps down over invaderDrop seconds. */
+    invaderSide: 2.2,
+    invaderDrop: 0.5,
+    /** A weaving block swings at this rate (radians per second). */
+    weaveRate: 0.9,
+    /** A surging block rushes at surgeFast for half of each surgeSeconds, then crawls at surgeSlow. */
+    surgeSeconds: 3,
+    surgeFast: 1.75,
+    surgeSlow: 0.25,
   },
 
   /** Enemy projectiles: what reaches the wall does wallDamage. A blocked one becomes a ball. */
@@ -163,6 +203,12 @@ export const defaultConfig = {
     trickMax: 1.309,
     /** A serve off the shield goes up at up to this angle, by where the ball sits on it. */
     serveAngle: 0.6,
+    /**
+     * The curved shield: across the middle the outgoing angle is curveWeight of the way from the mirror
+     * bounce to an aim set by the hit point, up to curveMax (radians) at the edge of the middle.
+     */
+    curveWeight: 0.6,
+    curveMax: 1.0,
     /** Moving the shield at full speed adds up to this much angle in the direction of travel (20 degrees)... */
     english: 0.35,
     /** ...and this much curve (radians per second the path bends), fading over curveSeconds: about 20 degrees in all. */
@@ -202,9 +248,11 @@ export const defaultConfig = {
     radius: 0.45,
     /** 12 tiles/s off the shield, +2% a bounce, up to 20 tiles/s. */
     speed: 20,
-    /** The Royal Ball is quicker: about 18 tiles/s. */
-    royalSpeed: 30,
+    /** The Royal Ball is twice as quick as it was (Jonny, 31 Oct): about 36 tiles/s, up to royalMaxSpeed. */
+    royalSpeed: 60,
     maxSpeed: 33,
+    /** The Royal Ball's own top speed (a ball kit's maxSpeed replaces it). Heaves and Perfect Returns cap at this times heaveSpeed. */
+    royalMaxSpeed: 66,
     speedUp: 1.02,
     damage: 10,
     /** Orcs this close to a hit orc are knocked back and take splashDamage. */
@@ -223,6 +271,8 @@ export const defaultConfig = {
     reserveSeconds: 0.4,
     /** The served Royal Ball launches by itself after this long, so nobody gets stuck. */
     autoServeSeconds: 0.5,
+    /** After the Royal Ball hits the wall, its re-serve counts 3, 2, 1 over this many seconds, then goes. */
+    royalCountdown: 1.2,
     /** Balls never travel flatter than 75 degrees: this share of their speed up or down the field. */
     minVertical: 0.259,
     /** Combo milestones: a bell, "Glorious!", and the ball turns gold. */
@@ -333,8 +383,11 @@ export const defaultConfig = {
    * Archers, crossbows and catapults can be placed anywhere on the castle grounds:
    * on the wall, the towers or in the courtyard behind (y from minY up to the wall's front face).
    */
-  /** Defenders on sale. At first only the crossbow; the town's upgrades unlock the rest (see meta.ts). */
-  unlocks: { defenders: ['crossbow', 'soldiers'] as string[], buildings: ['keep'] as string[] },
+  /**
+   * Defenders on sale. A bare config (tests, balance sims) sells the original four; in the game applyMeta
+   * sets it: archers and the catapult at first, the town's upgrades unlock the rest (see meta.ts).
+   */
+  unlocks: { defenders: ['archers', 'catapult', 'crossbow', 'soldiers'] as string[], buildings: ['keep'] as string[] },
   castle: {
     minY: -7,
     maxY: 0,
@@ -405,8 +458,8 @@ export const defaultConfig = {
    * Arrows arc high and rain down around the target; each one hits whoever it lands on.
    */
   archers: {
-    cost: 80, archers: 30, interval: 4, damage: 10, range: 66, flightTime: 1.7, spread: 2.6, hitRadius: 0.75,
-    burnSeconds: 3, footprint: 2.6,
+    cost: 80, archers: 12, interval: 4, damage: 22, range: 66, flightTime: 1.7, spread: 2.2, hitRadius: 0.85,
+    burnSeconds: 3, footprint: 1.6,
     /** Each volley has this chance to shoot down each enemy boulder in its cover. */
     shootDown: 0.3,
     /** Arrows do only this share of their damage to orcs climbing or hacking at the wall. */
@@ -457,6 +510,10 @@ export const defaultConfig = {
    */
   levels: {
     waves: 5,
+    /** The wave number the level's first wave plays as (a campaign stage sets it; otherwise level x waves + 1). */
+    firstWave: 0,
+    /** The level's tier for gold rewards (coins, rows, jackpots): a campaign stage sets its act + 1; otherwise level + 1. */
+    tier: 0,
     names: ['The Old Road', 'Mill Ford', 'The Black Gate'],
     warChest: [400, 550, 750],
     /** Level 1 is a narrow road; later fields are wider, behind a longer wall of more sections. */
@@ -476,6 +533,8 @@ export const defaultConfig = {
   waves: {
     /** The lull between waves: time to repair, upgrade and buy before the next one marches. */
     previewSeconds: 30,
+    /** While the player is placing or upgrading, the lull's countdown holds above this many seconds. */
+    holdFloor: 8,
     /** Threat budget in grunt-equivalents: base * growth^(wave - 1). */
     budgetBase: 55,
     budgetGrowth: 1.3,
@@ -615,7 +674,7 @@ export const defaultConfig = {
     balls: {
       royal: { damage: 1, splash: 1, knockback: 1, speed: 1, speedUp: null, maxSpeed: null, comboStep: null },
       iron: { damage: 2, splash: 1.5, knockback: 1.55, speed: 0.73, speedUp: 1, maxSpeed: null, comboStep: null },
-      jester: { damage: 0.7, splash: 1, knockback: 1, speed: 1, speedUp: 1.05, maxSpeed: 38, comboStep: 0.15 },
+      jester: { damage: 0.7, splash: 1, knockback: 1, speed: 1, speedUp: 1.05, maxSpeed: 76, comboStep: 0.15 },
       powder: { damage: 1, splash: 1, knockback: 1, speed: 1, speedUp: null, maxSpeed: null, comboStep: null },
     } as Record<import('./town').BallKit, { damage: number; splash: number; knockback: number; speed: number; speedUp: number | null; maxSpeed: number | null; comboStep: number | null }>,
     powder: { every: 4, radius: 2.5, damage: 25, missDamage: 25 },
@@ -635,7 +694,7 @@ export const defaultConfig = {
     ],
     bonuses: {
       blacksmithSoldiers: { soldierCost: 0.8 },
-      fletchingArchers: { archerDamage: 1.15 },
+      fletchingCrossbow: { crossbowDamage: 1.15 },
       drillSoldiers: { soldierHp: 1.2 },
       tavernSoldiers: { soldierCount: 3 },
       workshopForge: { catapultInterval: 0.85 },
@@ -645,7 +704,7 @@ export const defaultConfig = {
       spiketrapMasonry: { spikeTrapCost: 0.75 },
       alchemistOil: { oilBurnSeconds: 2 },
       alchemistMage: { mageRadius: 1.15 },
-      watchtowerArchers: { archerReach: 1.1 },
+      watchtowerCrossbow: { archerReach: 1.1 },
       marketTreasury: { warChest: 40 },
       marketGuild: { killGold: 1.1 },
       tavernMarket: { earlyGold: 1.25 },

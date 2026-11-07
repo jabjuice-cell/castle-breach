@@ -436,7 +436,7 @@ function drummer(): Vox {
 
 const MODELS: Record<EnemyKind, () => Vox> = { grunt, chucker, barrel, runner, rider, orcCatapult: catapult, ogre, warlord, shieldOrc, drummer };
 /** Voxel size per kind: how big each model stands on the field. */
-const SCALE: Record<EnemyKind, number> = { grunt: 0.125, chucker: 0.125, barrel: 0.125, runner: 0.105, rider: 0.13, orcCatapult: 0.15, ogre: 0.16, warlord: 0.2, shieldOrc: 0.125, drummer: 0.135 };
+const SCALE: Record<EnemyKind, number> = { grunt: 0.125, chucker: 0.125, barrel: 0.125, runner: 0.105, rider: 0.13, orcCatapult: 0.21, ogre: 0.16, warlord: 0.2, shieldOrc: 0.125, drummer: 0.135 };
 
 /** The model grown by one voxel in the six directions: drawn inside out in dark brown, it is the outline. */
 function hull(v: Vox): Vox {
