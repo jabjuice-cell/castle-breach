@@ -232,13 +232,9 @@ export function nextStage(cleared: Cleared): StageDef {
 }
 
 /**
- * Losing a stage: the act's progress is lost (its cleared stages are cleared again), so the act restarts
- * from its first stage. Renown and the town's upgrades are kept. Returns the new record.
+ * Losing a stage: you just try that stage again (Jonny, 7 Nov). Stages already cleared stay cleared, and
+ * Renown and the town's upgrades are kept. Returns the record unchanged.
  */
-export function loseStage(cleared: Cleared, s: StageDef): Cleared {
-  // Losing a replay of a stage already cleared costs nothing.
-  if (s.id in cleared) return cleared;
-  const out: Cleared = {};
-  for (const [id, stars] of Object.entries(cleared)) if (stageById(id)?.act !== s.act) out[id] = stars;
-  return out;
+export function loseStage(cleared: Cleared, _s: StageDef): Cleared {
+  return cleared;
 }

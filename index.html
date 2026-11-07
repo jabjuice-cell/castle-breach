@@ -159,7 +159,7 @@
       #map .acts button { font-size: 14px; padding: 4px 12px; }
       #map .acts button.on { background: var(--gold); }
       #map .acts button:disabled { opacity: 0.4; cursor: not-allowed; }
-      #map .mapArea { position: relative; aspect-ratio: 1000 / 600; border: 3px solid #4f2e15; border-radius: 10px; overflow: hidden; background: radial-gradient(circle at 30% 30%, #b5cf7a, #7fa04a); }
+      #map .mapArea { position: relative; aspect-ratio: 1000 / 460; min-height: 300px; border: 3px solid #4f2e15; border-radius: 10px; overflow: hidden; background: radial-gradient(circle at 30% 30%, #b5cf7a, #7fa04a); }
       #map .mapArea.act1 { background: radial-gradient(circle at 60% 40%, #a8c070, #6d8a40); }
       #map .mapArea.act2 { background: radial-gradient(circle at 50% 30%, #a39b78, #5f5a44); }
       #map .road { position: absolute; inset: 0; width: 100%; height: 100%; }
@@ -279,7 +279,7 @@
       .queen p { margin: 0 0 30% -6px; font-size: 16px; line-height: 1.35; font-style: italic; background: var(--parchment); color: var(--ink); border: 3px solid var(--ink); border-radius: 12px; padding: 10px 14px; box-shadow: 0 5px 0 rgba(0, 0, 0, 0.35); position: relative; }
       .queen p::before { content: ''; position: absolute; left: -14px; bottom: 18px; border: 8px solid transparent; border-right: 12px solid var(--ink); }
       .queen p b { display: block; font-style: normal; font-family: var(--display); font-size: 22px; color: #2a4fb0; }
-      #coach, #queen { position: absolute; left: max(16px, env(safe-area-inset-left, 0px)); bottom: max(120px, calc(env(safe-area-inset-bottom, 0px) + 110px)); width: min(600px, calc(100% - 380px)); min-width: 300px; }
+      #coach, #queen { position: absolute; left: max(16px, env(safe-area-inset-left, 0px)); bottom: max(140px, calc(env(safe-area-inset-bottom, 0px) + 130px)); width: min(600px, calc(100% - 380px)); min-width: 300px; }
       @media (max-width: 720px) { #tray { bottom: auto; top: 76px; } }
       @media (max-width: 560px) { #callEarly { bottom: 150px; } .wave { font-size: 24px; }  #preview h2 { font-size: 26px; } .hint { display: none; } #queen { display: none; } #coach { bottom: 150px; font-size: 13px; width: calc(100% - 32px); min-width: 0; } #coach img { display: none; } }
       @media (prefers-reduced-motion: reduce) { .bar > i { transition: none; } .seg.warn .bar { animation: none; } .btag.ready { animation: none; } }
@@ -336,7 +336,7 @@
           <li>Chain hits without touching the shield for a <b>combo</b> gold multiplier. Hits behind the lines pay double, the towers make bank shots and barrel orcs blow up their friends. Catch falling capsules, but not the red ones.</li>
           <li>Every ball or boulder you miss hits the wall. If any one stretch of wall falls, the castle is breached.</li>
           <li>Before each level, spend your war chest on defenders and put them anywhere on the castle. Each one covers only part of the field. Click a defender to aim or upgrade it, stack towers on the wall for reach, and scroll up to look at the horde. Between waves, click a wall&rsquo;s Repair tag to patch it.</li>
-          <li>Three acts of four stages each, picked on the map. Lose a stage and that act starts again from its first stage; Renown buys upgrades in the Throne Room that last for ever.</li>
+          <li>Three acts of four stages each, picked on the map. Lose a stage and you simply try it again; Renown buys upgrades in the Throne Room that last for ever.</li>
         </ul>
         <button id="play" type="button">Hold the wall!</button>
         <p class="tag">Breakout build · work in progress</p>

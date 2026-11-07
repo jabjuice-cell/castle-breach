@@ -72,6 +72,8 @@ const canvas = $<HTMLCanvasElement>('game');
 const progress = loadProgress();
 /** The guided first wave, while a brand-new player has not finished it. */
 let tutorial: Tutorial | null = null;
+/** The stage being played (or about to be). */
+let stage: StageDef = stageById(progress.stage) ?? STAGES[0];
 let game = newLevel();
 const view = new BattleScene(canvas, game, quality);
 view.setPlot(progress.plot, progress.meta.land ?? 0);
@@ -1310,8 +1312,6 @@ function townMeta() {
   return effectiveMeta(progress.meta, progress.plot);
 }
 
-/** The stage being played (or about to be). */
-let stage: StageDef = stageById(progress.stage) ?? STAGES[0];
 
 function newLevel(): Game {
   stage = stageById(progress.stage) ?? STAGES[0];
@@ -1712,10 +1712,9 @@ function showEnd(won: boolean, segment = 0) {
     progress.cleared = { ...progress.cleared, [stage.id]: Math.max(progress.cleared[stage.id] ?? 0, game.stars) };
     if (next) progress.stage = next.id;
   } else {
-    // Losing a new stage sends you back to the start of its act (losing a replay costs nothing).
-    const replay = stage.id in progress.cleared;
+    // Losing a stage just means trying it again (Jonny, 7 Nov): nothing cleared is lost.
     progress.cleared = loseStage(progress.cleared, stage);
-    if (!replay) progress.stage = stagesOfAct(stage.act)[0].id;
+    progress.stage = stage.id;
   }
   saveProgress();
   // The stage's best score, kept whether it was won or lost.
@@ -1737,14 +1736,11 @@ function showEnd(won: boolean, segment = 0) {
   $('lostGold').textContent = String(Math.round(game.goldEarned));
   $('lostQueen').textContent = queenVerdict(game, won);
   $('endTitle').textContent = finale ? 'The wall holds!' : won ? `${stage.name} held!` : 'Breached!';
-  const actStart = stagesOfAct(stage.act)[0];
   $('lostText').textContent = finale
     ? 'The Warlord is beaten and the orcs have gone home to sulk. Every stage stays open to replay for a better score.'
     : won
       ? `All ${game.cfg.levels.waves} waves beaten back.${next ? ` ${next.name} is open on the map${next.act !== stage.act ? `: ${ACTS[next.act].name}` : ''}.` : ''}`
-      : stage.id in progress.cleared
-        ? `The orcs broke through the ${LANES[segment] ?? ''} wall during wave ${game.levelWave}. It was a replay, so nothing is lost: try it again from the map.`
-        : `The orcs broke through the ${LANES[segment] ?? ''} wall during wave ${game.levelWave}. ${ACTS[stage.act].name.split(':')[0]} starts again from ${actStart.name}. Spend your Renown in the Throne Room first.`;
+      : `The orcs broke through the ${LANES[segment] ?? ''} wall during wave ${game.levelWave}. Nothing you have cleared is lost: spend your Renown in the Throne Room and try ${stage.name} again.`;
   $('bank').textContent = `${Math.floor(progress.renown)} Renown to spend in the Throne Room.`;
   $('again').textContent = 'To the map';
   $('lost').hidden = false;

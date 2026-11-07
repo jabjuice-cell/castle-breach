@@ -2716,11 +2716,9 @@ describe('campaign (overmap acts and stages)', async () => {
     expect(stageOpen({ [STAGES[0].id]: 2 }, STAGES[1])).toBe(true);
     expect(nextStage({ [STAGES[0].id]: 2 }).id).toBe(STAGES[1].id);
   });
-  it('losing a stage clears only that act; losing a replay costs nothing', () => {
+  it('losing a stage just retries it: nothing cleared is lost', () => {
     const cleared = { '1-1': 3, '1-2': 2, '1-3': 1, '1-4': 2, '2-1': 2 };
-    const after = loseStage(cleared, STAGES.find((s) => s.id === '2-2')!);
-    expect(after).toEqual({ '1-1': 3, '1-2': 2, '1-3': 1, '1-4': 2 });
-    expect(loseStage(cleared, STAGES.find((s) => s.id === '2-1')!)).toBe(cleared);
+    expect(loseStage(cleared, STAGES.find((s) => s.id === '2-2')!)).toEqual(cleared);
   });
   it('every stage builds and plays a few seconds without errors', () => {
     for (const s of STAGES) {
