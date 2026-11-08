@@ -40,6 +40,7 @@ export interface StageDef {
   /** Renown for clearing it. */
   renown: number;
   /** Where it sits on the act's overmap (0 to 1 across, 0 at the top). */
+  /** Where the stage sits on its act's painted map: the centre of a clearing, as fractions of width and height. */
   map: { x: number; y: number };
 }
 
@@ -63,7 +64,7 @@ export const STAGES: StageDef[] = [
   // ---- Act I: a narrow road, five wall sections ----------------------------------------
   {
     id: '1-1', act: 0, index: 0, name: 'Turnip Fields', blurb: 'Open fields and a couple of boulders. Two spring shields to bank off.',
-    waves: 3, firstWave: 1, ...NARROW, trees: 6, features: f(2, 0, 0, 0, 0), warChest: 400, renown: 30, map: { x: 0.12, y: 0.78 },
+    waves: 3, firstWave: 1, ...NARROW, trees: 6, features: f(2, 0, 0, 0, 0), warChest: 400, renown: 30, map: { x: 0.195, y: 0.7 },
     obstacles: [
       { look: 'boulder', x: -12.5, y: 34, r: 1.6 },
       { look: 'boulder', x: 12, y: 25, r: 1.3 },
@@ -71,7 +72,7 @@ export const STAGES: StageDef[] = [
   },
   {
     id: '1-2', act: 0, index: 1, name: 'The Old Road', blurb: 'An old milestone and a set of bells: ring all four for a free volley.',
-    waves: 3, firstWave: 2, ...NARROW, trees: 8, features: f(0, 4, 0, 0, 0), warChest: 420, renown: 35, map: { x: 0.34, y: 0.55 },
+    waves: 3, firstWave: 2, ...NARROW, trees: 8, features: f(0, 4, 0, 0, 0), warChest: 420, renown: 35, map: { x: 0.395, y: 0.57 },
     obstacles: [
       { look: 'milestone', x: 4.5, y: 46, r: 0.6 },
       { look: 'boulder', x: -15, y: 22, r: 1.2 },
@@ -80,7 +81,7 @@ export const STAGES: StageDef[] = [
   },
   {
     id: '1-3', act: 0, index: 2, name: "Hob's Orchard", blurb: 'A ramp to fling the ball over the front ranks, and straw targets to knock down for a bonus ball.',
-    waves: 3, firstWave: 3, ...NARROW, trees: 12, features: f(0, 0, 1, 0, 1), warChest: 450, renown: 40, map: { x: 0.6, y: 0.66 },
+    waves: 3, firstWave: 3, ...NARROW, trees: 12, features: f(0, 0, 1, 0, 1), warChest: 450, renown: 40, map: { x: 0.56, y: 0.73 },
     obstacles: [
       { look: 'well', x: -9, y: 40, r: 1.1 },
       { look: 'boulder', x: 14, y: 50, r: 1.4 },
@@ -88,7 +89,7 @@ export const STAGES: StageDef[] = [
   },
   {
     id: '1-4', act: 0, index: 3, name: 'Goblin Bridge', blurb: 'Boss: the siege tower rolls down the road. An orbit rail runs out round the trees.',
-    waves: 4, firstWave: 3, boss: 'tower', ...NARROW, trees: 8, features: f(2, 0, 0, 1, 0), warChest: 500, renown: 80, map: { x: 0.86, y: 0.32 },
+    waves: 4, firstWave: 3, boss: 'tower', ...NARROW, trees: 8, features: f(2, 0, 0, 1, 0), warChest: 500, renown: 80, map: { x: 0.745, y: 0.42 },
     obstacles: [
       { look: 'fence', x: -12, y: 30, hw: 2.4, hh: 0.3, angle: -0.5 },
       { look: 'fence', x: 12, y: 30, hw: 2.4, hh: 0.3, angle: 0.5 },
@@ -97,7 +98,7 @@ export const STAGES: StageDef[] = [
   // ---- Act II: wider fields by the river, seven wall sections ---------------------------
   {
     id: '2-1', act: 1, index: 0, name: 'Mill Ford', blurb: 'The ruined mill, a well and a broken fence. An orbit rail and two bumpers.',
-    waves: 3, firstWave: 5, ...WIDE, trees: 9, features: f(2, 0, 0, 1, 0), warChest: 550, renown: 60, map: { x: 0.1, y: 0.4 },
+    waves: 3, firstWave: 5, ...WIDE, trees: 9, features: f(2, 0, 0, 1, 0), warChest: 550, renown: 60, map: { x: 0.185, y: 0.7 },
     obstacles: [
       { look: 'mill', x: -16, y: 40, hw: 2.6, hh: 1.6, angle: 0.3 },
       { look: 'well', x: 6.5, y: 30, r: 1.1 },
@@ -107,7 +108,7 @@ export const STAGES: StageDef[] = [
   },
   {
     id: '2-2', act: 1, index: 1, name: 'Windmill Hill', blurb: 'Two banks of drop targets and a ramp up the hill.',
-    waves: 3, firstWave: 6, ...WIDE, trees: 10, features: f(0, 0, 1, 0, 2), warChest: 580, renown: 65, map: { x: 0.36, y: 0.7 },
+    waves: 3, firstWave: 6, ...WIDE, trees: 10, features: f(0, 0, 1, 0, 2), warChest: 580, renown: 65, map: { x: 0.375, y: 0.47 },
     obstacles: [
       { look: 'mill', x: 15, y: 46, hw: 2.6, hh: 1.6, angle: -0.4 },
       { look: 'boulder', x: -18, y: 30, r: 1.5 },
@@ -117,7 +118,7 @@ export const STAGES: StageDef[] = [
   },
   {
     id: '2-3', act: 1, index: 2, name: 'The Drowned Meadow', blurb: 'Bells in the reeds and rails out round both tree lines.',
-    waves: 3, firstWave: 7, ...WIDE, trees: 14, features: f(0, 4, 0, 2, 0), warChest: 600, renown: 70, map: { x: 0.62, y: 0.46 },
+    waves: 3, firstWave: 7, ...WIDE, trees: 14, features: f(0, 4, 0, 2, 0), warChest: 600, renown: 70, map: { x: 0.59, y: 0.62 },
     obstacles: [
       { look: 'well', x: 0, y: 44, r: 1.3 },
       { look: 'stone', x: -14, y: 26, r: 0.9 },
@@ -126,7 +127,7 @@ export const STAGES: StageDef[] = [
   },
   {
     id: '2-4', act: 1, index: 3, name: 'Siege of the Ford', blurb: 'Boss: the siege tower, with bumpers and a ramp to get over its escort.',
-    waves: 4, firstWave: 7, boss: 'tower', ...WIDE, trees: 9, features: f(3, 0, 1, 0, 0), warChest: 650, renown: 140, map: { x: 0.88, y: 0.22 },
+    waves: 4, firstWave: 7, boss: 'tower', ...WIDE, trees: 9, features: f(3, 0, 1, 0, 0), warChest: 650, renown: 140, map: { x: 0.85, y: 0.37 },
     obstacles: [
       { look: 'mill', x: -18, y: 42, hw: 2.6, hh: 1.6, angle: 0.25 },
       { look: 'fence', x: 17, y: 22, hw: 2.4, hh: 0.3, angle: -0.4 },
@@ -136,7 +137,7 @@ export const STAGES: StageDef[] = [
   // ---- Act III: the Black Gate, standing stones and slanted ruins -----------------------
   {
     id: '3-1', act: 2, index: 0, name: 'Ash Road', blurb: 'Ruined walls that throw the ball about, a rail and a target bank.',
-    waves: 3, firstWave: 10, ...WIDE, trees: 6, features: f(0, 0, 0, 1, 1), warChest: 700, renown: 100, map: { x: 0.14, y: 0.66 },
+    waves: 3, firstWave: 10, ...WIDE, trees: 6, features: f(0, 0, 0, 1, 1), warChest: 700, renown: 100, map: { x: 0.165, y: 0.64 },
     obstacles: [
       { look: 'ruin', x: -17, y: 33, hw: 3, hh: 0.6, angle: 0.6 },
       { look: 'ruin', x: 17, y: 33, hw: 3, hh: 0.6, angle: -0.6 },
@@ -146,7 +147,7 @@ export const STAGES: StageDef[] = [
   },
   {
     id: '3-2', act: 2, index: 1, name: 'Spike Gully', blurb: 'Spikes and standing stones, three bumpers and a set of bells.',
-    waves: 3, firstWave: 11, ...WIDE, trees: 7, features: f(3, 4, 0, 0, 0), warChest: 720, renown: 110, map: { x: 0.4, y: 0.4 },
+    waves: 3, firstWave: 11, ...WIDE, trees: 7, features: f(3, 4, 0, 0, 0), warChest: 720, renown: 110, map: { x: 0.37, y: 0.47 },
     obstacles: [
       { look: 'spikes', x: -8, y: 45, hw: 1.8, hh: 0.5, angle: -0.35 },
       { look: 'spikes', x: 8, y: 45, hw: 1.8, hh: 0.5, angle: 0.35 },
@@ -156,7 +157,7 @@ export const STAGES: StageDef[] = [
   },
   {
     id: '3-3', act: 2, index: 2, name: 'The Black Gate', blurb: 'Both orbit rails, two ramps and the slanted ruins.',
-    waves: 3, firstWave: 12, ...WIDE, trees: 8, features: f(0, 0, 2, 2, 0), warChest: 750, renown: 120, map: { x: 0.66, y: 0.7 },
+    waves: 3, firstWave: 12, ...WIDE, trees: 8, features: f(0, 0, 2, 2, 0), warChest: 750, renown: 120, map: { x: 0.58, y: 0.65 },
     obstacles: [
       { look: 'stone', x: -5, y: 22, r: 0.8 },
       { look: 'stone', x: 5, y: 22, r: 0.8 },
@@ -168,7 +169,7 @@ export const STAGES: StageDef[] = [
   },
   {
     id: '3-4', act: 2, index: 3, name: "The Warlord's March", blurb: 'Boss: the Warlord in his armour, riding behind the siege tower.',
-    waves: 4, firstWave: 12, boss: 'warlord', ...WIDE, trees: 6, features: f(2, 0, 0, 1, 1), warChest: 800, renown: 300, map: { x: 0.9, y: 0.28 },
+    waves: 4, firstWave: 12, boss: 'warlord', ...WIDE, trees: 6, features: f(2, 0, 0, 1, 1), warChest: 800, renown: 300, map: { x: 0.855, y: 0.36 },
     obstacles: [
       { look: 'ruin', x: -19, y: 40, hw: 3, hh: 0.6, angle: 0.5 },
       { look: 'ruin', x: 19, y: 40, hw: 3, hh: 0.6, angle: -0.5 },

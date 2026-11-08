@@ -12,6 +12,11 @@ import ogrePortrait from './assets/sprites/enemy-ogre.webp';
 import warlordPortrait from './assets/sprites/enemy-warlord.webp';
 import barrelPortrait from './assets/sprites/powder-barrel.webp';
 import queenUrl from './assets/characters/queen.webp';
+// Painted art from Codex (8 Nov): the act maps, the stage icons and the town's Tetris-piece buildings.
+const art = (files: Record<string, string>) => Object.fromEntries(Object.entries(files).map(([k, v]) => [k.replace(/^.*\/|\.webp$/g, ''), v]));
+const OVERMAP_ART = art(import.meta.glob<string>('./assets/overmap/*.webp', { eager: true, import: 'default' }));
+import TOWN_ASPECT from './assets/town/aspects.json';
+const TOWN_ART = art(import.meta.glob<string>('./assets/town/*.webp', { eager: true, import: 'default' }));
 import logoUrl from './assets/ui/logo.webp';
 import queenAngryUrl from './assets/characters/queen-angry.webp';
 import { queenAdvice, queenCross, queenPerfect, queenVerdict } from './queen';
@@ -1417,6 +1422,8 @@ let mapAct = 0;
 
 /** A stage's icon: a little drawing of its battlefield (structures, trees, features), until the painted icons arrive. */
 function stageIcon(s: StageDef): string {
+  const painted = OVERMAP_ART[`stage-${s.act + 1}-${s.index + 1}`];
+  if (painted) return `<img src="${painted}" alt=""/>`;
   const W = 100;
   const H = 120;
   const sx = (x: number) => W / 2 + (x / s.halfWidth) * (W / 2 - 8);
@@ -1460,7 +1467,7 @@ function mapHtml(): string {
     <header><div><h1>${ACTS[mapAct].name}</h1><p class="sub">${ACTS[mapAct].blurb}</p></div>
     <span class="purse">${icon('renown')}${Math.floor(progress.renown)} Renown</span></header>
     <nav class="acts">${tabs}</nav>
-    <div class="mapArea act${mapAct}"><svg class="road" viewBox="0 0 1000 600" preserveAspectRatio="none"><polyline points="${pts}"/></svg>${nodes}</div>
+    <div class="mapArea act${mapAct}${OVERMAP_ART[`map-act${mapAct + 1}`] ? ' painted' : ''}" style="${OVERMAP_ART[`map-act${mapAct + 1}`] ? `background-image:url(${OVERMAP_ART[`map-act${mapAct + 1}`]})` : ''}">${OVERMAP_ART[`map-act${mapAct + 1}`] ? '' : `<svg class="road" viewBox="0 0 1000 600" preserveAspectRatio="none"><polyline points="${pts}"/></svg>`}${nodes}</div>
     <div class="mapFoot">
       <div class="pick"><h2>${pick.act + 1}-${pick.index + 1} ${pick.name}${pick.boss ? ' <span class="bossTag">Boss</span>' : ''}</h2>
         <p>${pick.blurb}</p><p class="meta">${pick.waves} waves · war chest ${pick.warChest} gold · ${pick.renown} Renown for clearing it${feats ? ` · ${feats}` : ''}</p>
@@ -1653,7 +1660,8 @@ function plotHtml(): string {
         // Outline each building: a dark edge wherever the next tile isn't the same building.
         const edge = (nx: number, ny: number) => (owner.get(`${nx},${ny}`) === o ? 'transparent' : 'rgba(43,33,22,0.75)');
         style += `border-color:${edge(x, y - 1)} ${edge(x + 1, y)} ${edge(x, y + 1)} ${edge(x - 1, y)};`;
-        if (!labelled.has(o)) {
+        // A painted building needs no name tag (its tooltip still names it).
+        if (!labelled.has(o) && (o === 'keep' || !TOWN_ART[o])) {
           labelled.add(o);
           label = `<span>${o === 'keep' ? 'Keep' : PIECES[o].name}</span>`;
         }
@@ -1669,7 +1677,7 @@ function plotHtml(): string {
   }
   const waiting = yard(progress.meta, progress.plot).filter((id) => id !== held?.p.id);
   const yardHtml = waiting.length
-    ? waiting.map((id) => `<button type="button" data-yard="${id}" style="--c:${PIECE_COLOR[id]}">${PIECES[id].name}</button>`).join('')
+    ? waiting.map((id) => `<button type="button" data-yard="${id}" style="--c:${PIECE_COLOR[id]}">${TOWN_ART[id] ? `<img src="${TOWN_ART[id]}" alt=""/>` : ''}${PIECES[id].name}</button>`).join('')
     : '<small>Empty: every building stands on the plot.</small>';
   const pairHtml = pairs.length
     ? pairs.map((pr) => `<li class="${pr.kind}">${pr.text}</li>`).join('')
@@ -1677,8 +1685,30 @@ function plotHtml(): string {
   const hand = held
     ? `<p class="hand">In your hand: <b>${PIECES[held.p.id].name}</b>. Click the plot to put it down, <kbd>R</kbd> or right-click to turn it. <button type="button" data-drop>Put it in the yard</button></p>`
     : '<p class="hand"><small>Click a building to pick it up. Buildings only work while they stand on the plot.</small></p>';
+  // The painted buildings sit over their cells, turned with the piece.
+  const paint = (p: Placed, cls: string) => {
+    const url = TOWN_ART[p.id];
+    if (!url) return '';
+    const cs = pieceCells(p);
+    const x0 = Math.min(...cs.map((c) => c[0]));
+    const y0 = Math.min(...cs.map((c) => c[1]));
+    const w = Math.max(...cs.map((c) => c[0])) - x0 + 1;
+    const h = Math.max(...cs.map((c) => c[1])) - y0 + 1;
+    const side = p.rot % 2 === 1;
+    const iw = side ? h : w;
+    let ih = side ? w : h;
+    // The art is drawn from above at a tilt, so it is taller than its footprint and gets squashed a little to fit.
+    // A long thin piece drawn nearly square would squash too far: it keeps its shape and spills over its cells instead.
+    const squash = ((TOWN_ASPECT as Record<string, number>)[p.id] ?? 1) / (iw / ih);
+    const fit = squash < 0.45 ? 'contain' : 'fill';
+    if (squash < 0.45) ih *= 1.8;
+    // Cells are square, so the unturned size in cells maps straight to % of the grid's width and height.
+    const [pw, ph] = [(iw / PLOT_W) * 100, (ih / PLOT_H) * 100];
+    return `<img class="art ${cls}" src="${url}" alt="" style="left:${((x0 + w / 2) / PLOT_W) * 100}%;top:${((y0 + h / 2) / PLOT_H) * 100}%;width:${pw}%;height:${ph}%;object-fit:${fit};transform:translate(-50%,-50%) rotate(${p.rot * 90}deg)"/>`;
+  };
+  const arts = progress.plot.map((p) => paint(p, '')).join('') + (ghost ? paint(ghost, ghostOk ? 'ghostArt' : 'ghostArt bad') : '');
   return `<h2>The town plot</h2>${hand}
-    <div class="plotgrid" style="--w:${PLOT_W};--h:${PLOT_H}">${cells}</div>
+    <div class="plotgrid" style="--w:${PLOT_W};--h:${PLOT_H}">${cells}${arts}</div>
     <div class="plotside"><div><h3>Builders' yard</h3><div class="yard">${yardHtml}</div></div><div><h3>Neighbours</h3><ul class="pairs">${pairHtml}</ul></div></div>`;
 }
 
