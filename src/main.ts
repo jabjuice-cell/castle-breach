@@ -89,6 +89,13 @@ let plotHover: { x: number; y: number } | null = null;
 if (location.search.includes("debug")) Object.defineProperty(window, "__dbg", { get: () => ({ game, scene: view }) });
 
 const sounds = new Sounds();
+
+/** Where a ball struck the shield, -1 (left edge) to +1 (right edge): the rim rings brighter than the middle. */
+function shieldOffset(x: number): number {
+  return (x - game.shield.x) / game.shieldHalfWidth();
+}
+// Every firework rocket whistles up and bangs, so a big combo's show is heard as well as seen.
+view.onRocket = (phase, x, size) => (phase === 'launch' ? sounds.rocketLaunch(x, size) : sounds.rocketBurst(x, size));
 sounds.muted = loadSetting('muted') === '1';
 function showSound() {
   $('sound').textContent = sounds.muted ? 'Sound: Off' : 'Sound: On';
@@ -1984,12 +1991,13 @@ function frame(now: number) {
         case 'deflect':
           // A light clink for a bounce; the full clang for a heave or a trick shot off the rim.
           // No hit-stop on a Perfect Return: freezing the sim would make the other balls harder to track.
-          if (ev.parry || ev.trick) sounds.clang(ev.parry);
-          else sounds.clink();
+          if (ev.parry || ev.trick) sounds.clang(ev.parry, shieldOffset(ev.x));
+          else sounds.clink(shieldOffset(ev.x));
           break;
         case 'perfect':
           // Heave timed just right: a second, heavier clang layered over the parry's.
-          sounds.clang(true);
+          sounds.clang(true, shieldOffset(ev.x));
+          sounds.ding();
           floater('PERFECT!', ev.x, game.cfg.shield.y, 'trick', 0.9);
           break;
         case 'bowl':
@@ -2034,6 +2042,8 @@ function frame(now: number) {
         case 'kill':
           // A meaty crunch, heavier for an ogre, catapult or boss (no hit-stop any more: Jonny, 7 Nov).
           sounds.chunk(true, ev.kind === 'ogre' || ev.kind === 'orcCatapult' || ev.kind === 'warlord' || ev.heaved === true);
+          // The last of his armour bursts off and out steps the scrawny orc on stilts.
+          if (ev.kind === 'warlord') sounds.warlordReveal(ev.x);
           break;
         case 'hit':
           if (ev.combo !== undefined) sounds.hitNote(ev.combo);
@@ -2086,12 +2096,15 @@ function frame(now: number) {
           floater('SHIELD SMASHED!', ev.x, ev.y + 1.5, 'smash', 1);
           break;
         case 'plateHit':
-          sounds.clink();
+          sounds.armourTink(ev.left);
           break;
         case 'plateBroken':
-          sounds.clang(false);
+          sounds.armourOff(ev.x);
           break;
         case 'lordStage':
+          // Row 0 is the belt: a cartoon boing. The others crack open with a splitting crunch.
+          if (ev.row === 0) sounds.sproing();
+          else sounds.armourCrack();
           sounds.crunch(40);
           floater(ev.row === 0 ? 'HIS BELT SNAPPED!' : 'ARMOUR CRACKED OPEN!', ev.x, ev.y + 3, 'smash', 1.6);
           break;
@@ -2161,7 +2174,7 @@ function frame(now: number) {
           const now = performance.now();
           if (now - lastHelmetSound > 80) {
             lastHelmetSound = now;
-            sounds.clang(false);
+            sounds.tonk();
           }
           break;
         }
@@ -2200,15 +2213,23 @@ function frame(now: number) {
           break;
         case 'combo':
           floater(`×${ev.combo}`, ev.x, ev.y, `c${ev.combo}`, 1.1);
-          sounds.chime(ev.combo >= 40 ? 3 : ev.combo >= 25 ? 2 : 1);
+          // A fanfare that gets grander with each milestone; the rockets add their own whistles and bangs.
+          sounds.fanfare(ev.combo >= 40 ? 3 : ev.combo >= 25 ? 2 : 1);
           break;
         case 'pinned':
           if (game.time - lastPinned >= 0.5 || game.time < lastPinned) lastPinned = game.time;
           break;
         case 'powderBlast':
         case 'blast':
-        case 'floorDown':
           sounds.boom();
+          break;
+        case 'plank':
+          sounds.woodCrack();
+          break;
+        case 'floorDown':
+          // A storey gives way; the last one brings the whole tower down (and the goblin keeps pushing).
+          if (ev.floorsLeft > 0) sounds.floorCollapse(ev.x);
+          else sounds.towerFalls(ev.x);
           break;
         case 'caught':
           floater(CAPSULE_LOOK[ev.kind].name, ev.x, game.cfg.shield.y + 2, ev.kind === 'trick' ? 'bad' : 'good', 1.6);
