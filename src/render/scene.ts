@@ -320,6 +320,8 @@ interface Debris {
 }
 
 interface Rocket {
+  /** It has left the ground (its launch has been heard). */
+  lit?: boolean;
   x: number;
   y: number;
   z: number;
@@ -527,6 +529,8 @@ export class BattleScene {
   private planning = { show: false, preview: null as PlanPreview | null, lanes: false };
   readonly fireworks = new Fireworks(9000);
   private rockets: Rocket[] = [];
+  /** Called as each firework rocket goes up and bursts, so the sound can follow the show (x on the field, rocket size). */
+  onRocket: ((phase: 'launch' | 'burst', x: number, size: number) => void) | null = null;
   /** Screen flash strength (0-1) and colour, for the HUD to draw. */
   flashLevel = 0;
   flashColor = '#fff6c8';
@@ -1655,6 +1659,10 @@ export class BattleScene {
         r.wait -= dt;
         return true;
       }
+      if (!r.lit) {
+        r.lit = true;
+        this.onRocket?.('launch', r.x, r.size);
+      }
       r.fuse -= dt;
       r.vy -= 9 * dt;
       r.x += r.vx * dt;
@@ -1662,6 +1670,7 @@ export class BattleScene {
       r.z += r.vz * dt;
       fw.burst(r.x, r.y, r.z, { count: 2, colors: ['#fff2a8', '#ffb43a'], speed: 1.5, life: 0.4, size: 0.3, gravity: 3 });
       if (r.fuse > 0) return true;
+      this.onRocket?.('burst', r.x, r.size);
       const o: BurstOptions = { count: 110 * r.size, colors: r.colors, speed: 12 * r.size, life: 1.4, size: 0.5 * r.size, gravity: 3, drag: 1.6, twinkle: true };
       fw.burst(r.x, r.y, r.z, o);
       fw.burst(r.x, r.y, r.z, { count: 20, colors: ['#ffffff'], speed: 4, life: 0.25, size: 0.9 * r.size, gravity: 0 });
